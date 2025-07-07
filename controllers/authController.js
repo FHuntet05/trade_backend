@@ -1,11 +1,10 @@
-// backend/controllers/authController.js (VERSIÓN COMPLETA Y CORREGIDA PARA REFERIDOS)
+// backend/controllers/authController.js (VERSIÓN COMPLETA Y DEFINITIVA PARA REFERIDOS)
 
 const User = require('../models/userModel');
 const jwt = require('jsonwebtoken');
 const { validate, parse } = require('@telegram-apps/init-data-node');
 
 const authTelegramUser = async (req, res) => {
-  // CORRECCIÓN: Desestructuramos ambos campos del body
   const { initData, startParam } = req.body;
 
   if (!initData) {
@@ -13,7 +12,6 @@ const authTelegramUser = async (req, res) => {
   }
 
   try {
-    // La validación se sigue haciendo con el initData original, esto es seguro.
     await validate(initData, process.env.TELEGRAM_BOT_TOKEN, { expiresIn: 3600 });
     const parsedData = parse(initData);
     const userData = parsedData.user;
@@ -38,12 +36,24 @@ const authTelegramUser = async (req, res) => {
         await user.save();
       }
     } else {
-      // El usuario es nuevo.
       let referrer = null;
-      // CORRECCIÓN: Usamos el startParam que nos llega directamente del frontend.
       if (startParam) {
-        // Buscamos al referente por su ID de Telegram, que es lo que contiene el startParam.
-        referrer = await User.findOne({ telegramId: startParam });
+        console.log(`Buscando referente con startParam: ${startParam}`);
+        
+        // --- LÓGICA DE BÚSQUEDA DE REFERENTE MEJORADA ---
+        // Intentamos buscar por 'referralCode' O por 'telegramId'.
+        // Esto hace el sistema robusto, sin importar qué valor se use en el enlace.
+        referrer = await User.findOne({
+          $or: [
+            { referralCode: startParam },
+            { telegramId: startParam }
+          ]
+        });
+        // --- FIN DE LA LÓGICA MEJORADA ---
+      }
+
+      if (!referrer && startParam) {
+        console.log(`ADVERTENCIA: Se recibió un startParam "${startParam}" pero no se encontró ningún referente coincidente.`);
       }
 
       const newUserFields = {
@@ -55,14 +65,13 @@ const authTelegramUser = async (req, res) => {
       };
 
       user = new User(newUserFields);
-      await user.save();
+      await user.save(); // El 'pre-save' hook generará el referralCode del nuevo usuario.
 
       if (referrer) {
-        console.log(`Nuevo usuario ${user.username} referido por: ${referrer.username}`);
-        // Vinculación bidireccional
+        console.log(`Nuevo usuario ${user.username} (ID: ${user.telegramId}) referido por: ${referrer.username} (ID: ${referrer.telegramId})`);
         referrer.referrals.push({ level: 1, user: user._id });
         await referrer.save();
-        console.log(`Referente ${referrer.username} actualizado.`);
+        console.log(`Referente ${referrer.username} actualizado correctamente.`);
       }
     }
     
@@ -75,7 +84,7 @@ const authTelegramUser = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error en la autenticación o validación de initData:', error);
+    console.error('Error en la autenticación:', error);
     res.status(401).json({ message: `Autenticación fallida: ${error.message}` });
   }
 };
