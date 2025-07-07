@@ -1,9 +1,8 @@
-// backend/controllers/authController.js (VERSIÓN FINAL COMPLETA Y SEGURA)
+// backend/controllers/authController.js (VERSIÓN FINAL CON ACTUALIZACIÓN DE PERFIL EN LOGIN)
 
 const User = require('../models/userModel');
 const jwt = require('jsonwebtoken');
-// 1. Usamos la librería recomendada y actualizada
-const { validate } = require('@telegram-apps/init-data-node');
+const { validate, parse } = require('@telegram-apps/init-data-node');
 
 const authTelegramUser = async (req, res) => {
   const { initData } = req.body;
@@ -13,40 +12,69 @@ const authTelegramUser = async (req, res) => {
   }
 
   try {
-    // 2. Validamos la initData contra nuestro BOT_TOKEN secreto.
-    // La validación arrojará un error si la firma es inválida o si ha expirado.
-    await validate(initData, process.env.TELEGRAM_BOT_TOKEN, { expiresIn: 3600 }); // Expira en 1 hora
+    await validate(initData, process.env.TELEGRAM_BOT_TOKEN, { expiresIn: 3600 });
 
-    // 3. Si la validación es exitosa, podemos confiar en los datos y parsearlos.
-    const params = new URLSearchParams(initData);
-    const userJson = params.get('user');
-    const userData = JSON.parse(userJson);
+    const parsedData = parse(initData);
+    const userData = parsedData.user;
+    const startParam = parsedData.startParam;
+
+    if (!userData) {
+      return res.status(401).json({ message: 'Información de usuario no encontrada en initData.' });
+    }
 
     const telegramId = userData.id.toString();
     const username = userData.username || `user_${telegramId}`;
-    const language = userData.language_code || 'es';
-    
-    // Extraemos el código de referido del start_param si existe
-    const startParam = params.get('start_param');
-    let referredByUser = null;
-    if (startParam) {
-      referredByUser = await User.findOne({ referralCode: startParam });
-    }
+    const language = userData.languageCode || 'es';
+    const photoUrl = userData.photoUrl || null;
 
-    // 4. Buscamos o creamos el usuario en nuestra base de datos.
     let user = await User.findOne({ telegramId });
 
-    if (!user) {
-      user = new User({
+    if (user) {
+      // --- INICIO DE LA CORRECCIÓN: LÓGICA PARA USUARIOS EXISTENTES ---
+      // El usuario ya existe, así que actualizamos su información si ha cambiado.
+      // Esto es crucial para que los usuarios antiguos obtengan su foto de perfil.
+      let needsUpdate = false;
+      if (user.username !== username) {
+        user.username = username;
+        needsUpdate = true;
+      }
+      if (user.photoUrl !== photoUrl) {
+        user.photoUrl = photoUrl;
+        needsUpdate = true;
+      }
+      
+      if (needsUpdate) {
+        console.log(`Actualizando perfil para el usuario: ${username}`);
+        await user.save();
+      }
+      // --- FIN DE LA CORRECCIÓN ---
+
+    } else {
+      // El usuario es nuevo. Procedemos con la lógica de creación y referidos.
+      let referrer = null;
+      if (startParam) {
+        referrer = await User.findOne({ telegramId: startParam });
+      }
+
+      const newUserFields = {
         telegramId,
         username,
         language,
-        referredBy: referredByUser ? referredByUser._id : null,
-      });
+        photoUrl,
+        referredBy: referrer ? referrer._id : null,
+      };
+
+      user = new User(newUserFields);
       await user.save();
+
+      if (referrer) {
+        console.log(`Nuevo usuario referido por: ${referrer.username}`);
+        referrer.referrals.push({ level: 1, user: user._id });
+        await referrer.save();
+      }
     }
     
-    // 5. Generamos nuestro propio token JWT para gestionar la sesión en nuestra API.
+    // El resto del flujo es el mismo.
     const userForResponse = await User.findById(user._id).populate('activeTools.tool');
     const token = jwt.sign({ user: { id: userForResponse.id } }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
@@ -57,7 +85,7 @@ const authTelegramUser = async (req, res) => {
 
   } catch (error) {
     console.error('Error en la autenticación o validación de initData:', error.message);
-    res.status(401).json({ message: 'Autenticación fallida. La initData es inválida o ha expirado.' });
+    res.status(401).json({ message: `Autenticación fallida: ${error.message}` });
   }
 };
 
