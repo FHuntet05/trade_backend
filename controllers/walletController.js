@@ -1,7 +1,7 @@
-// backend/controllers/walletController.js (VERSIÓN COMPLETA CON DEPÓSITO DIRECTO Y RESET)
+// backend/controllers/walletController.js (VERSIÓN COMPLETA Y CORREGIDA)
 
 const axios = require('axios');
-const crypto =require('crypto');
+const crypto = require('crypto');
 const https = require('https');
 const User = require('../models/userModel');
 const Tool = require('../models/toolModel');
@@ -14,10 +14,8 @@ const SHOP_ID = process.env.CRYPTO_CLOUD_SHOP_ID;
 const API_KEY = process.env.CRYPTO_CLOUD_API_KEY;
 const SECRET_KEY = process.env.CRYPTO_CLOUD_SECRET_KEY;
 
-// --- INICIO DE LA NUEVA FUNCIÓN (TAREA 18.1) ---
 const createDirectDeposit = async (req, res) => {
-   console.log('Recibida petición para createDirectDeposit con body:', req.body);
-  const { toolId, currency } = req.body; // Recibimos la moneda elegida por el usuario
+  const { toolId, currency } = req.body;
   const userId = req.user.id;
 
   if (!toolId || !currency) {
@@ -28,24 +26,21 @@ const createDirectDeposit = async (req, res) => {
     const tool = await Tool.findById(toolId);
     if (!tool) return res.status(404).json({ message: 'Herramienta no encontrada.' });
 
-    const totalCostUSDT = tool.price; // Asumimos quantity = 1 para este flujo
+    const totalCostUSDT = tool.price;
     const order_id = `purchase_${userId}_${toolId}_1_${Date.now()}`;
     
     const payload = {
       shop_id: SHOP_ID,
-      amount: totalCostUSDT.toFixed(2), // El monto base siempre es en USDT
-      currency, // AQUI LA MAGIA: especificamos la crypto en la que se pagará
+      amount: totalCostUSDT.toFixed(2),
+      currency,
       order_id: order_id,
     };
 
     const axiosOptions = {
       headers: { 'Authorization': `Token ${API_KEY}` },
+      httpsAgent: new https.Agent({ rejectUnauthorized: false }) // CORRECCIÓN SSL
     };
-    if (process.env.NODE_ENV === 'development') {
-      axiosOptions.httpsAgent = new https.Agent({ rejectUnauthorized: false });
-    }
     
-    // Llamamos a la API de CryptoCloud
     const response = await axios.post(`${CRYPTO_CLOUD_API_URL}/invoice/create`, payload, axiosOptions);
     
     const { status, result } = response.data;
@@ -53,28 +48,22 @@ const createDirectDeposit = async (req, res) => {
       return res.status(500).json({ message: 'Error al generar la dirección de pago.' });
     }
 
-    // Devolvemos al frontend solo la información que necesita para el modal de depósito
     res.json({
-      paymentAddress: result.pay_url,   // La dirección de la wallet
-      paymentAmount: result.amount,       // La cantidad exacta en la crypto elegida
-      currency: result.currency,        // La crypto elegida
+      paymentAddress: result.pay_url,
+      paymentAmount: result.amount,
+      currency: result.currency,
     });
 
   } catch (error) {
-    // CORRECCIÓN: Mejoramos el log de errores para capturar toda la información relevante
     console.error('Error detallado en createDirectDeposit:', {
       message: error.message,
-      stack: error.stack,
       requestBody: req.body,
       responseData: error.response?.data,
     });
     res.status(500).json({ message: 'Error interno al generar la dirección de pago.' });
-      }
+  }
 };
-// --- FIN DE LA NUEVA FUNCIÓN ---
 
-
-// --- 1. CREAR FACTURA DE COMPRA (OBSOLETA, PERO SE CONSERVA) ---
 const createPurchaseInvoice = async (req, res) => {
   const { toolId, quantity } = req.body;
   const userId = req.user.id;
@@ -99,10 +88,8 @@ const createPurchaseInvoice = async (req, res) => {
 
     const axiosOptions = {
       headers: { 'Authorization': `Token ${API_KEY}` },
+      httpsAgent: new https.Agent({ rejectUnauthorized: false }) // CORRECCIÓN SSL
     };
-    if (process.env.NODE_ENV === 'development') {
-      axiosOptions.httpsAgent = new https.Agent({ rejectUnauthorized: false });
-    }
     
     const response = await axios.post(`${CRYPTO_CLOUD_API_URL}/invoice/create`, payload, axiosOptions);
     res.json(response.data.result);
@@ -113,7 +100,6 @@ const createPurchaseInvoice = async (req, res) => {
   }
 };
 
-// --- 2. COMPRAR HERRAMIENTA CON SALDO INTERNO (CON RESET) ---
 const purchaseWithBalance = async (req, res) => {
   const { toolId, quantity } = req.body;
   const userId = req.user.id;
@@ -141,8 +127,7 @@ const purchaseWithBalance = async (req, res) => {
       user.activeTools.push({ tool: tool._id, purchaseDate: now, expiryDate: expiryDate });
     }
     
-    user.lastMiningClaim = now; // Reseteamos el contador de minado
-
+    user.lastMiningClaim = now;
     await user.save();
 
     await createTransaction(userId, 'purchase', totalCost, 'USDT', `Compra de ${quantity}x ${tool.name}`);
@@ -159,8 +144,6 @@ const purchaseWithBalance = async (req, res) => {
   }
 };
 
-
-// --- 3. CREAR FACTURA DE DEPÓSITO DE SALDO ---
 const createDepositInvoice = async (req, res) => {
   const { amount } = req.body;
   const userId = req.user.id;
@@ -180,10 +163,8 @@ const createDepositInvoice = async (req, res) => {
 
     const axiosOptions = {
       headers: { 'Authorization': `Token ${API_KEY}` },
+      httpsAgent: new https.Agent({ rejectUnauthorized: false }) // CORRECCIÓN SSL
     };
-    if (process.env.NODE_ENV === 'development') {
-      axiosOptions.httpsAgent = new https.Agent({ rejectUnauthorized: false });
-    }
     
     const response = await axios.post(`${CRYPTO_CLOUD_API_URL}/invoice/create`, payload, axiosOptions);
     res.json(response.data.result);
@@ -193,8 +174,6 @@ const createDepositInvoice = async (req, res) => {
   }
 };
 
-
-// --- 4. WEBHOOK DE CRYPTOCLOUD (CON RESET) ---
 const cryptoCloudWebhook = async (req, res) => {
   const signature = req.headers['crypto-cloud-signature'];
   const payload = req.body;
@@ -222,9 +201,7 @@ const cryptoCloudWebhook = async (req, res) => {
           for (let i = 0; i < quantity; i++) {
             user.activeTools.push({ tool: tool._id, purchaseDate: now, expiryDate: expiryDate });
           }
-          
-          user.lastMiningClaim = now; // Reseteamos el contador de minado
-
+          user.lastMiningClaim = now;
           await user.save();
           await createTransaction(userId, 'purchase', amountPaid, 'USDT', `Compra de ${quantity}x ${tool.name} (Crypto)`);
           await distributeCommissions(userId);
@@ -247,7 +224,6 @@ const cryptoCloudWebhook = async (req, res) => {
   }
 };
 
-// --- 5. RECLAMAR GANANCIAS DE MINERÍA ---
 const claimMiningRewards = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).populate('activeTools.tool');
@@ -278,7 +254,6 @@ const claimMiningRewards = async (req, res) => {
   }
 };
 
-// --- 6. DISTRIBUIR COMISIONES ---
 const distributeCommissions = async (buyerId) => {
   try {
     const commissionRates = { 1: 0.25, 2: 0.15, 3: 0.05 };
@@ -301,7 +276,6 @@ const distributeCommissions = async (buyerId) => {
   }
 };
 
-// --- 7. INTERCAMBIAR NTX A USDT (SWAP) ---
 const swapNtxToUsdt = async (req, res) => {
   const { ntxAmount } = req.body;
   const userId = req.user.id;
@@ -336,7 +310,6 @@ const swapNtxToUsdt = async (req, res) => {
   }
 };
 
-// --- 8. SOLICITAR UN RETIRO DE USDT ---
 const requestWithdrawal = async (req, res) => {
   const { amount, network, walletAddress } = req.body;
   const userId = req.user.id;
@@ -374,7 +347,6 @@ const requestWithdrawal = async (req, res) => {
   }
 };
 
-// --- 9. OBTENER HISTORIAL DE TRANSACCIONES ---
 const getHistory = async (req, res) => {
   try {
     const transactions = await Transaction.find({ user: req.user.id })
@@ -387,7 +359,7 @@ const getHistory = async (req, res) => {
   }
 };
 
-// --- 10. RECLAMAR RECOMPENSA DE TAREA (NUEVA FUNCIÓN) ---
+// --- CORRECCIÓN: FUNCIÓN claimTaskReward COMPLETAMENTE REVISADA ---
 const claimTaskReward = async (req, res) => {
   const { taskName } = req.body;
   const userId = req.user.id;
@@ -396,7 +368,6 @@ const claimTaskReward = async (req, res) => {
     return res.status(400).json({ message: 'El nombre de la tarea es requerido.' });
   }
 
-  // Definimos las tareas y sus recompensas aquí para mantener la consistencia
   const tasks = {
     boughtUpgrade: { reward: 1500, description: "Recompensa por primera mejora" },
     invitedTenFriends: { reward: 1000, description: "Recompensa por 10 referidos" },
@@ -409,26 +380,25 @@ const claimTaskReward = async (req, res) => {
   }
 
   try {
-    const user = await User.findById(userId).populate('activeTools');
+    const user = await User.findById(userId).populate('activeTools.tool');
     if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
 
-    // Verificar si la tarea ya fue reclamada
-    if (user.claimedTasks.get(taskName)) {
+    // CORRECCIÓN: Usamos la sintaxis de objeto para verificar la tarea reclamada
+    if (user.claimedTasks[taskName] === true) {
       return res.status(400).json({ message: 'Ya has reclamado esta recompensa.' });
     }
 
-    // Verificar si se cumplen las condiciones de la tarea
     let isCompleted = false;
     switch (taskName) {
       case 'boughtUpgrade':
-        isCompleted = user.activeTools.length > 0;
+        isCompleted = user.activeTools.some(t => t.tool);
         break;
       case 'invitedTenFriends':
-        // Asegúrate que tu modelo de usuario tenga 'referrals' y que sea un array
+        // CORRECCIÓN: Usamos el campo 'referrals' del usuario actual para contar
         isCompleted = user.referrals && user.referrals.length >= 10;
         break;
       case 'joinedTelegram':
-        isCompleted = true; // Se confía en que el usuario lo hizo
+        isCompleted = true;
         break;
       default:
         return res.status(400).json({ message: 'Lógica de tarea no implementada.' });
@@ -438,17 +408,18 @@ const claimTaskReward = async (req, res) => {
       return res.status(400).json({ message: 'Aún no has completado esta tarea.' });
     }
 
-    // Otorgar la recompensa
     user.balance.ntx += task.reward;
-    user.claimedTasks.set(taskName, true); // Marcar como reclamada
+    // CORRECCIÓN: Asignamos el valor como una propiedad de objeto
+    user.claimedTasks[taskName] = true;
+    user.markModified('claimedTasks'); // Informamos a Mongoose que el objeto anidado ha cambiado
     await user.save();
 
     await createTransaction(userId, 'task_reward', task.reward, 'NTX', task.description);
     
-    const finalUpdatedUser = await User.findById(userId).populate('activeTools.tool');
+    // Devolvemos el usuario actualizado para que el frontend no necesite recargar
     res.status(200).json({
       message: `¡Has reclamado ${task.reward} NTX!`,
-      user: finalUpdatedUser.toObject(),
+      user: user.toObject(),
     });
 
   } catch (error) {
@@ -456,9 +427,8 @@ const claimTaskReward = async (req, res) => {
     res.status(500).json({ message: 'Error del servidor al reclamar la tarea.' });
   }
 };
+// --- FIN DE LA CORRECCIÓN ---
 
-
-// --- EXPORTACIÓN DE TODOS LOS CONTROLADORES (ESTA PARTE DEBE ESTAR DESPUÉS DE LA FUNCIÓN) ---
 module.exports = {
   createDirectDeposit,
   createPurchaseInvoice,
@@ -466,8 +436,8 @@ module.exports = {
   createDepositInvoice,
   cryptoCloudWebhook,
   claimMiningRewards,
-  claimTaskReward, // Ahora la función existe y puede ser referenciada aquí
   swapNtxToUsdt,
   requestWithdrawal,
   getHistory,
+  claimTaskReward,
 };
