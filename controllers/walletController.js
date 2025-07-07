@@ -387,7 +387,78 @@ const getHistory = async (req, res) => {
   }
 };
 
-// --- EXPORTACIÓN DE TODOS LOS CONTROLADORES ---
+// --- 10. RECLAMAR RECOMPENSA DE TAREA (NUEVA FUNCIÓN) ---
+const claimTaskReward = async (req, res) => {
+  const { taskName } = req.body;
+  const userId = req.user.id;
+
+  if (!taskName) {
+    return res.status(400).json({ message: 'El nombre de la tarea es requerido.' });
+  }
+
+  // Definimos las tareas y sus recompensas aquí para mantener la consistencia
+  const tasks = {
+    boughtUpgrade: { reward: 1500, description: "Recompensa por primera mejora" },
+    invitedTenFriends: { reward: 1000, description: "Recompensa por 10 referidos" },
+    joinedTelegram: { reward: 500, description: "Recompensa por unirse al canal" },
+  };
+
+  const task = tasks[taskName];
+  if (!task) {
+    return res.status(400).json({ message: 'El nombre de la tarea no es válido.' });
+  }
+
+  try {
+    const user = await User.findById(userId).populate('activeTools');
+    if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
+
+    // Verificar si la tarea ya fue reclamada
+    if (user.claimedTasks.get(taskName)) {
+      return res.status(400).json({ message: 'Ya has reclamado esta recompensa.' });
+    }
+
+    // Verificar si se cumplen las condiciones de la tarea
+    let isCompleted = false;
+    switch (taskName) {
+      case 'boughtUpgrade':
+        isCompleted = user.activeTools.length > 0;
+        break;
+      case 'invitedTenFriends':
+        // Asegúrate que tu modelo de usuario tenga 'referrals' y que sea un array
+        isCompleted = user.referrals && user.referrals.length >= 10;
+        break;
+      case 'joinedTelegram':
+        isCompleted = true; // Se confía en que el usuario lo hizo
+        break;
+      default:
+        return res.status(400).json({ message: 'Lógica de tarea no implementada.' });
+    }
+
+    if (!isCompleted) {
+      return res.status(400).json({ message: 'Aún no has completado esta tarea.' });
+    }
+
+    // Otorgar la recompensa
+    user.balance.ntx += task.reward;
+    user.claimedTasks.set(taskName, true); // Marcar como reclamada
+    await user.save();
+
+    await createTransaction(userId, 'task_reward', task.reward, 'NTX', task.description);
+    
+    const finalUpdatedUser = await User.findById(userId).populate('activeTools.tool');
+    res.status(200).json({
+      message: `¡Has reclamado ${task.reward} NTX!`,
+      user: finalUpdatedUser.toObject(),
+    });
+
+  } catch (error) {
+    console.error(`Error en claimTaskReward para la tarea ${taskName}:`, error);
+    res.status(500).json({ message: 'Error del servidor al reclamar la tarea.' });
+  }
+};
+
+
+// --- EXPORTACIÓN DE TODOS LOS CONTROLADORES (ESTA PARTE DEBE ESTAR DESPUÉS DE LA FUNCIÓN) ---
 module.exports = {
   createDirectDeposit,
   createPurchaseInvoice,
@@ -395,7 +466,7 @@ module.exports = {
   createDepositInvoice,
   cryptoCloudWebhook,
   claimMiningRewards,
-  claimTaskReward, // <-- CORRECCIÓN: Asegúrate de que esta línea esté presente
+  claimTaskReward, // Ahora la función existe y puede ser referenciada aquí
   swapNtxToUsdt,
   requestWithdrawal,
   getHistory,
