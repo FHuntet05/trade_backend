@@ -395,6 +395,7 @@ module.exports = {
   createDepositInvoice,
   cryptoCloudWebhook,
   claimMiningRewards,
+  claimTaskReward, // <-- CORRECCIÓN: Asegúrate de que esta línea esté presente
   swapNtxToUsdt,
   requestWithdrawal,
   getHistory,
