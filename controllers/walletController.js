@@ -16,6 +16,7 @@ const SECRET_KEY = process.env.CRYPTO_CLOUD_SECRET_KEY;
 
 // --- INICIO DE LA NUEVA FUNCIÓN (TAREA 18.1) ---
 const createDirectDeposit = async (req, res) => {
+   console.log('Recibida petición para createDirectDeposit con body:', req.body);
   const { toolId, currency } = req.body; // Recibimos la moneda elegida por el usuario
   const userId = req.user.id;
 
@@ -60,9 +61,15 @@ const createDirectDeposit = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error en createDirectDeposit:', error.response?.data || error.message);
+    // CORRECCIÓN: Mejoramos el log de errores para capturar toda la información relevante
+    console.error('Error detallado en createDirectDeposit:', {
+      message: error.message,
+      stack: error.stack,
+      requestBody: req.body,
+      responseData: error.response?.data,
+    });
     res.status(500).json({ message: 'Error interno al generar la dirección de pago.' });
-  }
+      }
 };
 // --- FIN DE LA NUEVA FUNCIÓN ---
 
