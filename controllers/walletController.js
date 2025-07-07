@@ -1,12 +1,12 @@
-// backend/controllers/walletController.js (VERSIÓN LISTA PARA PRODUCCIÓN)
+// backend/controllers/walletController.js (VERSIÓN COMPLETA CON DEPÓSITO DIRECTO Y RESET)
 
 const axios = require('axios');
-const crypto = require('crypto');
+const crypto =require('crypto');
 const https = require('https');
 const User = require('../models/userModel');
 const Tool = require('../models/toolModel');
 const WithdrawalRequest = require('../models/withdrawalRequestModel');
-const Transaction = require('../models/transactionModel'); // CORRECCIÓN: Faltaba esta importación para getHistory
+const Transaction = require('../models/transactionModel');
 const { createTransaction } = require('../utils/transactionLogger');
 
 const CRYPTO_CLOUD_API_URL = 'https://api.cryptocloud.pro/v2';
@@ -14,10 +14,60 @@ const SHOP_ID = process.env.CRYPTO_CLOUD_SHOP_ID;
 const API_KEY = process.env.CRYPTO_CLOUD_API_KEY;
 const SECRET_KEY = process.env.CRYPTO_CLOUD_SECRET_KEY;
 
-// ELIMINADO: const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-// Ya no se define globalmente para evitar su uso accidental.
+// --- INICIO DE LA NUEVA FUNCIÓN (TAREA 18.1) ---
+const createDirectDeposit = async (req, res) => {
+  const { toolId, currency } = req.body; // Recibimos la moneda elegida por el usuario
+  const userId = req.user.id;
 
-// --- 1. CREAR FACTURA DE COMPRA ---
+  if (!toolId || !currency) {
+    return res.status(400).json({ message: 'Se requiere la herramienta y la moneda.' });
+  }
+
+  try {
+    const tool = await Tool.findById(toolId);
+    if (!tool) return res.status(404).json({ message: 'Herramienta no encontrada.' });
+
+    const totalCostUSDT = tool.price; // Asumimos quantity = 1 para este flujo
+    const order_id = `purchase_${userId}_${toolId}_1_${Date.now()}`;
+    
+    const payload = {
+      shop_id: SHOP_ID,
+      amount: totalCostUSDT.toFixed(2), // El monto base siempre es en USDT
+      currency, // AQUI LA MAGIA: especificamos la crypto en la que se pagará
+      order_id: order_id,
+    };
+
+    const axiosOptions = {
+      headers: { 'Authorization': `Token ${API_KEY}` },
+    };
+    if (process.env.NODE_ENV === 'development') {
+      axiosOptions.httpsAgent = new https.Agent({ rejectUnauthorized: false });
+    }
+    
+    // Llamamos a la API de CryptoCloud
+    const response = await axios.post(`${CRYPTO_CLOUD_API_URL}/invoice/create`, payload, axiosOptions);
+    
+    const { status, result } = response.data;
+    if (status !== 'success') {
+      return res.status(500).json({ message: 'Error al generar la dirección de pago.' });
+    }
+
+    // Devolvemos al frontend solo la información que necesita para el modal de depósito
+    res.json({
+      paymentAddress: result.pay_url,   // La dirección de la wallet
+      paymentAmount: result.amount,       // La cantidad exacta en la crypto elegida
+      currency: result.currency,        // La crypto elegida
+    });
+
+  } catch (error) {
+    console.error('Error en createDirectDeposit:', error.response?.data || error.message);
+    res.status(500).json({ message: 'Error interno al generar la dirección de pago.' });
+  }
+};
+// --- FIN DE LA NUEVA FUNCIÓN ---
+
+
+// --- 1. CREAR FACTURA DE COMPRA (OBSOLETA, PERO SE CONSERVA) ---
 const createPurchaseInvoice = async (req, res) => {
   const { toolId, quantity } = req.body;
   const userId = req.user.id;
@@ -40,27 +90,23 @@ const createPurchaseInvoice = async (req, res) => {
       order_id: order_id,
     };
 
-    // Construcción condicional de las opciones de Axios
     const axiosOptions = {
       headers: { 'Authorization': `Token ${API_KEY}` },
     };
-
     if (process.env.NODE_ENV === 'development') {
-      const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-      axiosOptions.httpsAgent = httpsAgent;
+      axiosOptions.httpsAgent = new https.Agent({ rejectUnauthorized: false });
     }
     
     const response = await axios.post(`${CRYPTO_CLOUD_API_URL}/invoice/create`, payload, axiosOptions);
-    
     res.json(response.data.result);
+
   } catch (error) {
     console.error('Error en createPurchaseInvoice:', error.response?.data || error.message);
     res.status(500).json({ message: 'Error interno al generar la factura.' });
   }
 };
 
-// --- 2. COMPRAR HERRAMIENTA CON SALDO INTERNO ---
-// (Esta función no hace llamadas externas, no requiere cambios)
+// --- 2. COMPRAR HERRAMIENTA CON SALDO INTERNO (CON RESET) ---
 const purchaseWithBalance = async (req, res) => {
   const { toolId, quantity } = req.body;
   const userId = req.user.id;
@@ -81,12 +127,15 @@ const purchaseWithBalance = async (req, res) => {
       return res.status(400).json({ message: 'Saldo USDT insuficiente.' });
     }
 
-    user.balance.usdt -= totalCost;
     const now = new Date();
+    user.balance.usdt -= totalCost;
     const expiryDate = new Date(now.getTime() + tool.durationDays * 24 * 60 * 60 * 1000);
     for (let i = 0; i < quantity; i++) {
       user.activeTools.push({ tool: tool._id, purchaseDate: now, expiryDate: expiryDate });
     }
+    
+    user.lastMiningClaim = now; // Reseteamos el contador de minado
+
     await user.save();
 
     await createTransaction(userId, 'purchase', totalCost, 'USDT', `Compra de ${quantity}x ${tool.name}`);
@@ -122,14 +171,11 @@ const createDepositInvoice = async (req, res) => {
       order_id: order_id,
     };
 
-    // Construcción condicional de las opciones de Axios
     const axiosOptions = {
       headers: { 'Authorization': `Token ${API_KEY}` },
     };
-
     if (process.env.NODE_ENV === 'development') {
-      const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-      axiosOptions.httpsAgent = httpsAgent;
+      axiosOptions.httpsAgent = new https.Agent({ rejectUnauthorized: false });
     }
     
     const response = await axios.post(`${CRYPTO_CLOUD_API_URL}/invoice/create`, payload, axiosOptions);
@@ -141,8 +187,7 @@ const createDepositInvoice = async (req, res) => {
 };
 
 
-// --- 4. WEBHOOK DE CRYPTOCLOUD ---
-// (No requiere cambios)
+// --- 4. WEBHOOK DE CRYPTOCLOUD (CON RESET) ---
 const cryptoCloudWebhook = async (req, res) => {
   const signature = req.headers['crypto-cloud-signature'];
   const payload = req.body;
@@ -163,12 +208,16 @@ const cryptoCloudWebhook = async (req, res) => {
         const amountPaid = parseFloat(payload.amount_usdt);
         const user = await User.findById(userId);
         const tool = await Tool.findById(toolId);
+        
         if (user && tool) {
           const now = new Date();
           const expiryDate = new Date(now.getTime() + tool.durationDays * 24 * 60 * 60 * 1000);
           for (let i = 0; i < quantity; i++) {
             user.activeTools.push({ tool: tool._id, purchaseDate: now, expiryDate: expiryDate });
           }
+          
+          user.lastMiningClaim = now; // Reseteamos el contador de minado
+
           await user.save();
           await createTransaction(userId, 'purchase', amountPaid, 'USDT', `Compra de ${quantity}x ${tool.name} (Crypto)`);
           await distributeCommissions(userId);
@@ -192,7 +241,6 @@ const cryptoCloudWebhook = async (req, res) => {
 };
 
 // --- 5. RECLAMAR GANANCIAS DE MINERÍA ---
-// (No requiere cambios)
 const claimMiningRewards = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).populate('activeTools.tool');
@@ -224,7 +272,6 @@ const claimMiningRewards = async (req, res) => {
 };
 
 // --- 6. DISTRIBUIR COMISIONES ---
-// (No requiere cambios)
 const distributeCommissions = async (buyerId) => {
   try {
     const commissionRates = { 1: 0.25, 2: 0.15, 3: 0.05 };
@@ -248,7 +295,6 @@ const distributeCommissions = async (buyerId) => {
 };
 
 // --- 7. INTERCAMBIAR NTX A USDT (SWAP) ---
-// (No requiere cambios)
 const swapNtxToUsdt = async (req, res) => {
   const { ntxAmount } = req.body;
   const userId = req.user.id;
@@ -284,7 +330,6 @@ const swapNtxToUsdt = async (req, res) => {
 };
 
 // --- 8. SOLICITAR UN RETIRO DE USDT ---
-// (No requiere cambios)
 const requestWithdrawal = async (req, res) => {
   const { amount, network, walletAddress } = req.body;
   const userId = req.user.id;
@@ -323,7 +368,6 @@ const requestWithdrawal = async (req, res) => {
 };
 
 // --- 9. OBTENER HISTORIAL DE TRANSACCIONES ---
-// (No requiere cambios)
 const getHistory = async (req, res) => {
   try {
     const transactions = await Transaction.find({ user: req.user.id })
@@ -338,6 +382,7 @@ const getHistory = async (req, res) => {
 
 // --- EXPORTACIÓN DE TODOS LOS CONTROLADORES ---
 module.exports = {
+  createDirectDeposit,
   createPurchaseInvoice,
   purchaseWithBalance,
   createDepositInvoice,

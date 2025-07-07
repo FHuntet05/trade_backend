@@ -1,9 +1,10 @@
-// backend/routes/walletRoutes.js (VERSIÓN FINAL COMPLETA Y REVISADA)
+// backend/routes/walletRoutes.js (VERSIÓN COMPLETA CON LA NUEVA RUTA)
 
 const express = require('express');
 const router = express.Router();
 
 const { 
+  createDirectDeposit, // <-- Importamos la nueva función
   createPurchaseInvoice,
   purchaseWithBalance,
   createDepositInvoice,
@@ -17,6 +18,10 @@ const {
 const authMiddleware = require('../middleware/authMiddleware');
 
 // --- RUTAS PROTEGIDAS (REQUIEREN AUTENTICACIÓN) ---
+
+// --- NUEVA RUTA PARA EL FLUJO DE PAGO INTEGRADO (TAREA 18.1) ---
+router.post('/create-direct-deposit', authMiddleware, createDirectDeposit);
+
 // Compras y Transacciones
 router.post('/create-purchase-invoice', authMiddleware, createPurchaseInvoice);
 router.post('/purchase-with-balance', authMiddleware, purchaseWithBalance);
