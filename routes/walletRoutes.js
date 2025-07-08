@@ -13,7 +13,6 @@ router.post('/claim', authMiddleware, walletController.claim);
 router.post('/swap', authMiddleware, walletController.swapNtxToUsdt);
 router.post('/request-withdrawal', authMiddleware, walletController.requestWithdrawal);
 router.get('/history', authMiddleware, walletController.getHistory);
-router.post('/claim-task', authMiddleware, walletController.claimTaskReward);
 router.post('/webhook', walletController.cryptoCloudWebhook);
 
 module.exports = router;

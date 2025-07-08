@@ -1,4 +1,4 @@
-// backend/controllers/walletController.js (VERSIÓN FINAL REFACTORIZADA)
+// backend/controllers/walletController.js (VERSIÓN COMPLETA CON CORRECCIÓN DE MINADO)
 
 const axios = require('axios');
 const crypto = require('crypto');
@@ -8,7 +8,6 @@ const Tool = require('../models/toolModel');
 const WithdrawalRequest = require('../models/withdrawalRequestModel');
 const Transaction = require('../models/transactionModel');
 const { createTransaction } = require('../utils/transactionLogger');
-// --- NUEVA IMPORTACIÓN DEL SERVICIO ---
 const { distributeCommissions } = require('../services/commissionService');
 
 const CRYPTO_CLOUD_API_URL = 'https://api.cryptocloud.pro/v2';
@@ -98,7 +97,7 @@ const purchaseWithBalance = async (req, res) => {
     user.miningStatus = 'IDLE';
     await user.save();
     await createTransaction(userId, 'purchase', totalCost, 'USDT', `Compra de ${quantity}x ${tool.name}`);
-    await distributeCommissions(userId); // <-- Esta llamada ahora usa el servicio importado
+    await distributeCommissions(userId);
     const finalUpdatedUser = await User.findById(userId).populate('activeTools.tool');
     res.status(200).json({ message: `¡Compra de ${quantity}x ${tool.name} exitosa!`, user: finalUpdatedUser.toObject() });
   } catch (error) {
@@ -148,7 +147,7 @@ const cryptoCloudWebhook = async (req, res) => {
           user.miningStatus = 'IDLE';
           await user.save();
           await createTransaction(userId, 'purchase', amountPaid, 'USDT', `Compra de ${quantity}x ${tool.name} (Crypto)`);
-          await distributeCommissions(userId); // <-- Esta llamada ahora usa el servicio importado
+          await distributeCommissions(userId);
         }
       } else if (order_id.startsWith('deposit_')) {
         const [, userId] = order_id.split('_');
@@ -172,25 +171,40 @@ const claim = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).populate('activeTools.tool');
     if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
+    
     const now = new Date();
     const lastClaim = new Date(user.lastMiningClaim);
     const secondsPassed = (now.getTime() - lastClaim.getTime()) / 1000;
+    
     if (secondsPassed <= 1) return res.status(400).json({ message: 'No hay ganancias para reclamar.' });
-    const earnedNtx = (user.effectiveMiningRate / 3600) * secondsPassed;
+
+    // <<< INICIO DE LA CORRECCIÓN CRÍTICA >>>
+    // La tasa 'effectiveMiningRate' ahora representa la ganancia DIARIA.
+    // Para calcular la ganancia por segundo, la dividimos por el número de segundos en un día (24 * 60 * 60 = 86400).
+    const earnedNtx = (user.effectiveMiningRate / 86400) * secondsPassed;
+    // <<< FIN DE LA CORRECCIÓN CRÍTICA >>>
+
     if (earnedNtx <= 0.00001) return res.status(400).json({ message: 'Ganancias insuficientes para reclamar.' });
+
     user.balance.ntx += earnedNtx;
     user.lastMiningClaim = now;
-    user.miningStatus = 'MINING';
+    user.miningStatus = 'MINING'; // El estado se mantiene en MINING, el ciclo no se reinicia al reclamar
     await user.save();
+    
     await createTransaction(req.user.id, 'mining_claim', earnedNtx, 'NTX', 'Reclamo de minería');
-    res.json({ message: `¡Has reclamado ${earnedNtx.toFixed(4)} NTX!`, user: user.toObject() });
+    
+    // Devolvemos el usuario actualizado
+    const updatedUser = await User.findById(req.user.id).populate('activeTools.tool');
+    res.json({
+      message: `¡Has reclamado ${earnedNtx.toFixed(4)} NTX!`,
+      user: updatedUser.toObject(),
+    });
+
   } catch (error) {
     console.error("Error al reclamar las ganancias:", error);
     res.status(500).json({ message: "Error del servidor al procesar el reclamo." });
   }
 };
-
-// --- LA FUNCIÓN 'distributeCommissions' HA SIDO ELIMINADA DE ESTE ARCHIVO ---
 
 const swapNtxToUsdt = async (req, res) => {
   const { ntxAmount } = req.body;
@@ -246,37 +260,6 @@ const getHistory = async (req, res) => {
   }
 };
 
-const claimTaskReward = async (req, res) => {
-  const { taskName } = req.body;
-  const userId = req.user.id;
-  if (!taskName) return res.status(400).json({ message: 'El nombre de la tarea es requerido.' });
-  const tasks = { boughtUpgrade: { reward: 1500, description: "Recompensa por primera mejora" }, invitedTenFriends: { reward: 1000, description: "Recompensa por 10 referidos" }, joinedTelegram: { reward: 500, description: "Recompensa por unirse al canal" } };
-  const task = tasks[taskName];
-  if (!task) return res.status(400).json({ message: 'El nombre de la tarea no es válido.' });
-  try {
-    const user = await User.findById(userId).populate('activeTools.tool');
-    if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
-    if (user.claimedTasks[taskName] === true) return res.status(400).json({ message: 'Ya has reclamado esta recompensa.' });
-    let isCompleted = false;
-    switch (taskName) {
-      case 'boughtUpgrade': isCompleted = user.activeTools.some(t => t.tool); break;
-      case 'invitedTenFriends': isCompleted = user.referrals && user.referrals.length >= 10; break;
-      case 'joinedTelegram': isCompleted = true; break;
-      default: return res.status(400).json({ message: 'Lógica de tarea no implementada.' });
-    }
-    if (!isCompleted) return res.status(400).json({ message: 'Aún no has completado esta tarea.' });
-    user.balance.ntx += task.reward;
-    user.claimedTasks[taskName] = true;
-    user.markModified('claimedTasks');
-    await user.save();
-    await createTransaction(userId, 'task_reward', task.reward, 'NTX', task.description);
-    res.status(200).json({ message: `¡Has reclamado ${task.reward} NTX!`, user: user.toObject() });
-  } catch (error) {
-    console.error(`Error en claimTaskReward para la tarea ${taskName}:`, error);
-    res.status(500).json({ message: 'Error del servidor al reclamar la tarea.' });
-  }
-};
-
 module.exports = {
   startMining,
   createDirectDeposit,
@@ -288,5 +271,4 @@ module.exports = {
   swapNtxToUsdt,
   requestWithdrawal,
   getHistory,
-  claimTaskReward,
 };
