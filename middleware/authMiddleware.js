@@ -1,6 +1,7 @@
-// backend/middleware/authMiddleware.js
+// backend/middleware/authMiddleware.js (VERSIÓN FINAL CON EXPORTACIÓN CORREGIDA)
+
 const jwt = require('jsonwebtoken');
-const User = require('../models/userModel'); // Asegúrate que userModel.js esté en la carpeta /models
+const User = require('../models/userModel');
 
 const authMiddleware = async (req, res, next) => {
   let token;
@@ -13,7 +14,7 @@ const authMiddleware = async (req, res, next) => {
       // Verificar el token
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-      // Obtener el usuario del token y adjuntarlo al objeto `req` para usarlo en los controladores
+      // Obtener el usuario del token y adjuntarlo al objeto `req`
       req.user = await User.findById(decoded.user.id).select('-password'); 
 
       if (!req.user) {
@@ -32,4 +33,8 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-module.exports = authMiddleware;
+// --- LA CORRECCIÓN CLAVE ---
+// Exportamos un objeto que contiene la función, para que la desestructuración funcione.
+module.exports = {
+  authMiddleware,
+};
