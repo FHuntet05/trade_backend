@@ -1,8 +1,9 @@
-// backend/routes/taskRoutes.js
+// backend/routes/taskRoutes.js (CORREGIDO)
 const express = require('express');
 const router = express.Router();
 const { getTaskStatus, claimTaskReward } = require('../controllers/taskController');
-const authMiddleware = require('../middleware/authMiddleware');
+// --- LA CORRECCIÓN CLAVE ---
+const { authMiddleware } = require('../middleware/authMiddleware');
 
 router.use(authMiddleware);
 

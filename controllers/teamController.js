@@ -2,16 +2,12 @@
 const User = require('../models/userModel');
 const mongoose = require('mongoose');
 
-// --- Tasas de comisión por nivel ---
-// Es una buena práctica definir estos valores como constantes para fácil mantenimiento.
 const COMMISSION_RATES = {
-  LEVEL_1: 0.10, // 10%
-  LEVEL_2: 0.05, // 5%
-  LEVEL_3: 0.02, // 2%
+  LEVEL_1: 0.10,
+  LEVEL_2: 0.05,
+  LEVEL_3: 0.02,
 };
 
-// @desc    Obtener las estadísticas del equipo del usuario
-// @route   GET /api/team/stats
 const getTeamStats = async (req, res) => {
   try {
     const userId = new mongoose.Types.ObjectId(req.user.id);
@@ -28,13 +24,10 @@ const getTeamStats = async (req, res) => {
           depthField: 'level' 
         }
       },
-      // MODIFICADO: Proyectamos más campos para nuestros cálculos
       {
         $project: {
           teamMembers: {
             level: 1,
-            // Asumimos que el modelo de usuario tiene estos campos.
-            // Usamos $ifNull para evitar errores si los campos no existen en un documento.
             totalRecharge: { $ifNull: ["$totalRecharge", 0] },
             totalWithdrawal: { $ifNull: ["$totalWithdrawal", 0] },
           }
@@ -57,8 +50,6 @@ const getTeamStats = async (req, res) => {
     }
 
     const members = teamData[0].teamMembers;
-
-    // --- CÁLCULOS AGREGADOS ---
     const totalTeamRecharge = members.reduce((sum, m) => sum + m.totalRecharge, 0);
     const totalTeamWithdrawals = members.reduce((sum, m) => sum + m.totalWithdrawal, 0);
 
@@ -70,7 +61,6 @@ const getTeamStats = async (req, res) => {
     ];
 
     members.forEach(member => {
-      // El nivel de $graphLookup es 0-indexed (0, 1, 2...), así que lo ajustamos.
       const currentLevel = member.level + 1;
       let commissionFromMember = 0;
 
@@ -107,8 +97,7 @@ const getTeamStats = async (req, res) => {
     res.status(500).json({ message: 'Error del servidor' });
   }
 };
-// @desc    Obtener los detalles de los miembros de un nivel específico
-// @route   GET /api/team/level-details/:level
+
 const getLevelDetails = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -120,32 +109,26 @@ const getLevelDetails = async (req, res) => {
 
     let teamMemberIds = [userId];
     
-    // Bucle para llegar al nivel deseado
-    // Para Nivel 1, el bucle corre 1 vez. Para Nivel 2, 2 veces, etc.
     for (let i = 0; i < requestedLevel; i++) {
       const directReferrals = await User.find({ referredBy: { $in: teamMemberIds } }).select('_id');
       if (directReferrals.length === 0) {
-        teamMemberIds = []; // No hay más referidos en la cadena
+        teamMemberIds = [];
         break;
       }
       teamMemberIds = directReferrals.map(u => u._id);
     }
     
     if (teamMemberIds.length === 0) {
-      return res.json([]); // Devuelve un array vacío si no hay miembros en ese nivel
+      return res.json([]);
     }
 
-    // Ahora que tenemos los IDs de los miembros del nivel correcto,
-    // buscamos sus datos y populamos sus herramientas para calcular el 'effectiveMiningRate'.
     const membersDetails = await User.find({ _id: { $in: teamMemberIds } })
                                      .populate('activeTools.tool')
-                                     .select('username effectiveMiningRate'); // Solo seleccionamos los campos necesarios
+                                     .select('username effectiveMiningRate');
 
-    // El campo virtual 'effectiveMiningRate' ya se calcula automáticamente gracias a la populación.
-    // Mapeamos para limpiar la respuesta y asegurar que el campo virtual esté presente.
     const finalResponse = membersDetails.map(member => ({
       username: member.username,
-      miningRate: parseFloat(member.effectiveMiningRate.toFixed(2)) // Usamos toFixed para redondear
+      miningRate: parseFloat(member.effectiveMiningRate.toFixed(2))
     }));
 
     res.json(finalResponse);

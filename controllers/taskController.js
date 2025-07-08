@@ -8,12 +8,9 @@ const REWARDS = {
   JOINED_TELEGRAM: 500,
 };
 
-// @desc    Obtener el estado de las tareas del usuario
-// @route   GET /api/tasks/status
 const getTaskStatus = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('claimedTasks');
-    // Contamos cuántos referidos tiene el usuario para la tarea de invitar amigos
     const referralCount = await User.countDocuments({ referredBy: req.user.id });
 
     res.json({
@@ -25,11 +22,8 @@ const getTaskStatus = async (req, res) => {
   }
 };
 
-
-// @desc    Reclamar la recompensa de una tarea
-// @route   POST /api/tasks/claim
 const claimTaskReward = async (req, res) => {
-  const { taskName } = req.body; // ej: "boughtUpgrade", "invitedTenFriends", "joinedTelegram"
+  const { taskName } = req.body;
   const userId = req.user.id;
 
   if (!taskName || !Object.keys(REWARDS).some(key => key.toLowerCase().includes(taskName.toLowerCase())) ) {
@@ -39,7 +33,6 @@ const claimTaskReward = async (req, res) => {
   try {
     const user = await User.findById(userId);
 
-    // Verificación genérica de que la tarea no haya sido reclamada
     if (user.claimedTasks[taskName]) {
       return res.status(400).json({ message: 'Ya has reclamado esta recompensa.' });
     }
@@ -48,10 +41,8 @@ const claimTaskReward = async (req, res) => {
     let rewardAmount = 0;
     let description = '';
 
-    // Lógica específica para cada tarea
     switch (taskName) {
       case 'boughtUpgrade':
-        // Verificamos si el usuario tiene alguna herramienta activa
         if (user.activeTools.length > 0) {
           canClaim = true;
           rewardAmount = REWARDS.BOUGHT_UPGRADE;
@@ -60,7 +51,6 @@ const claimTaskReward = async (req, res) => {
           return res.status(400).json({ message: 'Debes comprar una mejora para reclamar esta recompensa.' });
         }
         break;
-
       case 'invitedTenFriends':
         const referralCount = await User.countDocuments({ referredBy: userId });
         if (referralCount >= 10) {
@@ -71,9 +61,7 @@ const claimTaskReward = async (req, res) => {
           return res.status(400).json({ message: 'Aún no has invitado a 10 amigos.' });
         }
         break;
-
       case 'joinedTelegram':
-        // Esta tarea se valida del lado del cliente. Confiamos en que si se llama es porque el usuario hizo clic.
         canClaim = true;
         rewardAmount = REWARDS.JOINED_TELEGRAM;
         description = 'Recompensa por unirse al canal';
@@ -81,7 +69,6 @@ const claimTaskReward = async (req, res) => {
     }
 
     if (canClaim) {
-      // Asignar recompensa, marcar como reclamada y registrar transacción
       user.balance.ntx += rewardAmount;
       user.claimedTasks[taskName] = true;
       await user.save();
@@ -93,7 +80,6 @@ const claimTaskReward = async (req, res) => {
         user: updatedUser.toObject(),
       });
     } else {
-        // Este caso no debería ocurrir si las validaciones son correctas, pero es una salvaguarda.
         res.status(400).json({ message: 'No cumples los requisitos para esta tarea.' });
     }
 
