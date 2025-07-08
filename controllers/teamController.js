@@ -126,10 +126,19 @@ const getLevelDetails = async (req, res) => {
                                      .populate('activeTools.tool')
                                      .select('username effectiveMiningRate');
 
-    const finalResponse = membersDetails.map(member => ({
-      username: member.username,
-      miningRate: parseFloat(member.effectiveMiningRate.toFixed(2))
-    }));
+    // <<< INICIO DE LA CORRECCIÓN >>>
+    const finalResponse = membersDetails.map(member => {
+      // Se establece un valor por defecto de 0 si effectiveMiningRate es nulo o indefinido.
+      const rate = member.effectiveMiningRate || 0; 
+      
+      return {
+        username: member.username,
+        // Ahora la operación .toFixed() es segura porque 'rate' siempre será un número.
+        miningRate: parseFloat(rate.toFixed(2)) 
+      };
+    });
+    // <<< FIN DE LA CORRECCIÓN >>>
+
 
     res.json(finalResponse);
 
