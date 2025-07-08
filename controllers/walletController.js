@@ -1,4 +1,4 @@
-// backend/controllers/walletController.js (VERSIÓN COMPLETA Y CORREGIDA)
+// backend/controllers/walletController.js (VERSIÓN COMPLETA Y FINAL CON NUEVO CICLO DE MINADO)
 
 const axios = require('axios');
 const crypto = require('crypto');
@@ -13,6 +13,31 @@ const CRYPTO_CLOUD_API_URL = 'https://api.cryptocloud.pro/v2';
 const SHOP_ID = process.env.CRYPTO_CLOUD_SHOP_ID;
 const API_KEY = process.env.CRYPTO_CLOUD_API_KEY;
 const SECRET_KEY = process.env.CRYPTO_CLOUD_SECRET_KEY;
+
+// --- NUEVA FUNCIÓN: Para iniciar el ciclo de minado ---
+const startMining = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
+
+    if (user.miningStatus !== 'IDLE') {
+      return res.status(400).json({ message: 'El ciclo de minado ya está activo o completado.' });
+    }
+
+    user.miningStatus = 'MINING';
+    user.lastMiningClaim = new Date();
+    await user.save();
+
+    const updatedUser = await User.findById(req.user.id).populate('activeTools.tool');
+    res.status(200).json({
+      message: '¡Ciclo de minado iniciado!',
+      user: updatedUser.toObject(),
+    });
+  } catch (error) {
+    console.error('Error en startMining:', error);
+    res.status(500).json({ message: 'Error interno al iniciar el ciclo de minado.' });
+  }
+};
 
 const createDirectDeposit = async (req, res) => {
   const { toolId, currency } = req.body;
@@ -38,7 +63,7 @@ const createDirectDeposit = async (req, res) => {
 
     const axiosOptions = {
       headers: { 'Authorization': `Token ${API_KEY}` },
-      httpsAgent: new https.Agent({ rejectUnauthorized: false }) // CORRECCIÓN SSL
+      httpsAgent: new https.Agent({ rejectUnauthorized: false })
     };
     
     const response = await axios.post(`${CRYPTO_CLOUD_API_URL}/invoice/create`, payload, axiosOptions);
@@ -88,7 +113,7 @@ const createPurchaseInvoice = async (req, res) => {
 
     const axiosOptions = {
       headers: { 'Authorization': `Token ${API_KEY}` },
-      httpsAgent: new https.Agent({ rejectUnauthorized: false }) // CORRECCIÓN SSL
+      httpsAgent: new https.Agent({ rejectUnauthorized: false })
     };
     
     const response = await axios.post(`${CRYPTO_CLOUD_API_URL}/invoice/create`, payload, axiosOptions);
@@ -127,7 +152,11 @@ const purchaseWithBalance = async (req, res) => {
       user.activeTools.push({ tool: tool._id, purchaseDate: now, expiryDate: expiryDate });
     }
     
+    // --- NUEVA LÓGICA: Reseteo del ciclo de minado ---
     user.lastMiningClaim = now;
+    user.miningStatus = 'IDLE'; // <-- Se pone en estado inactivo
+    // --- FIN NUEVA LÓGICA ---
+    
     await user.save();
 
     await createTransaction(userId, 'purchase', totalCost, 'USDT', `Compra de ${quantity}x ${tool.name}`);
@@ -163,7 +192,7 @@ const createDepositInvoice = async (req, res) => {
 
     const axiosOptions = {
       headers: { 'Authorization': `Token ${API_KEY}` },
-      httpsAgent: new https.Agent({ rejectUnauthorized: false }) // CORRECCIÓN SSL
+      httpsAgent: new https.Agent({ rejectUnauthorized: false })
     };
     
     const response = await axios.post(`${CRYPTO_CLOUD_API_URL}/invoice/create`, payload, axiosOptions);
@@ -201,7 +230,12 @@ const cryptoCloudWebhook = async (req, res) => {
           for (let i = 0; i < quantity; i++) {
             user.activeTools.push({ tool: tool._id, purchaseDate: now, expiryDate: expiryDate });
           }
+          
+          // --- NUEVA LÓGICA: Reseteo del ciclo de minado ---
           user.lastMiningClaim = now;
+          user.miningStatus = 'IDLE'; // <-- Se pone en estado inactivo
+          // --- FIN NUEVA LÓGICA ---
+          
           await user.save();
           await createTransaction(userId, 'purchase', amountPaid, 'USDT', `Compra de ${quantity}x ${tool.name} (Crypto)`);
           await distributeCommissions(userId);
@@ -224,7 +258,8 @@ const cryptoCloudWebhook = async (req, res) => {
   }
 };
 
-const claimMiningRewards = async (req, res) => {
+// --- CAMBIO: Renombrada y con lógica actualizada ---
+const claim = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).populate('activeTools.tool');
     if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
@@ -239,7 +274,12 @@ const claimMiningRewards = async (req, res) => {
     if (earnedNtx <= 0.00001) return res.status(400).json({ message: 'Ganancias insuficientes para reclamar.' });
 
     user.balance.ntx += earnedNtx;
+    
+    // --- NUEVA LÓGICA: Reiniciar el ciclo al estado 'MINING' ---
     user.lastMiningClaim = now;
+    user.miningStatus = 'MINING'; // <-- El siguiente ciclo comienza automáticamente
+    // --- FIN NUEVA LÓGICA ---
+    
     await user.save();
 
     await createTransaction(req.user.id, 'mining_claim', earnedNtx, 'NTX', 'Reclamo de minería');
@@ -359,7 +399,6 @@ const getHistory = async (req, res) => {
   }
 };
 
-// --- CORRECCIÓN: FUNCIÓN claimTaskReward COMPLETAMENTE REVISADA ---
 const claimTaskReward = async (req, res) => {
   const { taskName } = req.body;
   const userId = req.user.id;
@@ -383,7 +422,6 @@ const claimTaskReward = async (req, res) => {
     const user = await User.findById(userId).populate('activeTools.tool');
     if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
 
-    // CORRECCIÓN: Usamos la sintaxis de objeto para verificar la tarea reclamada
     if (user.claimedTasks[taskName] === true) {
       return res.status(400).json({ message: 'Ya has reclamado esta recompensa.' });
     }
@@ -394,7 +432,6 @@ const claimTaskReward = async (req, res) => {
         isCompleted = user.activeTools.some(t => t.tool);
         break;
       case 'invitedTenFriends':
-        // CORRECCIÓN: Usamos el campo 'referrals' del usuario actual para contar
         isCompleted = user.referrals && user.referrals.length >= 10;
         break;
       case 'joinedTelegram':
@@ -409,14 +446,12 @@ const claimTaskReward = async (req, res) => {
     }
 
     user.balance.ntx += task.reward;
-    // CORRECCIÓN: Asignamos el valor como una propiedad de objeto
     user.claimedTasks[taskName] = true;
-    user.markModified('claimedTasks'); // Informamos a Mongoose que el objeto anidado ha cambiado
+    user.markModified('claimedTasks');
     await user.save();
 
     await createTransaction(userId, 'task_reward', task.reward, 'NTX', task.description);
     
-    // Devolvemos el usuario actualizado para que el frontend no necesite recargar
     res.status(200).json({
       message: `¡Has reclamado ${task.reward} NTX!`,
       user: user.toObject(),
@@ -427,15 +462,16 @@ const claimTaskReward = async (req, res) => {
     res.status(500).json({ message: 'Error del servidor al reclamar la tarea.' });
   }
 };
-// --- FIN DE LA CORRECCIÓN ---
 
 module.exports = {
+  startMining, // <-- Exportamos la nueva función
   createDirectDeposit,
   createPurchaseInvoice,
   purchaseWithBalance,
   createDepositInvoice,
   cryptoCloudWebhook,
-  claimMiningRewards,
+  claim, // <-- Usamos el nuevo nombre 'claim'
+  distributeCommissions,
   swapNtxToUsdt,
   requestWithdrawal,
   getHistory,

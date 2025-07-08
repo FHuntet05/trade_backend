@@ -21,6 +21,14 @@ const userSchema = new mongoose.Schema({
     purchaseDate: { type: Date, default: Date.now },
     expiryDate: { type: Date, required: true }
   }],
+  // --- AÑADIR ESTE CAMPO COMPLETO ---
+miningStatus: {
+  type: String,
+  enum: ['IDLE', 'MINING', 'CLAIMABLE'],
+  default: 'IDLE'
+},
+// --- FIN DEL CAMPO A AÑADIR ---
+
   lastMiningClaim: { type: Date, default: Date.now },
   referralCode: {
     type: String,

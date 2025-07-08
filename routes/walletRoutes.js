@@ -1,39 +1,28 @@
-// backend/routes/walletRoutes.js
-
 const express = require('express');
 const router = express.Router();
+const walletController = require('../controllers/walletController');
+const { authMiddleware } = require('../middleware/authMiddleware');
 
-const { 
-  createDirectDeposit,
-  createPurchaseInvoice,
-  purchaseWithBalance,
-  createDepositInvoice,
-  cryptoCloudWebhook, 
-  claimMiningRewards,
-  claimTaskReward, // <-- IMPORTAMOS LA NUEVA FUNCIÓN
-  swapNtxToUsdt,
-  requestWithdrawal,
-  getHistory,
-} = require('../controllers/walletController');
+// --- Rutas de compra y depósito ---
+router.post('/create-direct-deposit', authMiddleware, walletController.createDirectDeposit);
+router.post('/purchase-with-balance', authMiddleware, walletController.purchaseWithBalance);
+router.post('/create-purchase-invoice', authMiddleware, walletController.createPurchaseInvoice);
+router.post('/create-deposit-invoice', authMiddleware, walletController.createDepositInvoice);
 
-const authMiddleware = require('../middleware/authMiddleware');
+// --- NUEVA RUTA: Para el botón "Iniciar" ---
+router.post('/start-mining', authMiddleware, walletController.startMining);
 
-// --- RUTAS PROTEGIDAS (REQUIEREN AUTENTICACIÓN) ---
+// --- RUTA DE RECLAMO: Asegurarse de que apunte a la función 'claim' ---
+router.post('/claim', authMiddleware, walletController.claim);
 
-router.post('/create-direct-deposit', authMiddleware, createDirectDeposit);
-router.post('/create-purchase-invoice', authMiddleware, createPurchaseInvoice);
-router.post('/purchase-with-balance', authMiddleware, purchaseWithBalance);
-router.post('/create-deposit-invoice', authMiddleware, createDepositInvoice);
+// --- Otras rutas de la billetera ---
+router.post('/swap', authMiddleware, walletController.swapNtxToUsdt);
+router.post('/request-withdrawal', authMiddleware, walletController.requestWithdrawal);
+router.get('/history', authMiddleware, walletController.getHistory);
+router.post('/claim-task', authMiddleware, walletController.claimTaskReward);
 
-// Acciones del usuario
-router.post('/claim', authMiddleware, claimMiningRewards); // Para la minería principal
-router.post('/tasks/claim', authMiddleware, claimTaskReward); // <-- NUEVA RUTA PARA TAREAS
-router.post('/swap', authMiddleware, swapNtxToUsdt);
-router.post('/request-withdrawal', authMiddleware, requestWithdrawal);
+// --- Webhook (no necesita authMiddleware) ---
+router.post('/webhook', walletController.cryptoCloudWebhook);
 
-router.get('/history', authMiddleware, getHistory);
-
-// --- RUTA PÚBLICA PARA EL WEBHOOK ---
-router.post('/webhook', express.json(), cryptoCloudWebhook);
 
 module.exports = router;
