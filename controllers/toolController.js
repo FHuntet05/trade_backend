@@ -2,9 +2,9 @@
 const Tool = require('../models/toolModel');
 const User = require('../models/userModel');
 
-// ... (la función getTools no cambia)
 const getTools = async (req, res) => {
   try {
+    // Ordenamos por vipLevel para que se muestren en orden en el frontend
     const tools = await Tool.find().sort({ vipLevel: 1 });
     res.json(tools);
   } catch (error) {
@@ -12,6 +12,7 @@ const getTools = async (req, res) => {
     res.status(500).json({ message: 'Error del servidor' });
   }
 };
+
 
 // MODIFICADO: Ahora es para pagar con saldo interno
 // @desc    Comprar una herramienta usando el saldo USDT interno

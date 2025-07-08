@@ -1,4 +1,4 @@
-// backend/controllers/walletController.js (VERSIÓN FINAL CON EXPORTS CORREGIDOS)
+// backend/controllers/walletController.js (VERSIÓN FINAL REFACTORIZADA)
 
 const axios = require('axios');
 const crypto = require('crypto');
@@ -8,13 +8,13 @@ const Tool = require('../models/toolModel');
 const WithdrawalRequest = require('../models/withdrawalRequestModel');
 const Transaction = require('../models/transactionModel');
 const { createTransaction } = require('../utils/transactionLogger');
+// --- NUEVA IMPORTACIÓN DEL SERVICIO ---
+const { distributeCommissions } = require('../services/commissionService');
 
 const CRYPTO_CLOUD_API_URL = 'https://api.cryptocloud.pro/v2';
 const SHOP_ID = process.env.CRYPTO_CLOUD_SHOP_ID;
 const API_KEY = process.env.CRYPTO_CLOUD_API_KEY;
 const SECRET_KEY = process.env.CRYPTO_CLOUD_SECRET_KEY;
-
-// --- Todas las funciones se definen aquí ---
 
 const startMining = async (req, res) => {
   try {
@@ -98,7 +98,7 @@ const purchaseWithBalance = async (req, res) => {
     user.miningStatus = 'IDLE';
     await user.save();
     await createTransaction(userId, 'purchase', totalCost, 'USDT', `Compra de ${quantity}x ${tool.name}`);
-    await distributeCommissions(userId);
+    await distributeCommissions(userId); // <-- Esta llamada ahora usa el servicio importado
     const finalUpdatedUser = await User.findById(userId).populate('activeTools.tool');
     res.status(200).json({ message: `¡Compra de ${quantity}x ${tool.name} exitosa!`, user: finalUpdatedUser.toObject() });
   } catch (error) {
@@ -148,7 +148,7 @@ const cryptoCloudWebhook = async (req, res) => {
           user.miningStatus = 'IDLE';
           await user.save();
           await createTransaction(userId, 'purchase', amountPaid, 'USDT', `Compra de ${quantity}x ${tool.name} (Crypto)`);
-          await distributeCommissions(userId);
+          await distributeCommissions(userId); // <-- Esta llamada ahora usa el servicio importado
         }
       } else if (order_id.startsWith('deposit_')) {
         const [, userId] = order_id.split('_');
@@ -190,23 +190,7 @@ const claim = async (req, res) => {
   }
 };
 
-const distributeCommissions = async (buyerId) => {
-  try {
-    const commissionRates = { 1: 0.25, 2: 0.15, 3: 0.05 };
-    let currentUser = await User.findById(buyerId).populate('referredBy');
-    for (let level = 1; level <= 3; level++) {
-      if (!currentUser?.referredBy) break;
-      const referrer = currentUser.referredBy;
-      const commissionAmount = commissionRates[level];
-      referrer.balance.usdt += commissionAmount;
-      await referrer.save();
-      await createTransaction(referrer._id, 'referral_commission', commissionAmount, 'USDT', `Comisión Nivel ${level} por referido ${currentUser.username}`);
-      currentUser = await User.findById(referrer._id).populate('referredBy');
-    }
-  } catch (error) {
-    console.error(`Error en distributeCommissions para ${buyerId}:`, error);
-  }
-};
+// --- LA FUNCIÓN 'distributeCommissions' HA SIDO ELIMINADA DE ESTE ARCHIVO ---
 
 const swapNtxToUsdt = async (req, res) => {
   const { ntxAmount } = req.body;
@@ -293,7 +277,6 @@ const claimTaskReward = async (req, res) => {
   }
 };
 
-// --- EL BLOQUE DE EXPORTS CORREGIDO Y VERIFICADO ---
 module.exports = {
   startMining,
   createDirectDeposit,
@@ -306,5 +289,4 @@ module.exports = {
   requestWithdrawal,
   getHistory,
   claimTaskReward,
-  // NOTA: distributeCommissions es una función interna y no necesita ser exportada.
 };
