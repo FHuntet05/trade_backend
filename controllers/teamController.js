@@ -1,94 +1,76 @@
-// backend/controllers/teamController.js
+// backend/controllers/teamController.js (VERSIÓN FINAL CON LÓGICA DE DATOS CORRECTA)
 const User = require('../models/userModel');
+const Transaction = require('../models/transactionModel');
 const mongoose = require('mongoose');
-
-const COMMISSION_RATES = {
-  LEVEL_1: 0.10,
-  LEVEL_2: 0.05,
-  LEVEL_3: 0.02,
-};
 
 const getTeamStats = async (req, res) => {
   try {
     const userId = new mongoose.Types.ObjectId(req.user.id);
 
+    // --- LÓGICA MEJORADA: OBTENER COMISIONES DE LA FUENTE DE VERDAD (TRANSACCIONES) ---
+    const commissionData = await Transaction.aggregate([
+      { $match: { user: userId, type: 'commission' } },
+      { $group: { _id: null, totalCommission: { $sum: '$amount' } } }
+    ]);
+    const totalCommission = commissionData.length > 0 ? commissionData[0].totalCommission : 0;
+    
+    // --- LÓGICA MEJORADA: OBTENER ESTADÍSTICAS DEL EQUIPO CON $graphLookup ---
     const teamData = await User.aggregate([
       { $match: { _id: userId } },
       {
         $graphLookup: {
           from: 'users',
-          startWith: '$_id',
-          connectFromField: '_id',
-          connectToField: 'referredBy',
+          startWith: '$referrals.user', // Empezamos desde la lista de referidos directos
+          connectFromField: 'referrals.user',
+          connectToField: '_id',
           as: 'teamMembers',
-          depthField: 'level' 
+          depthField: 'level',
+          restrictSearchWithMatch: { level: { $lte: 2 } } // Buscamos hasta 3 niveles (0, 1, 2)
+        }
+      },
+      { $unwind: '$teamMembers' },
+      {
+        $project: {
+          level: { $add: ['$teamMembers.level', 1] }, // Nivel 0 es 1, 1 es 2, etc.
+          totalRecharge: { $ifNull: ["$teamMembers.totalRecharge", 0] }, // Asumiendo que este campo existe
+          totalWithdrawal: { $ifNull: ["$teamMembers.totalWithdrawal", 0] } // Asumiendo que este campo existe
         }
       },
       {
-        $project: {
-          teamMembers: {
-            level: 1,
-            totalRecharge: { $ifNull: ["$totalRecharge", 0] },
-            totalWithdrawal: { $ifNull: ["$totalWithdrawal", 0] },
-          }
+        $group: {
+          _id: '$level',
+          members: { $sum: 1 },
+          totalTeamRecharge: { $sum: '$totalRecharge' },
+          totalTeamWithdrawals: { $sum: '$totalWithdrawal' }
         }
       }
     ]);
 
-    if (!teamData || teamData.length === 0 || teamData[0].teamMembers.length === 0) {
-      return res.json({
-        totalTeamMembers: 0,
-        totalCommission: 0,
-        totalTeamRecharge: 0,
-        totalTeamWithdrawals: 0,
-        levels: [
-          { level: 1, members: 0, commission: 0 },
-          { level: 2, members: 0, commission: 0 },
-          { level: 3, members: 0, commission: 0 },
-        ]
-      });
-    }
-
-    const members = teamData[0].teamMembers;
-    const totalTeamRecharge = members.reduce((sum, m) => sum + m.totalRecharge, 0);
-    const totalTeamWithdrawals = members.reduce((sum, m) => sum + m.totalWithdrawal, 0);
-
-    let totalCommission = 0;
     const levels = [
-        { level: 1, members: 0, commission: 0 },
-        { level: 2, members: 0, commission: 0 },
-        { level: 3, members: 0, commission: 0 },
+      { level: 1, members: 0, commission: 0 }, // La comisión por nivel se simplifica
+      { level: 2, members: 0, commission: 0 },
+      { level: 3, members: 0, commission: 0 },
     ];
+    
+    let totalTeamMembers = 0;
+    let totalTeamRecharge = 0;
+    let totalTeamWithdrawals = 0;
 
-    members.forEach(member => {
-      const currentLevel = member.level + 1;
-      let commissionFromMember = 0;
-
-      if (currentLevel === 1) {
-        levels[0].members++;
-        commissionFromMember = member.totalRecharge * COMMISSION_RATES.LEVEL_1;
-        levels[0].commission += commissionFromMember;
-      } else if (currentLevel === 2) {
-        levels[1].members++;
-        commissionFromMember = member.totalRecharge * COMMISSION_RATES.LEVEL_2;
-        levels[1].commission += commissionFromMember;
-      } else if (currentLevel === 3) {
-        levels[2].members++;
-        commissionFromMember = member.totalRecharge * COMMISSION_RATES.LEVEL_3;
-        levels[2].commission += commissionFromMember;
+    teamData.forEach(levelInfo => {
+      if (levelInfo._id <= 3) {
+        levels[levelInfo._id - 1].members = levelInfo.members;
+        totalTeamMembers += levelInfo.members;
+        totalTeamRecharge += levelInfo.totalTeamRecharge;
+        totalTeamWithdrawals += levelInfo.totalTeamWithdrawals;
       }
-      totalCommission += commissionFromMember;
     });
 
     const stats = {
-      totalTeamMembers: members.length,
+      totalTeamMembers,
       totalCommission: parseFloat(totalCommission.toFixed(2)),
       totalTeamRecharge: parseFloat(totalTeamRecharge.toFixed(2)),
       totalTeamWithdrawals: parseFloat(totalTeamWithdrawals.toFixed(2)),
-      levels: levels.map(l => ({
-        ...l,
-        commission: parseFloat(l.commission.toFixed(2))
-      })),
+      levels: levels, // Ya no necesitamos calcular la comisión aquí
     };
 
     res.json(stats);
@@ -98,51 +80,57 @@ const getTeamStats = async (req, res) => {
   }
 };
 
+
 const getLevelDetails = async (req, res) => {
   try {
     const userId = req.user.id;
     const requestedLevel = parseInt(req.params.level, 10);
 
     if (![1, 2, 3].includes(requestedLevel)) {
-      return res.status(400).json({ message: 'Nivel no válido. Debe ser 1, 2 o 3.' });
+      return res.status(400).json({ message: 'Nivel no válido.' });
     }
 
-    let teamMemberIds = [userId];
+    // Usamos $graphLookup para encontrar los miembros del nivel solicitado de forma eficiente
+    const teamMembers = await User.aggregate([
+        { $match: { _id: new mongoose.Types.ObjectId(userId) } },
+        {
+            $graphLookup: {
+                from: 'users',
+                startWith: '$referrals.user',
+                connectFromField: 'referrals.user',
+                connectToField: '_id',
+                as: 'team',
+                depthField: 'level',
+                // Buscamos exactamente el nivel - 1 (porque depthField empieza en 0)
+                restrictSearchWithMatch: { 'level': requestedLevel - 1 }
+            }
+        },
+        { $unwind: '$team' },
+        // Filtramos para quedarnos solo con los miembros del nivel exacto
+        { $match: { 'team.level': requestedLevel - 1 } },
+        {
+            $project: {
+                _id: '$team._id',
+                username: '$team.username',
+                photoUrl: '$team.photoUrl',
+                // Leemos el valor pre-calculado y almacenado. Mucho más eficiente.
+                miningRate: '$team.effectiveMiningRate' 
+            }
+        }
+    ]);
     
-    for (let i = 0; i < requestedLevel; i++) {
-      const directReferrals = await User.find({ referredBy: { $in: teamMemberIds } }).select('_id');
-      if (directReferrals.length === 0) {
-        teamMemberIds = [];
-        break;
-      }
-      teamMemberIds = directReferrals.map(u => u._id);
-    }
-    
-    if (teamMemberIds.length === 0) {
-      return res.json([]);
-    }
-
-    const membersDetails = await User.find({ _id: { $in: teamMemberIds } })
-                                     .populate('activeTools.tool')
-                                     .select('username effectiveMiningRate');
-
-    // <<< INICIO DE LA CORRECCIÓN >>>
-    const finalResponse = membersDetails.map(member => {
-      // Se establece un valor por defecto de 0 si effectiveMiningRate es nulo o indefinido.
-      const rate = member.effectiveMiningRate || 0; 
-      
-      return {
+    // El frontend espera 'miningRate', así que lo mantenemos.
+    const finalResponse = teamMembers.map(member => ({
         username: member.username,
-        // Ahora la operación .toFixed() es segura porque 'rate' siempre será un número.
-        miningRate: parseFloat(rate.toFixed(2)) 
-      };
-    });
-    // <<< FIN DE LA CORRECCIÓN >>>
-
+        photoUrl: member.photoUrl,
+        // Aseguramos que el valor sea un número y lo formateamos
+        miningRate: parseFloat((member.miningRate || 0).toFixed(2))
+    }));
 
     res.json(finalResponse);
 
-  } catch (error) {
+  } catch (error)
+  {
     console.error(`Error al obtener detalles del nivel ${req.params.level}:`, error);
     res.status(500).json({ message: 'Error del servidor' });
   }

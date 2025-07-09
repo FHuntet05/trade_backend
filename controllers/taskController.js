@@ -1,21 +1,21 @@
-// backend/controllers/taskController.js (VERSIÓN CORREGIDA FINAL)
+// backend/controllers/taskController.js (CON FLUJO SIMPLIFICADO IMPLEMENTADO)
 const User = require('../models/userModel');
 const { createTransaction } = require('../utils/transactionLogger');
 
-// Lógica de estado de las tareas para el frontend
 const getTaskStatus = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
 
-    // <<< CORRECCIÓN: Se envía la estructura de datos que el frontend espera >>>
     res.json({
       claimedTasks: user.claimedTasks,
       referralCount: user.referrals ? user.referrals.length : 0,
       canClaim: {
         boughtUpgrade: user.activeTools && user.activeTools.length > 0,
         invitedTenFriends: user.referrals && user.referrals.length >= 10,
-        joinedTelegram: true, // Esta tarea siempre es "reclamable" si no se ha reclamado ya
+        // --- CORRECCIÓN LÓGICA ---
+        // La tarea solo es "completada" si el usuario ha hecho clic en "Ir"
+        joinedTelegram: user.claimedTasks.joinedTelegramAttempt === true,
       }
     });
   } catch (error) {
@@ -24,9 +24,36 @@ const getTaskStatus = async (req, res) => {
   }
 };
 
-// ... (El código de claimTaskReward que ya te proporcioné se mantiene igual)
+// --- NUEVO ENDPOINT ---
+// Se llama cuando el usuario hace clic en "Ir" para la tarea del canal.
+const markTaskAsVisited = async (req, res) => {
+    const { taskName } = req.body;
+    if (taskName !== 'joinedTelegram') {
+        return res.status(400).json({ message: 'Nombre de tarea no válido para esta acción.' });
+    }
+
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
+
+        // Marcamos que el usuario ha intentado visitar el canal.
+        user.claimedTasks.joinedTelegramAttempt = true;
+        user.markModified('claimedTasks');
+        await user.save();
+        
+        const updatedUser = await User.findById(req.user.id).populate('activeTools.tool');
+        res.status(200).json({ 
+            message: 'Tarea marcada como visitada.',
+            user: updatedUser.toObject()
+        });
+
+    } catch (error) {
+        console.error('Error en markTaskAsVisited:', error);
+        res.status(500).json({ message: 'Error del servidor.' });
+    }
+};
+
 const claimTaskReward = async (req, res) => {
-    // ... (El código anterior es correcto y no necesita cambios)
     const { taskName } = req.body;
     const userId = req.user.id;
 
@@ -48,10 +75,19 @@ const claimTaskReward = async (req, res) => {
 
         let isCompleted = false;
         switch (taskName) {
-            case 'boughtUpgrade': isCompleted = user.activeTools && user.activeTools.length > 0; break;
-            case 'invitedTenFriends': isCompleted = user.referrals && user.referrals.length >= 10; break;
-            case 'joinedTelegram': isCompleted = true; break;
-            default: return res.status(400).json({ message: 'Lógica de tarea no implementada.' });
+            case 'boughtUpgrade': 
+                isCompleted = user.activeTools && user.activeTools.length > 0; 
+                break;
+            case 'invitedTenFriends': 
+                isCompleted = user.referrals && user.referrals.length >= 10; 
+                break;
+            case 'joinedTelegram': 
+                // --- CORRECCIÓN LÓGICA ---
+                // Se asegura de que el usuario haya hecho clic en "Ir" antes de reclamar.
+                isCompleted = user.claimedTasks.joinedTelegramAttempt === true; 
+                break;
+            default: 
+                return res.status(400).json({ message: 'Lógica de tarea no implementada.' });
         }
 
         if (!isCompleted) return res.status(400).json({ message: 'Aún no has completado esta tarea.' });
@@ -74,7 +110,9 @@ const claimTaskReward = async (req, res) => {
     }
 };
 
+// No olvides exportar la nueva función
 module.exports = {
   getTaskStatus,
+  markTaskAsVisited, // <<< EXPORTAR NUEVA FUNCIÓN
   claimTaskReward
 };
