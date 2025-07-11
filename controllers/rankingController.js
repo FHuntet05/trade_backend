@@ -1,8 +1,8 @@
-// backend/controllers/rankingController.js (CON RANKING FICTICIO CORREGIDO Y AMPLIADO)
+// backend/controllers/rankingController.js (VERSIÓN 2.0 - REFORZADA)
 const User = require('../models/userModel');
 const mongoose = require('mongoose');
 
-// --- AMPLIACIÓN: Listas de nombres extendidas para mayor variedad ---
+// Listas de nombres extendidas (sin cambios)
 const prefixes = [
     'Shadow', 'Cyber', 'Neon', 'Ghost', 'Psycho', 'Void', 'Hyper', 'Dark', 'Iron', 'Omega', 'Crypto', 'Quantum',
     'Astro', 'Rogue', 'Titan', 'Zenith', 'Nova', 'Pulse', 'Warp', 'Drift', 'Apex', 'Blitz', 'Echo', 'Fury'
@@ -23,7 +23,7 @@ const seededRandom = (seed) => {
 
 const generateFictitiousRanking = (count = 100) => {
   const ranking = [];
-  const dateSeed = new Date().toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
+  const dateSeed = new Date().toISOString().slice(0, 10).replace(/-/g, '');
 
   for (let i = 0; i < count; i++) {
     const seed = parseInt(dateSeed) + i;
@@ -34,11 +34,10 @@ const generateFictitiousRanking = (count = 100) => {
     
     const score = 1000000 + Math.floor(seededRandom(seed * 40) * 4000000);
 
-    // --- CORRECCIÓN CRÍTICA: Estructura de objeto corregida para coincidir con el modelo User ---
     ranking.push({
       _id: new mongoose.Types.ObjectId(),
       username,
-      balance: { ntx: score }, // Ahora usa la estructura anidada correcta
+      balance: { ntx: score },
       isFictitious: true
     });
   }
@@ -48,6 +47,7 @@ const generateFictitiousRanking = (count = 100) => {
 const getRanking = async (req, res) => {
   try {
     const currentUserIdStr = req.user.id;
+    // Solo traemos los campos necesarios para este endpoint
     const currentUser = await User.findById(currentUserIdStr, 'username balance.ntx').lean();
 
     if (!currentUser) {
@@ -56,20 +56,20 @@ const getRanking = async (req, res) => {
 
     let fakeRanking = generateFictitiousRanking(100);
 
-    const fullList = [...fakeRanking, currentUser].sort((a, b) => (b.balance?.ntx || 0) - (a.balance?.ntx || 0));
+    // --- LÓGICA DE UNIÓN Y ORDENACIÓN SIMPLIFICADA ---
+    // Nos aseguramos de que todos los objetos en la lista tengan la misma estructura antes de ordenar.
+    const getScore = (user) => user?.balance?.ntx || 0;
+
+    const fullList = [...fakeRanking, currentUser].sort((a, b) => getScore(b) - getScore(a));
     
     const userRank = fullList.findIndex(u => u._id.equals(currentUser._id)) + 1;
-
-    fakeRanking = fakeRanking.filter(u => !u._id.equals(currentUser._id));
     
-    if (userRank <= 50) {
-      fakeRanking.splice(userRank - 1, 0, currentUser);
-    }
-    
-    const finalRanking = fakeRanking.slice(0, 50).map((user, index) => ({
+    // --- LÓGICA DE MAPEO A PRUEBA DE ERRORES ---
+    // Mapeamos a la estructura final DESPUÉS de toda la lógica de ordenación.
+    const finalRanking = fullList.slice(0, 50).map((user, index) => ({
         rank: index + 1,
         username: user.username,
-        score: parseFloat((user.balance?.ntx || 0).toFixed(2)),
+        score: parseFloat(getScore(user).toFixed(2)),
     }));
 
     res.json({
@@ -77,7 +77,7 @@ const getRanking = async (req, res) => {
         userSummary: {
             rank: userRank,
             username: currentUser.username,
-            score: parseFloat((currentUser.balance?.ntx || 0).toFixed(2)),
+            score: parseFloat(getScore(currentUser).toFixed(2)),
         }
     });
 
