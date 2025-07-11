@@ -1,14 +1,12 @@
-// backend/controllers/walletController.js (INTEGRADO CON NUEVO SERVICIO DE COMISIONES)
-
+// backend/controllers/walletController.js
 const axios = require('axios');
 const crypto = require('crypto');
-const https = require('https-proxy-agent'); // Usamos https-proxy-agent para mayor compatibilidad
+const https = require('https-proxy-agent');
 const User = require('../models/userModel');
 const Tool = require('../models/toolModel');
 const WithdrawalRequest = require('../models/withdrawalRequestModel');
 const Transaction = require('../models/transactionModel');
 const { createTransaction } = require('../utils/transactionLogger');
-// --- CAMBIO: Importamos nuestro nuevo servicio de comisiones ---
 const { distributeCommissions } = require('../services/commissionService');
 
 const CRYPTO_CLOUD_API_URL = 'https://api.cryptocloud.pro/v2';
@@ -16,7 +14,6 @@ const SHOP_ID = process.env.CRYPTO_CLOUD_SHOP_ID;
 const API_KEY = process.env.CRYPTO_CLOUD_API_KEY;
 const SECRET_KEY = process.env.CRYPTO_CLOUD_SECRET_KEY;
 
-// (Las funciones startMining, createDirectDeposit, createPurchaseInvoice, createDepositInvoice permanecen sin cambios)
 const startMining = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -97,8 +94,6 @@ const createDepositInvoice = async (req, res) => {
   }
 };
 
-
-// --- FUNCIÓN 'purchaseWithBalance' ACTUALIZADA ---
 const purchaseWithBalance = async (req, res) => {
   const { toolId, quantity } = req.body;
   const userId = req.user.id;
@@ -127,12 +122,8 @@ const purchaseWithBalance = async (req, res) => {
       user.activeTools.push({ tool: tool._id, purchaseDate: now, expiryDate: expiryDate });
     }
     
-    // El hook pre-save en userModel se encargará de actualizar effectiveMiningRate automáticamente.
     await user.save();
-
     await createTransaction(userId, 'purchase', totalCost, 'USDT', `Compra de ${quantity}x ${tool.name}`);
-    
-    // --- CAMBIO CRÍTICO: Llamamos al servicio de comisiones con la info correcta ---
     await distributeCommissions(user, totalCost);
 
     const finalUpdatedUser = await User.findById(userId).populate('activeTools.tool');
@@ -144,8 +135,6 @@ const purchaseWithBalance = async (req, res) => {
   }
 };
 
-
-// --- FUNCIÓN 'cryptoCloudWebhook' ACTUALIZADA ---
 const cryptoCloudWebhook = async (req, res) => {
   const signature = req.headers['crypto-cloud-signature'];
   const payload = req.body;
@@ -176,10 +165,8 @@ const cryptoCloudWebhook = async (req, res) => {
             user.activeTools.push({ tool: tool._id, purchaseDate: now, expiryDate: expiryDate });
           }
           
-          await user.save(); // El hook pre-save actualizará el effectiveMiningRate
+          await user.save();
           await createTransaction(userId, 'purchase', amountPaid, 'USDT', `Compra de ${quantity}x ${tool.name} (Crypto)`);
-          
-          // --- CAMBIO CRÍTICO: Llamamos al servicio de comisiones ---
           await distributeCommissions(user, amountPaid);
         }
 
@@ -196,9 +183,7 @@ const cryptoCloudWebhook = async (req, res) => {
   }
 };
 
-
-// (Las funciones claim, swapNtxToUsdt, requestWithdrawal, getHistory permanecen sin cambios)
-const MINING_CYCLE_DURATION_MS = 24 * 60 * 60 * 1000; // 24 horas en milisegundos
+const MINING_CYCLE_DURATION_MS = 24 * 60 * 60 * 1000;
 
 const claim = async (req, res) => {
   try {
@@ -207,31 +192,21 @@ const claim = async (req, res) => {
       return res.status(404).json({ message: 'Usuario no encontrado.' });
     }
 
-    // --- LÓGICA DE RECLAMO REFACTORIZADA ---
     const now = new Date();
     const lastClaim = new Date(user.lastMiningClaim);
     const timePassed = now.getTime() - lastClaim.getTime();
 
-    // 1. Verificar si el ciclo de 24 horas se ha completado.
     if (timePassed < MINING_CYCLE_DURATION_MS) {
       return res.status(400).json({ message: 'El ciclo de minado de 24 horas aún no ha terminado.' });
     }
     
-    // 2. El ciclo está completo. La ganancia es la tasa diaria completa.
     const earnedNtx = user.effectiveMiningRate;
-
-    // 3. Acreditar el saldo.
     user.balance.ntx += earnedNtx;
-    
-    // 4. Reiniciar el ciclo de minado al estado 'IDLE'.
-    // El usuario deberá presionar "Iniciar" de nuevo.
     user.miningStatus = 'IDLE';
-    // Nota: No actualizamos lastMiningClaim aquí. Se actualizará cuando el usuario inicie el próximo ciclo.
-    
     await user.save();
+    
     await createTransaction(req.user.id, 'mining_claim', earnedNtx, 'NTX', 'Reclamo de ciclo de minería');
     
-    // Devolvemos el usuario actualizado
     const updatedUser = await User.findById(req.user.id).populate('activeTools.tool');
     res.json({
       message: `¡Has reclamado ${earnedNtx.toFixed(2)} NTX!`,
@@ -248,8 +223,11 @@ const swapNtxToUsdt = async (req, res) => {
   const { ntxAmount } = req.body;
   const userId = req.user.id;
   const SWAP_RATE = 10000;
-  const MINIMUM_NTX_SWAP = 1.5 * SWAP_RATE;
-  if (!ntxAmount || typeof ntxAmount !== 'number' || ntxAmount < MINIMUM_NTX_SWAP) return res.status(400).json({ message: `La cantidad mínima para intercambiar es ${MINIMUM_NTX_SWAP} NTX.` });
+  // --- CAMBIO APLICADO ---
+  const MINIMUM_NTX_SWAP = 10000;
+  if (!ntxAmount || typeof ntxAmount !== 'number' || ntxAmount < MINIMUM_NTX_SWAP) {
+      return res.status(400).json({ message: `La cantidad mínima para intercambiar es ${MINIMUM_NTX_SWAP.toLocaleString()} NTX.` });
+  }
   try {
     const user = await User.findById(userId);
     if (!user || user.balance.ntx < ntxAmount) return res.status(400).json({ message: 'Saldo NTX insuficiente.' });
@@ -269,8 +247,11 @@ const swapNtxToUsdt = async (req, res) => {
 const requestWithdrawal = async (req, res) => {
   const { amount, network, walletAddress } = req.body;
   const userId = req.user.id;
+  // --- CAMBIO VERIFICADO (YA ESTABA EN 1.0) ---
   const MINIMUM_WITHDRAWAL = 1.0;
-  if (!amount || typeof amount !== 'number' || amount < MINIMUM_WITHDRAWAL) return res.status(400).json({ message: `El retiro mínimo es ${MINIMUM_WITHDRAWAL} USDT.` });
+  if (!amount || typeof amount !== 'number' || amount < MINIMUM_WITHDRAWAL) {
+      return res.status(400).json({ message: `El retiro mínimo es ${MINIMUM_WITHDRAWAL} USDT.` });
+  }
   if (!network || !walletAddress) return res.status(400).json({ message: 'La red y la dirección de billetera son requeridas.' });
   try {
     const user = await User.findById(userId);
@@ -281,7 +262,7 @@ const requestWithdrawal = async (req, res) => {
     const newRequest = new WithdrawalRequest({ user: userId, amount, network, walletAddress, status: 'pending' });
     await newRequest.save();
     const updatedUser = await User.findById(userId).populate('activeTools.tool');
-    res.status(201).json({ message: 'Tu solicitud de retiro ha sido sentida con éxito.', user: updatedUser.toObject() });
+    res.status(201).json({ message: 'Tu solicitud de retiro ha sido enviada con éxito.', user: updatedUser.toObject() });
   } catch (error) {
     console.error('Error en requestWithdrawal:', error);
     res.status(500).json({ message: 'Error interno al procesar la solicitud.' });
@@ -297,7 +278,6 @@ const getHistory = async (req, res) => {
     res.status(500).json({ message: 'Error al obtener el historial.' });
   }
 };
-
 
 module.exports = {
   startMining,

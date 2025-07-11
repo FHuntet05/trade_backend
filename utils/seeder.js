@@ -1,5 +1,4 @@
 // backend/utils/seeder.js
-
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const Tool = require('../models/toolModel'); // Asegúrate de que la ruta sea correcta
@@ -7,48 +6,19 @@ const Tool = require('../models/toolModel'); // Asegúrate de que la ruta sea co
 // Cargar variables de entorno
 dotenv.config(); // Le decimos que busque el .env en la carpeta raíz del backend
 
-// Nuevos datos de las herramientas (VIP)
+// --- DATOS COMPLETOS DE LAS 10 HERRAMIENTAS CON ROI DE 3 DÍAS ---
 const tools = [
-  {
-    name: 'Herramienta de aceleración de minería',
-    vipLevel: 1,
-    price: 3,
-    durationDays: 7,
-    miningBoost: 10000,
-    imageUrl: '/assets/tools/vip1.png', // Puedes ajustar las rutas de imagen si es necesario
-  },
-  {
-    name: 'Herramienta de aceleración de minería',
-    vipLevel: 2,
-    price: 8,
-    durationDays: 20,
-    miningBoost: 30000,
-    imageUrl: '/assets/tools/vip2.png',
-  },
-  {
-    name: 'Herramienta de aceleración de minería',
-    vipLevel: 3,
-    price: 16,
-    durationDays: 30,
-    miningBoost: 70000,
-    imageUrl: '/assets/tools/vip3.png',
-  },
-  {
-    name: 'Herramienta de aceleración de minería',
-    vipLevel: 4,
-    price: 32,
-    durationDays: 45,
-    miningBoost: 150000,
-    imageUrl: '/assets/tools/vip4.png',
-  },
-  {
-    name: 'Herramienta de aceleración de minería',
-    vipLevel: 5,
-    price: 50,
-    durationDays: 60,
-    miningBoost: 320000,
-    imageUrl: '/assets/tools/vip5.png',
-  },
+  // Ganancia NTX/Día = (Precio USDT / 3) * 10000
+  { name: 'VIP 1', vipLevel: 1, price: 3, durationDays: 365, miningBoost: 10000, imageUrl: '/assets/tools/vip1.png' },
+  { name: 'VIP 2', vipLevel: 2, price: 8, durationDays: 365, miningBoost: 26666, imageUrl: '/assets/tools/vip2.png' },
+  { name: 'VIP 3', vipLevel: 3, price: 16, durationDays: 365, miningBoost: 53333, imageUrl: '/assets/tools/vip3.png' },
+  { name: 'VIP 4', vipLevel: 4, price: 32, durationDays: 365, miningBoost: 106666, imageUrl: '/assets/tools/vip4.png' },
+  { name: 'VIP 5', vipLevel: 5, price: 50, durationDays: 365, miningBoost: 166666, imageUrl: '/assets/tools/vip5.png' },
+  { name: 'VIP 6', vipLevel: 6, price: 100, durationDays: 365, miningBoost: 333333, imageUrl: '/assets/tools/vip6.png' },
+  { name: 'VIP 7', vipLevel: 7, price: 150, durationDays: 365, miningBoost: 500000, imageUrl: '/assets/tools/vip7.png' },
+  { name: 'VIP 8', vipLevel: 8, price: 250, durationDays: 365, miningBoost: 833333, imageUrl: '/assets/tools/vip8.png' },
+  { name: 'VIP 9', vipLevel: 9, price: 350, durationDays: 365, miningBoost: 1166666, imageUrl: '/assets/tools/vip9.png' },
+  { name: 'VIP 10', vipLevel: 10, price: 500, durationDays: 365, miningBoost: 1666666, imageUrl: '/assets/tools/vip10.png' },
 ];
 
 const connectDB = async () => {
