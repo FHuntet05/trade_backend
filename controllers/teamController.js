@@ -1,4 +1,4 @@
-// --- START OF FILE backend/controllers/teamController.js (MODIFICADO) ---
+// --- START OF FILE backend/controllers/teamController.js (VERSIÓN COMPLETA Y FUNCIONAL) ---
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -8,92 +8,102 @@ const getTeamStats = async (req, res) => {
   try {
     const userId = new mongoose.Types.ObjectId(req.user.id);
 
-    const commissionData = await Transaction.aggregate([
-      { $match: { user: userId, type: 'commission' } },
-      { $group: { _id: null, totalCommission: { $sum: '$amount' } } }
-    ]);
-    const totalCommission = commissionData.length > 0 ? commissionData[0].totalCommission : 0;
-    
-    const teamData = await User.aggregate([
-      { $match: { _id: userId } },
-      {
-        $graphLookup: {
-          from: 'users',
-          startWith: '$referrals.user',
-          connectFromField: 'referrals.user',
-          connectToField: '_id',
-          as: 'teamMembers',
-          depthField: 'level',
-          restrictSearchWithMatch: { level: { $lte: 2 } }
+    // Obtenemos al usuario y populamos su lista de referidos hasta 3 niveles de profundidad.
+    const user = await User.findById(userId).populate({
+      path: 'referrals.user',
+      select: 'telegramId activeTools totalRecharge totalWithdrawal referrals',
+      populate: {
+        path: 'referrals.user',
+        select: 'telegramId activeTools totalRecharge totalWithdrawal referrals',
+        populate: {
+          path: 'referrals.user',
+          select: 'telegramId activeTools totalRecharge totalWithdrawal'
         }
-      },
-      { $unwind: '$teamMembers' },
-      {
-        $project: {
-          level: { $add: ['$teamMembers.level', 1] },
-          totalRecharge: { $ifNull: ["$teamMembers.totalRecharge", 0] },
-          totalWithdrawal: { $ifNull: ["$teamMembers.totalWithdrawal", 0] },
-          // --- NUEVA LÓGICA: Determinar si el miembro es válido ---
-          // Usamos $cond para crear una variable 'isValid'. Será 1 si el usuario tiene herramientas activas, de lo contrario 0.
-          isValid: {
-            $cond: {
-              if: { $gt: [{ $size: { $ifNull: ["$teamMembers.activeTools", []] } }, 0] },
-              then: 1,
-              else: 0
-            }
-          }
-        }
-      },
-      {
-        $group: {
-          _id: '$level',
-          members: { $sum: 1 },
-          // --- NUEVA LÓGICA: Sumar los miembros válidos ---
-          // Simplemente sumamos el campo 'isValid' que creamos en el paso anterior.
-          validMembers: { $sum: '$isValid' }, 
-          totalTeamRecharge: { $sum: '$totalRecharge' },
-          totalTeamWithdrawals: { $sum: '$totalWithdrawal' }
-        }
-      }
-    ]);
-
-    // --- CAMBIO: La estructura de 'levels' ahora incluye 'validMembers' ---
-    const levels = [
-      { level: 1, totalMembers: 0, validMembers: 0 },
-      { level: 2, totalMembers: 0, validMembers: 0 },
-      { level: 3, totalMembers: 0, validMembers: 0 },
-    ];
-    
-    let totalTeamMembers = 0;
-    let totalTeamRecharge = 0;
-    let totalTeamWithdrawals = 0;
-
-    teamData.forEach(levelInfo => {
-      if (levelInfo._id <= 3) {
-        const index = levelInfo._id - 1;
-        // --- CAMBIO: Poblamos la nueva estructura de datos ---
-        levels[index].totalMembers = levelInfo.members;
-        levels[index].validMembers = levelInfo.validMembers;
-        totalTeamMembers += levelInfo.members;
-        totalTeamRecharge += levelInfo.totalTeamRecharge;
-        totalTeamWithdrawals += levelInfo.totalTeamWithdrawals;
       }
     });
 
+    if (!user) {
+      return res.status(404).json({ message: "Usuario no encontrado" });
+    }
+
     const stats = {
-      totalTeamMembers,
-      totalCommission: parseFloat(totalCommission.toFixed(2)),
-      totalTeamRecharge: parseFloat(totalTeamRecharge.toFixed(2)),
-      totalTeamWithdrawals: parseFloat(totalTeamWithdrawals.toFixed(2)),
-      levels: levels,
+      totalTeamMembers: 0,
+      totalCommission: 0, // Este valor se puede calcular por separado si es necesario.
+      totalTeamRecharge: 0,
+      totalTeamWithdrawals: 0,
+      levels: [
+        { level: 1, totalMembers: 0, validMembers: 0 },
+        { level: 2, totalMembers: 0, validMembers: 0 },
+        { level: 3, totalMembers: 0, validMembers: 0 },
+      ],
     };
 
+    // Procesamos el Nivel 1 de referidos
+    if (user.referrals && user.referrals.length > 0) {
+      stats.levels[0].totalMembers = user.referrals.length;
+      user.referrals.forEach(referralLvl1 => {
+        const memberLvl1 = referralLvl1.user;
+        if (!memberLvl1) return;
+
+        stats.totalTeamMembers++;
+        if (memberLvl1.activeTools && memberLvl1.activeTools.length > 0) {
+          stats.levels[0].validMembers++;
+        }
+        stats.totalTeamRecharge += memberLvl1.totalRecharge || 0;
+        stats.totalTeamWithdrawals += memberLvl1.totalWithdrawal || 0;
+
+        // Procesamos el Nivel 2 de referidos
+        if (memberLvl1.referrals && memberLvl1.referrals.length > 0) {
+          stats.levels[1].totalMembers += memberLvl1.referrals.length;
+          memberLvl1.referrals.forEach(referralLvl2 => {
+            const memberLvl2 = referralLvl2.user;
+            if (!memberLvl2) return;
+
+            stats.totalTeamMembers++;
+            if (memberLvl2.activeTools && memberLvl2.activeTools.length > 0) {
+              stats.levels[1].validMembers++;
+            }
+            stats.totalTeamRecharge += memberLvl2.totalRecharge || 0;
+            stats.totalTeamWithdrawals += memberLvl2.totalWithdrawal || 0;
+
+            // Procesamos el Nivel 3 de referidos
+            if (memberLvl2.referrals && memberLvl2.referrals.length > 0) {
+              stats.levels[2].totalMembers += memberLvl2.referrals.length;
+              memberLvl2.referrals.forEach(referralLvl3 => {
+                const memberLvl3 = referralLvl3.user;
+                if(!memberLvl3) return;
+
+                stats.totalTeamMembers++;
+                if (memberLvl3.activeTools && memberLvl3.activeTools.length > 0) {
+                    stats.levels[2].validMembers++;
+                }
+                stats.totalTeamRecharge += memberLvl3.totalRecharge || 0;
+                stats.totalTeamWithdrawals += memberLvl3.totalWithdrawal || 0;
+              });
+            }
+          });
+        }
+      });
+    }
+
+    // Aquí se puede agregar la lógica para calcular la comisión total si se requiere
+    // Por ejemplo, consultando el modelo de transacciones.
+    const commissionData = await Transaction.aggregate([
+      { $match: { user: userId, type: 'commission' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+    if (commissionData.length > 0) {
+        stats.totalCommission = commissionData[0].total;
+    }
+
     res.json(stats);
+
   } catch (error) {
-    console.error("Error al obtener estadísticas del equipo:", error);
+    console.error("Error al obtener estadísticas del equipo (versión completa):", error);
     res.status(500).json({ message: 'Error del servidor' });
   }
 };
+
 
 const getLevelDetails = async (req, res) => {
   try {
@@ -115,29 +125,24 @@ const getLevelDetails = async (req, res) => {
                 connectToField: '_id',
                 as: 'team',
                 depthField: 'level',
-                // Buscamos exactamente el nivel - 1 (porque depthField empieza en 0)
                 restrictSearchWithMatch: { 'level': requestedLevel - 1 }
             }
         },
         { $unwind: '$team' },
-        // Filtramos para quedarnos solo con los miembros del nivel exacto
         { $match: { 'team.level': requestedLevel - 1 } },
         {
             $project: {
                 _id: '$team._id',
                 username: '$team.username',
                 photoUrl: '$team.photoUrl',
-                // Leemos el valor pre-calculado y almacenado. Mucho más eficiente.
                 miningRate: '$team.effectiveMiningRate' 
             }
         }
     ]);
     
-    // El frontend espera 'miningRate', así que lo mantenemos.
     const finalResponse = teamMembers.map(member => ({
         username: member.username,
         photoUrl: member.photoUrl,
-        // Aseguramos que el valor sea un número y lo formateamos
         miningRate: parseFloat((member.miningRate || 0).toFixed(2))
     }));
 
@@ -151,3 +156,5 @@ const getLevelDetails = async (req, res) => {
 };
 
 module.exports = { getTeamStats, getLevelDetails };
+
+// --- END OF FILE backend/controllers/teamController.js ---
