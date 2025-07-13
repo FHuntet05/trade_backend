@@ -1,7 +1,7 @@
-// backend/controllers/authController.js (VERSIÓN FINAL CON LÓGICA DE PRE-VINCULACIÓN)
+// --- START OF FILE backend/controllers/authController.js (CORREGIDO Y MEJORADO) ---
 
 const User = require('../models/userModel');
-const PendingReferral = require('../models/pendingReferralModel'); // <-- Importamos el nuevo modelo
+const PendingReferral = require('../models/pendingReferralModel');
 const jwt = require('jsonwebtoken');
 const { validate, parse } = require('@telegram-apps/init-data-node');
 
@@ -25,6 +25,8 @@ const authTelegramUser = async (req, res) => {
     const username = userData.username || `user_${telegramId}`;
     const language = userData.languageCode || 'es';
     const photoUrl = userData.photoUrl || null;
+    const firstName = userData.firstName || null;
+    const lastName = userData.lastName || null;
 
     let user = await User.findOne({ telegramId });
 
@@ -32,56 +34,68 @@ const authTelegramUser = async (req, res) => {
       let needsUpdate = false;
       if (user.username !== username) { user.username = username; needsUpdate = true; }
       if (user.photoUrl !== photoUrl) { user.photoUrl = photoUrl; needsUpdate = true; }
+      if (user.firstName !== firstName) { user.firstName = firstName; needsUpdate = true; }
+      if (user.lastName !== lastName) { user.lastName = lastName; needsUpdate = true; }
       if (needsUpdate) {
-        console.log(`Actualizando perfil para el usuario existente: ${username}`);
         await user.save();
       }
     } else {
-      // --- LÓGICA DE BÚSQUEDA DE REFERENTE MEJORADA ---
       let referrer = null;
-      let referrerTelegramId = startParam; // Usamos el startParam como primera opción
+      let referrerTelegramId = startParam;
 
-      // 1. Buscamos si hay una pre-vinculación guardada por el bot
       const pendingReferral = await PendingReferral.findOne({ newUserId: telegramId });
       if (pendingReferral) {
         referrerTelegramId = pendingReferral.referrerId;
-        console.log(`[Auth] Pre-vinculación encontrada para ${telegramId}. ID del referente: ${referrerTelegramId}`);
       }
-
-      // 2. Si tenemos un ID de referente (de cualquier fuente), buscamos al usuario referente
+      
       if (referrerTelegramId) {
-        console.log(`Buscando referente con ID de Telegram: ${referrerTelegramId}`);
         referrer = await User.findOne({ telegramId: referrerTelegramId });
       }
 
-      if (!referrer && startParam) {
-        console.log(`ADVERTENCIA: Se usó un startParam/pre-vinculación "${startParam}" pero no se encontró ningún referente.`);
-      }
+      const newUserFields = {
+        telegramId,
+        username,
+        language,
+        photoUrl,
+        firstName,
+        lastName,
+        referredBy: referrer ? referrer._id : null,
+      };
 
-      // 3. Procedemos con la creación del usuario y la vinculación
-      const newUserFields = { telegramId, username, language, photoUrl, referredBy: referrer ? referrer._id : null };
       user = new User(newUserFields);
       await user.save();
 
       if (referrer) {
-        console.log(`Vinculando nuevo usuario ${user.username} con referente ${referrer.username}`);
         referrer.referrals.push({ level: 1, user: user._id });
         await referrer.save();
-        console.log(`Referente ${referrer.username} actualizado.`);
-        
-        // 4. (Opcional pero recomendado) Limpiamos la pre-vinculación una vez usada
         if (pendingReferral) {
           await PendingReferral.deleteOne({ _id: pendingReferral._id });
         }
       }
     }
     
-    const userForResponse = await User.findById(user._id).populate('activeTools.tool');
-    const token = jwt.sign({ user: { id: userForResponse.id } }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    // --- SOLUCIÓN CLAVE: CONSTRUCCIÓN DEL OBJETO DE USUARIO COMPLETO ---
+    
+    // 1. Populamos los datos de las herramientas activas
+    const userWithTools = await User.findById(user._id).populate('activeTools.tool');
+    
+    // 2. Convertimos el documento de Mongoose a un objeto plano de JavaScript
+    const userObject = userWithTools.toObject();
+
+    // 3. Añadimos manualmente el ID de Telegram del referente, si existe
+    // Buscamos al referente en la base de datos para obtener su telegramId
+    if (userObject.referredBy) {
+        const referrerData = await User.findById(userObject.referredBy).select('telegramId');
+        if (referrerData) {
+            userObject.referrerId = referrerData.telegramId; // <<< ESTE ES EL CAMPO QUE EL FRONTEND ESPERA
+        }
+    }
+    
+    const token = jwt.sign({ user: { id: userObject._id } }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     res.json({
       token,
-      user: userForResponse.toObject(),
+      user: userObject, // <<< Enviamos el objeto de usuario completo y enriquecido
     });
 
   } catch (error) {
@@ -92,19 +106,29 @@ const authTelegramUser = async (req, res) => {
 
 const getUserProfile = async (req, res) => {
   try {
+    // --- SOLUCIÓN CLAVE 2: ASEGURAR QUE EL PERFIL TAMBIÉN DEVUELVA LOS DATOS ---
     const user = await User.findById(req.user.id).populate('activeTools.tool');
-    if (user) {
-        res.json(user.toObject());
-    } else {
-        res.status(404).json({ message: 'Usuario no encontrado' });
+    if (!user) {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
     }
+    
+    const userObject = user.toObject();
+    
+    if (userObject.referredBy) {
+        const referrerData = await User.findById(userObject.referredBy).select('telegramId');
+        if (referrerData) {
+            userObject.referrerId = referrerData.telegramId;
+        }
+    }
+    
+    res.json(userObject);
+    
   } catch (error) {
     console.error('Error al obtener el perfil:', error);
     res.status(500).json({ message: 'Error del servidor' });
   }
 };
 
-module.exports = {
-  authTelegramUser,
-  getUserProfile, 
-};
+module.exports = { authTelegramUser, getUserProfile };
+
+// --- END OF FILE backend/controllers/authController.js ---
