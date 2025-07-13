@@ -1,4 +1,5 @@
-// backend/controllers/teamController.js (VERSIÓN FINAL CON LÓGICA DE DATOS CORRECTA)
+// --- START OF FILE backend/controllers/teamController.js (MODIFICADO) ---
+
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const mongoose = require('mongoose');
@@ -7,49 +8,60 @@ const getTeamStats = async (req, res) => {
   try {
     const userId = new mongoose.Types.ObjectId(req.user.id);
 
-    // --- LÓGICA MEJORADA: OBTENER COMISIONES DE LA FUENTE DE VERDAD (TRANSACCIONES) ---
     const commissionData = await Transaction.aggregate([
       { $match: { user: userId, type: 'commission' } },
       { $group: { _id: null, totalCommission: { $sum: '$amount' } } }
     ]);
     const totalCommission = commissionData.length > 0 ? commissionData[0].totalCommission : 0;
     
-    // --- LÓGICA MEJORADA: OBTENER ESTADÍSTICAS DEL EQUIPO CON $graphLookup ---
     const teamData = await User.aggregate([
       { $match: { _id: userId } },
       {
         $graphLookup: {
           from: 'users',
-          startWith: '$referrals.user', // Empezamos desde la lista de referidos directos
+          startWith: '$referrals.user',
           connectFromField: 'referrals.user',
           connectToField: '_id',
           as: 'teamMembers',
           depthField: 'level',
-          restrictSearchWithMatch: { level: { $lte: 2 } } // Buscamos hasta 3 niveles (0, 1, 2)
+          restrictSearchWithMatch: { level: { $lte: 2 } }
         }
       },
       { $unwind: '$teamMembers' },
       {
         $project: {
-          level: { $add: ['$teamMembers.level', 1] }, // Nivel 0 es 1, 1 es 2, etc.
-          totalRecharge: { $ifNull: ["$teamMembers.totalRecharge", 0] }, // Asumiendo que este campo existe
-          totalWithdrawal: { $ifNull: ["$teamMembers.totalWithdrawal", 0] } // Asumiendo que este campo existe
+          level: { $add: ['$teamMembers.level', 1] },
+          totalRecharge: { $ifNull: ["$teamMembers.totalRecharge", 0] },
+          totalWithdrawal: { $ifNull: ["$teamMembers.totalWithdrawal", 0] },
+          // --- NUEVA LÓGICA: Determinar si el miembro es válido ---
+          // Usamos $cond para crear una variable 'isValid'. Será 1 si el usuario tiene herramientas activas, de lo contrario 0.
+          isValid: {
+            $cond: {
+              if: { $gt: [{ $size: { $ifNull: ["$teamMembers.activeTools", []] } }, 0] },
+              then: 1,
+              else: 0
+            }
+          }
         }
       },
       {
         $group: {
           _id: '$level',
           members: { $sum: 1 },
+          // --- NUEVA LÓGICA: Sumar los miembros válidos ---
+          // Simplemente sumamos el campo 'isValid' que creamos en el paso anterior.
+          validMembers: { $sum: '$isValid' }, 
           totalTeamRecharge: { $sum: '$totalRecharge' },
           totalTeamWithdrawals: { $sum: '$totalWithdrawal' }
         }
       }
     ]);
 
+    // --- CAMBIO: La estructura de 'levels' ahora incluye 'validMembers' ---
     const levels = [
-      { level: 1, members: 0, commission: 0 }, // La comisión por nivel se simplifica
-      { level: 2, members: 0, commission: 0 },
-      { level: 3, members: 0, commission: 0 },
+      { level: 1, totalMembers: 0, validMembers: 0 },
+      { level: 2, totalMembers: 0, validMembers: 0 },
+      { level: 3, totalMembers: 0, validMembers: 0 },
     ];
     
     let totalTeamMembers = 0;
@@ -58,7 +70,10 @@ const getTeamStats = async (req, res) => {
 
     teamData.forEach(levelInfo => {
       if (levelInfo._id <= 3) {
-        levels[levelInfo._id - 1].members = levelInfo.members;
+        const index = levelInfo._id - 1;
+        // --- CAMBIO: Poblamos la nueva estructura de datos ---
+        levels[index].totalMembers = levelInfo.members;
+        levels[index].validMembers = levelInfo.validMembers;
         totalTeamMembers += levelInfo.members;
         totalTeamRecharge += levelInfo.totalTeamRecharge;
         totalTeamWithdrawals += levelInfo.totalTeamWithdrawals;
@@ -70,7 +85,7 @@ const getTeamStats = async (req, res) => {
       totalCommission: parseFloat(totalCommission.toFixed(2)),
       totalTeamRecharge: parseFloat(totalTeamRecharge.toFixed(2)),
       totalTeamWithdrawals: parseFloat(totalTeamWithdrawals.toFixed(2)),
-      levels: levels, // Ya no necesitamos calcular la comisión aquí
+      levels: levels,
     };
 
     res.json(stats);
@@ -79,7 +94,6 @@ const getTeamStats = async (req, res) => {
     res.status(500).json({ message: 'Error del servidor' });
   }
 };
-
 
 const getLevelDetails = async (req, res) => {
   try {
