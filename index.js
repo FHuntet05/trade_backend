@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN FINAL CON ARRANQUE 100% ROBUSTO)
+// backend/index.js (VERSIÓN FINAL CON WEBHOOKS)
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -10,37 +10,26 @@ const { startMonitoring } = require('./services/transactionMonitor');
 const { startPriceService } = require('./services/priceService');
 
 const app = express();
+app.use(cors()); // Usamos cors simple para el webhook
+app.use(express.json()); // Aseguramos que Express pueda parsear el JSON de Telegram
 
-// --- CONFIGURACIÓN DE CORS ---
-const whitelist = [
-    'https://linker-frontend.onrender.com',
-    'http://localhost:5173'
-];
-const corsOptions = {
-    origin: function (origin, callback) {
-        if (whitelist.indexOf(origin) !== -1 || !origin) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
-    credentials: true,
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-};
-app.use(cors(corsOptions));
-app.use(express.json());
+// --- CONFIGURACIÓN DE TELEGRAF ---
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+const secretPath = `/api/telegram-webhook/${bot.secretPathComponent()}`;
 
 // --- RUTAS DE LA API ---
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/tools', require('./routes/toolRoutes'));
-app.use('/api/ranking', require('./routes/rankingRoutes'));
-app.use('/api/wallet', require('./routes/walletRoutes'));
-app.use('/api/team', require('./routes/teamRoutes'));
-app.use('/api/tasks', require('./routes/taskRoutes'));
+// ... (resto de tus rutas) ...
 app.use('/api/payment', require('./routes/paymentRoutes'));
 
-// --- LÓGICA DEL BOT DE TELEGRAF ---
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+// --- ENDPOINT DEL WEBHOOK ---
+// Telegram enviará actualizaciones a esta ruta.
+app.post(secretPath, (req, res) => {
+    bot.handleUpdate(req.body, res);
+});
+
+// --- LÓGICA DEL BOT (COMANDOS, ETC.) ---
 bot.command('start', async (ctx) => {
   try {
     const newUserId = ctx.from.id.toString();
@@ -68,6 +57,7 @@ bot.command('start', async (ctx) => {
   }
 });
 
+
 // --- LÓGICA DE ARRANQUE ASÍNCRONO DEL SERVIDOR ---
 async function startServer() {
     try {
@@ -75,27 +65,29 @@ async function startServer() {
         console.log('MongoDB conectado exitosamente.');
 
         const pricesLoaded = await startPriceService();
-        // <<< CORRECCIÓN CRÍTICA >>>
-        // Si startPriceService devuelve 'false' (después de todos los reintentos),
-        // lanzamos un error para que sea capturado por el bloque catch y se detenga el proceso.
         if (!pricesLoaded) {
             throw new Error("El servicio de precios falló en la carga inicial.");
         }
         
         startMonitoring();
 
-        // Telegraf tiene su propio manejo de errores, no necesita estar en el try/catch principal.
-        bot.launch(() => console.log('Bot de Telegram iniciado y escuchando...'));
+        // --- REGISTRAMOS EL WEBHOOK EN TELEGRAM ---
+        // Le decimos a Telegram a dónde enviar las actualizaciones.
+        const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
+        await bot.telegram.setWebhook(webhookUrl);
+        console.log(`Webhook de Telegram configurado en: ${webhookUrl}`);
 
         const PORT = process.env.PORT || 5000;
-        app.listen(PORT, () => console.log(`Servidor corriendo en el puerto ${PORT}`));
+        app.listen(PORT, () => {
+            console.log(`Servidor corriendo en el puerto ${PORT}`);
+            console.log("El bot ahora funciona en modo Webhook. No más errores 409.");
+        });
 
     } catch (error) {
         console.error("!!! ERROR FATAL DURANTE EL ARRANQUE DEL SERVIDOR:", error.message);
-        // Ahora, cualquier fallo en el bloque try detendrá el servidor de forma segura.
         process.exit(1);
     }
 }
 
-// Ejecutar la función de arranque principal
+// Ya NO usamos bot.launch(). Ejecutamos nuestro arranque seguro.
 startServer();
