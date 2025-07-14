@@ -5,6 +5,7 @@ const cors = require('cors');
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const PendingReferral = require('./models/pendingReferralModel');
+const adminRoutes = require('./routes/adminRoutes');
 
 // Importación de servicios y modelos
 const { startMonitoring } = require('./services/transactionMonitor'); 
@@ -31,6 +32,7 @@ app.use('/api/wallet', require('./routes/walletRoutes'));
 app.use('/api/team', require('./routes/teamRoutes'));
 app.use('/api/tasks', require('./routes/taskRoutes'));
 app.use('/api/payment', require('./routes/paymentRoutes'));
+app.use('/api/admin',  require('./routes/adminRoutes'));
 
 
 // --- ENDPOINT DEL WEBHOOK ---
