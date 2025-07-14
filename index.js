@@ -1,4 +1,4 @@
-// backend/index.js (COMPLETO Y FINAL)
+// backend/index.js (COMPLETO CON ARRANQUE ASÍNCRONO SEGURO)
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -6,7 +6,7 @@ require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const PendingReferral = require('./models/pendingReferralModel');
 
-// <<< Importar los servicios de segundo plano
+// Importar los servicios de segundo plano
 const { startMonitoring } = require('./services/transactionMonitor'); 
 const { startPriceService } = require('./services/priceService');
 
@@ -31,16 +31,6 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// --- CONEXIÓN A MONGODB E INICIO DE SERVICIOS ---
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => {
-    console.log('MongoDB conectado exitosamente.');
-    // Iniciar todos los servicios de segundo plano después de conectar a la DB
-    startPriceService();
-    startMonitoring();
-  })
-  .catch(err => console.error('Error de conexión a MongoDB:', err));
-
 // --- RUTAS DE LA API ---
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/tools', require('./routes/toolRoutes'));
@@ -49,6 +39,7 @@ app.use('/api/wallet', require('./routes/walletRoutes'));
 app.use('/api/team', require('./routes/teamRoutes'));
 app.use('/api/tasks', require('./routes/taskRoutes'));
 app.use('/api/payment', require('./routes/paymentRoutes'));
+
 
 // --- LÓGICA DEL BOT DE TELEGRAF ---
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
@@ -94,9 +85,37 @@ bot.command('start', async (ctx) => {
   }
 });
 
-bot.launch(() => {
-    console.log('Bot de Telegram iniciado y escuchando...');
-});
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Servidor corriendo en el puerto ${PORT}`));
+// --- LÓGICA DE ARRANQUE ASÍNCRONO DEL SERVIDOR ---
+async function startServer() {
+    try {
+        // 1. Conectar a MongoDB
+        await mongoose.connect(process.env.MONGO_URI);
+        console.log('MongoDB conectado exitosamente.');
+
+        // 2. Esperar a que la primera carga de precios sea exitosa
+        // startPriceService ahora devuelve una promesa que se resuelve a 'true' si tiene éxito.
+        const pricesLoaded = await startPriceService();
+        if (!pricesLoaded) {
+            console.error("El servidor no se iniciará porque el servicio de precios falló en la carga inicial.");
+            process.exit(1); // Detiene el proceso si los precios no se pueden cargar
+        }
+        
+        // 3. Iniciar el resto de los servicios de segundo plano que no bloquean el arranque
+        startMonitoring();
+
+        // 4. Iniciar el bot de Telegram
+        bot.launch(() => console.log('Bot de Telegram iniciado y escuchando...'));
+
+        // 5. Iniciar el servidor Express SOLO si todo lo anterior tuvo éxito
+        const PORT = process.env.PORT || 5000;
+        app.listen(PORT, () => console.log(`Servidor corriendo en el puerto ${PORT}`));
+
+    } catch (error) {
+        console.error("Error fatal durante el arranque del servidor:", error);
+        process.exit(1);
+    }
+}
+
+// Ejecutar la función de arranque principal
+startServer();
