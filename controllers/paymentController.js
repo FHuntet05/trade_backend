@@ -1,49 +1,10 @@
-// backend/controllers/paymentController.js
+// backend/controllers/paymentController.js (VERSIÓN FINAL LIMPIA)
 const { ethers } = require('ethers');
 const { TronWeb } = require('tronweb'); 
 const CryptoWallet = require('../models/cryptoWalletModel');
 
-// =================================================================================
-// --- PRUEBA FINAL Y DEFINITIVA ---
-// =================================================================================
-
-console.log("--- DIAGNÓSTICO FINAL: Verificando MASTER_SEED_PHRASE ---");
-
-const seedPhrase = process.env.MASTER_SEED_PHRASE;
-let hdNode;
-
-if (!seedPhrase || typeof seedPhrase !== 'string' || seedPhrase.split(' ').length < 12) {
-    // Si la semilla es inválida, no intentamos crear el nodo y lanzamos un error claro.
-    console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    console.error("!!! ERROR FATAL: MASTER_SEED_PHRASE es inválida o no está definida.");
-    console.error(`!!! Tipo recibido: ${typeof seedPhrase}`);
-    if (seedPhrase) {
-        console.error(`!!! Contenido parcial recibido: "${seedPhrase.substring(0, 10)}..."`);
-    }
-    console.error("!!! VERIFICA LA VARIABLE DE ENTORNO EN RENDER. LA APLICACIÓN NO PUEDE ARRANCAR.");
-    console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    // Forzamos el cierre del proceso para que el error sea visible y claro en los logs.
-    process.exit(1); 
-}
-
-try {
-    // Intentamos crear el nodo HD. Si esto falla, el catch lo capturará.
-    hdNode = ethers.utils.HDNode.fromMnemonic(seedPhrase);
-    console.log("[DIAGNÓSTICO] OK: El nodo HD (hdNode) se ha creado exitosamente desde la frase semilla.");
-} catch (e) {
-    console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    console.error("!!! ERROR FATAL: ethers.utils.HDNode.fromMnemonic() ha fallado.");
-    console.error("!!! Esto casi siempre significa que la frase semilla NO es un mnemónico válido (BIP39).");
-    console.error("!!! Error original:", e.message);
-    console.error("!!! Por favor, verifica que la frase semilla sea correcta y no contenga caracteres extraños.");
-    console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    process.exit(1);
-}
-
-// =================================================================================
-// --- FIN DE LA PRUEBA ---
-// =================================================================================
-
+// El nodo HD se crea exitosamente a partir de la variable de entorno.
+const hdNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
 
 const generateAddress = async (req, res) => {
   const { chain } = req.body;
