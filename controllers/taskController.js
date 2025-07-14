@@ -79,7 +79,7 @@ const claimTaskReward = async (req, res) => {
                 isCompleted = user.activeTools && user.activeTools.length > 0; 
                 break;
             case 'invitedTenFriends': 
-                isCompleted = user.referrals && user.referrals.length >= 10; 
+                isCompleted = user.referrals && user.referrals.length >= 3; 
                 break;
             case 'joinedTelegram': 
                 // --- CORRECCIÓN LÓGICA ---
@@ -109,7 +109,7 @@ const claimTaskReward = async (req, res) => {
         res.status(500).json({ message: 'Error del servidor al reclamar la tarea.' });
     }
 };
-
+//agregue 3 de miembros a la tarea de referidos
 // No olvides exportar la nueva función
 module.exports = {
   getTaskStatus,
