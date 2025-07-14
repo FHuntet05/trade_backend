@@ -1,4 +1,4 @@
-// backend/index.js (COMPLETO CON ARRANQUE ASÍNCRONO SEGURO)
+// backend/index.js (VERSIÓN FINAL CON ARRANQUE 100% ROBUSTO)
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -6,7 +6,6 @@ require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const PendingReferral = require('./models/pendingReferralModel');
 
-// Importar los servicios de segundo plano
 const { startMonitoring } = require('./services/transactionMonitor'); 
 const { startPriceService } = require('./services/priceService');
 
@@ -40,26 +39,14 @@ app.use('/api/team', require('./routes/teamRoutes'));
 app.use('/api/tasks', require('./routes/taskRoutes'));
 app.use('/api/payment', require('./routes/paymentRoutes'));
 
-
 // --- LÓGICA DEL BOT DE TELEGRAF ---
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-
 bot.command('start', async (ctx) => {
   try {
     const newUserId = ctx.from.id.toString();
-    let referrerId = null;
-
-    if (ctx.startPayload) {
-      referrerId = ctx.startPayload.trim();
-    } else {
-      const parts = ctx.message.text.split(' ');
-      if (parts.length > 1 && parts[1]) {
-        referrerId = parts[1].trim();
-      }
-    }
+    let referrerId = ctx.startPayload ? ctx.startPayload.trim() : (ctx.message.text.split(' ')[1] || null);
 
     if (referrerId && referrerId !== newUserId) {
-      console.log(`[Bot] Usuario ${newUserId} referido por ${referrerId}. Guardando pre-vinculación...`);
       await PendingReferral.updateOne(
         { newUserId: newUserId },
         { $set: { referrerId: referrerId, createdAt: new Date() } },
@@ -69,50 +56,43 @@ bot.command('start', async (ctx) => {
     
     const webAppUrl = process.env.FRONTEND_URL;
     ctx.reply(
-      '¡Bienvenido a NEURO LINK! Haz clic abajo para iniciar la aplicación y comenzar a minar.',
+      '¡Bienvenido a NEURO LINK! Haz clic abajo para iniciar la aplicación.',
       {
         reply_markup: {
-          inline_keyboard: [
-            [{ text: '🚀 Abrir App', web_app: { url: webAppUrl } }]
-          ]
+          inline_keyboard: [[{ text: '🚀 Abrir App', web_app: { url: webAppUrl } }]]
         }
       }
     );
-
   } catch (error) {
     console.error('[Bot] Error en el comando /start:', error);
-    ctx.reply('Ha ocurrido un error. Por favor, intenta de nuevo más tarde.');
   }
 });
-
 
 // --- LÓGICA DE ARRANQUE ASÍNCRONO DEL SERVIDOR ---
 async function startServer() {
     try {
-        // 1. Conectar a MongoDB
         await mongoose.connect(process.env.MONGO_URI);
         console.log('MongoDB conectado exitosamente.');
 
-        // 2. Esperar a que la primera carga de precios sea exitosa
-        // startPriceService ahora devuelve una promesa que se resuelve a 'true' si tiene éxito.
         const pricesLoaded = await startPriceService();
+        // <<< CORRECCIÓN CRÍTICA >>>
+        // Si startPriceService devuelve 'false' (después de todos los reintentos),
+        // lanzamos un error para que sea capturado por el bloque catch y se detenga el proceso.
         if (!pricesLoaded) {
-            console.error("El servidor no se iniciará porque el servicio de precios falló en la carga inicial.");
-            process.exit(1); // Detiene el proceso si los precios no se pueden cargar
+            throw new Error("El servicio de precios falló en la carga inicial.");
         }
         
-        // 3. Iniciar el resto de los servicios de segundo plano que no bloquean el arranque
         startMonitoring();
 
-        // 4. Iniciar el bot de Telegram
+        // Telegraf tiene su propio manejo de errores, no necesita estar en el try/catch principal.
         bot.launch(() => console.log('Bot de Telegram iniciado y escuchando...'));
 
-        // 5. Iniciar el servidor Express SOLO si todo lo anterior tuvo éxito
         const PORT = process.env.PORT || 5000;
         app.listen(PORT, () => console.log(`Servidor corriendo en el puerto ${PORT}`));
 
     } catch (error) {
-        console.error("Error fatal durante el arranque del servidor:", error);
+        console.error("!!! ERROR FATAL DURANTE EL ARRANQUE DEL SERVIDOR:", error.message);
+        // Ahora, cualquier fallo en el bloque try detendrá el servidor de forma segura.
         process.exit(1);
     }
 }
