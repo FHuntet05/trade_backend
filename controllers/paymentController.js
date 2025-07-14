@@ -1,11 +1,15 @@
-// backend/controllers/paymentController.js (VERSIÓN FINAL LIMPIA)
+// backend/controllers/paymentController.js
 const { ethers } = require('ethers');
 const { TronWeb } = require('tronweb'); 
 const CryptoWallet = require('../models/cryptoWalletModel');
+const { getPrice } = require('../services/priceService');
 
 // El nodo HD se crea exitosamente a partir de la variable de entorno.
 const hdNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
 
+/**
+ * Controlador para generar o recuperar una dirección de depósito para un usuario.
+ */
 const generateAddress = async (req, res) => {
   const { chain } = req.body;
   const userId = req.user.id;
@@ -57,6 +61,31 @@ const generateAddress = async (req, res) => {
   }
 };
 
+/**
+ * Devuelve los precios actuales de las criptomonedas soportadas desde la caché del priceService.
+ */
+const getPrices = (req, res) => {
+    try {
+        const prices = {
+            BNB: getPrice('BNB'),
+            TRX: getPrice('TRX'),
+            USDT: 1, // USDT siempre es 1
+        };
+
+        if (!prices.BNB || !prices.TRX) {
+            console.warn("[API] Solicitud de precios mientras el servicio aún no está listo.");
+            return res.status(503).json({ message: 'El servicio de precios no está disponible temporalmente. Intente de nuevo en un minuto.' });
+        }
+
+        res.status(200).json(prices);
+
+    } catch (error) {
+        console.error("Error al obtener los precios:", error);
+        res.status(500).json({ message: "Error interno al obtener los precios." });
+    }
+};
+
 module.exports = {
   generateAddress,
+  getPrices,
 };

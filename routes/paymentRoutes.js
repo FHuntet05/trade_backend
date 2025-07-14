@@ -1,8 +1,7 @@
 // backend/routes/paymentRoutes.js (VERSIÓN FINAL CON IMPORTACIÓN CORREGIDA)
 const express = require('express');
 const router = express.Router();
-
-const { generateAddress } = require('../controllers/paymentController');
+const { generateAddress, getPrices } = require('../controllers/paymentController');
 
 // --- LA CORRECCIÓN ESTÁ AQUÍ ---
 // Ya que authMiddleware.js exporta un objeto { authMiddleware: ... },
