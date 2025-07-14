@@ -4,50 +4,40 @@ const { TronWeb } = require('tronweb');
 const CryptoWallet = require('../models/cryptoWalletModel');
 
 // =================================================================================
-// --- INICIO DEL BLOQUE DE DEPURACIÓN ---
-// Vamos a imprimir la variable de entorno para ver qué está recibiendo Render.
 console.log("--- INICIANDO DEPURACIÓN EN paymentController ---");
-
 const seedPhrase = process.env.MASTER_SEED_PHRASE;
-
-// 1. Verificar si la frase semilla existe.
 if (!seedPhrase || seedPhrase.trim() === '') {
   console.error("!!! ERROR CRÍTICO: La variable de entorno MASTER_SEED_PHRASE está vacía o no definida.");
 } else {
-  // 2. Si existe, imprimir una versión ofuscada para confirmar que se está leyendo.
-  // Esto es seguro para los logs, ya que no revela la semilla completa.
   const words = seedPhrase.split(' ');
   const firstWord = words[0];
   const lastWord = words[words.length - 1];
   console.log(`[DEBUG] MASTER_SEED_PHRASE leída. Comienza con "${firstWord}", termina con "${lastWord}", y tiene ${words.length} palabras.`);
 }
-// --- FIN DEL BLOQUE DE DEPURACIÓN ---
 // =================================================================================
 
-// Se crea un nodo maestro a partir de la frase semilla secreta.
 const hdNode = ethers.utils.HDNode.fromMnemonic(seedPhrase);
-
-// Se deriva una clave privada específica para Tron desde nuestro nodo maestro.
-const tronMainPrivateKey = hdNode.derivePath(`m/44'/195'/0'/0/0`).privateKey;
+const tronMainPrivateKey_full = hdNode.derivePath(`m/44'/195'/0'/0/0`).privateKey;
 
 // =================================================================================
-// --- INICIO DEL SEGUNDO BLOQUE DE DEPURACIÓN ---
-// 3. Verificar la clave privada derivada para Tron antes de usarla.
+// <<< LA SOLUCIÓN DEFINITIVA ESTÁ AQUÍ >>>
+// El error "Invalid private key" ocurre porque ethers.js devuelve la clave con un prefijo "0x".
+// La librería tronweb requiere la clave privada sin este prefijo.
+// Vamos a eliminarlo explícitamente antes de pasarlo al constructor.
+const tronMainPrivateKey = tronMainPrivateKey_full.substring(2);
+
 console.log(`[DEBUG] ¿La clave privada de Tron (tronMainPrivateKey) es una cadena de texto? ${typeof tronMainPrivateKey === 'string'}`);
 if (typeof tronMainPrivateKey === 'string') {
-  console.log(`[DEBUG] Longitud de la clave privada de Tron: ${tronMainPrivateKey.length}`); // Debería ser 66 (0x + 64 caracteres hexadecimales)
-} else {
-  console.error("!!! ERROR: tronMainPrivateKey no se derivó correctamente. Probablemente hdNode es nulo.");
+  // Ahora la longitud esperada es 64, no 66.
+  console.log(`[DEBUG] Longitud de la clave privada de Tron (sin 0x): ${tronMainPrivateKey.length}`);
 }
 console.log("--- FIN DE LA DEPURACIÓN ---");
-// --- FIN DEL SEGUNDO BLOQUE DE DEPURACIÓN ---
 // =================================================================================
 
-// Se instancia TronWeb con la configuración necesaria.
 const tronWeb = new TronWeb({
     fullHost: 'https://api.trongrid.io',
     headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
-    privateKey: tronMainPrivateKey
+    privateKey: tronMainPrivateKey // Pasamos la clave ya limpia
 });
 
 const generateAddress = async (req, res) => {
@@ -74,6 +64,7 @@ const generateAddress = async (req, res) => {
       newAddress = derivedNode.address;
     } else if (chain === 'TRON') {
       const childNode = hdNode.derivePath(`m/44'/195'/0'/0/${newIndex}`);
+      // Aquí también nos aseguramos de quitar el prefijo "0x"
       const privateKeyWithoutPrefix = childNode.privateKey.substring(2);
       const accountAddress = await tronWeb.address.fromPrivateKey(privateKeyWithoutPrefix);
       newAddress = accountAddress;
