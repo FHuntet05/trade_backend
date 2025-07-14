@@ -1,4 +1,4 @@
-// backend/services/transactionMonitor.js
+// backend/services/transactionMonitor.js (VERSIÓN CON DEPURACIÓN AGRESIVA)
 const axios = require('axios');
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -11,34 +11,26 @@ const { getPrice } = require('./priceService');
 const USDT_CONTRACT_BSC = '0x55d398326f99059fF775485246999027B3197955';
 const USDT_CONTRACT_TRON = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 
-/**
- * Procesa un depósito confirmado: convierte a USDT, acredita al usuario,
- * guarda la transacción y notifica por Telegram.
- * @param {object} tx - El objeto de la transacción de la API del explorador.
- * @param {object} wallet - El documento de la wallet de nuestra base de datos.
- * @param {number} amount - La cantidad de la criptomoneda depositada.
- * @param {string} currency - El ticker de la criptomoneda (e.g., 'BNB', 'USDT', 'TRX').
- * @param {string} txid - El hash/ID único de la transacción.
- */
+// --- Función para procesar un depósito confirmado ---
 async function processDeposit(tx, wallet, amount, currency, txid) {
     const existingTx = await Transaction.findOne({ 'metadata.txid': txid });
     if (existingTx) {
-        return; // Ya procesada, salimos para evitar doble acreditación.
+        return;
     }
 
-    console.log(`[Monitor] Depósito detectado: ${amount} ${currency} para wallet ${wallet.address}`);
+    console.log(`[ProcessDeposit] Procesando nuevo depósito: ${amount} ${currency} para usuario ${wallet.user} (TXID: ${txid})`);
     
-    const price = getPrice(currency);
+    const price = await getPrice(currency);
     if (!price) {
-        console.error(`[Monitor] PRECIO NO ENCONTRADO para ${currency}. Saltando transacción ${txid}.`);
-        return; // No procesar si no tenemos un precio fiable.
+        console.error(`[ProcessDeposit] PRECIO NO ENCONTRADO para ${currency}. Saltando transacción ${txid}.`);
+        return;
     }
     const amountInUSDT = amount * price;
 
     const user = await User.findByIdAndUpdate(wallet.user, { $inc: { 'balance.usdt': amountInUSDT } }, { new: true });
     
     if (!user) {
-        console.error(`[Monitor] Usuario no encontrado para wallet ${wallet._id}. Abortando depósito.`);
+        console.error(`[ProcessDeposit] Usuario no encontrado para wallet ${wallet._id}. Abortando depósito.`);
         return;
     }
 
@@ -59,7 +51,7 @@ async function processDeposit(tx, wallet, amount, currency, txid) {
         }
     });
 
-    console.log(`[Monitor] ÉXITO: Usuario ${user.username} acreditado con ${amountInUSDT.toFixed(2)} USDT.`);
+    console.log(`[ProcessDeposit] ÉXITO: Usuario ${user.username} acreditado con ${amountInUSDT.toFixed(2)} USDT.`);
 
     if (user.telegramId) {
         const message = `✅ <b>¡Depósito confirmado!</b>\n\nSe han acreditado <b>${amountInUSDT.toFixed(2)} USDT</b> a tu saldo.\n\nGracias por confiar en NEURO LINK.`;
@@ -67,104 +59,95 @@ async function processDeposit(tx, wallet, amount, currency, txid) {
     }
 }
 
-/**
- * Escanea la Binance Smart Chain en busca de transacciones de BNB y USDT.
- */
+
+// --- Lógica de Monitoreo para BSC (BEP20) con DEPURACIÓN ---
 async function checkBscTransactions() {
+    console.log("[Monitor BSC] Iniciando ciclo de escaneo para BSC.");
     const wallets = await CryptoWallet.find({ chain: 'BSC' });
-    if (wallets.length === 0) return;
+    if (wallets.length === 0) {
+        return;
+    }
+    console.log(`[Monitor BSC] Encontradas ${wallets.length} wallets de BSC para monitorear.`);
 
     for (const wallet of wallets) {
+        console.log(`[Monitor BSC] Escaneando wallet: ${wallet.address}`);
         try {
-            // 1. Monitorear BNB (moneda nativa)
-            const bnbUrl = `https://api.bscscan.com/api?module=account&action=txlist&address=${wallet.address}&startblock=0&endblock=99999999&sort=asc&apikey=${process.env.BSCSCAN_API_KEY}`;
-            const bnbResponse = await axios.get(bnbUrl);
-            if (bnbResponse.data.status === '1') {
-                for (const tx of bnbResponse.data.result) {
-                    if (tx.to.toLowerCase() === wallet.address.toLowerCase() && tx.value !== "0") {
-                        const amount = parseFloat(ethers.utils.formatEther(tx.value));
-                        await processDeposit(tx, wallet, amount, 'BNB', tx.hash);
-                    }
-                }
-            }
-            
-            // 2. Monitorear USDT (token BEP20)
+            // --- DEPURACIÓN DE LA LLAMADA A LA API DE USDT ---
             const usdtUrl = `https://api.bscscan.com/api?module=account&action=tokentx&address=${wallet.address}&contractaddress=${USDT_CONTRACT_BSC}&startblock=0&endblock=99999999&sort=asc&apikey=${process.env.BSCSCAN_API_KEY}`;
+            console.log(`[Monitor BSC] URL de consulta para USDT: ${usdtUrl.replace(process.env.BSCSCAN_API_KEY, 'API_KEY_OCULTA')}`); // Ocultamos la API key en los logs
+            
             const usdtResponse = await axios.get(usdtUrl);
-            if (usdtResponse.data.status === '1') {
+            
+            console.log(`[Monitor BSC] Respuesta de BscScan para USDT (wallet ${wallet.address}):`, JSON.stringify(usdtResponse.data, null, 2));
+
+            if (usdtResponse.data.status === '1' && Array.isArray(usdtResponse.data.result) && usdtResponse.data.result.length > 0) {
+                console.log(`[Monitor BSC] ¡Transacciones de USDT encontradas para ${wallet.address}! Procesando ${usdtResponse.data.result.length} transacción(es).`);
                 for (const tx of usdtResponse.data.result) {
+                    console.log(`[Monitor BSC] -> Procesando TX de USDT: De ${tx.from} a ${tx.to}, Valor: ${tx.value}, Hash: ${tx.hash}`);
+                    
                     if (tx.to.toLowerCase() === wallet.address.toLowerCase()) {
+                        console.log(`[Monitor BSC] -> ¡Coincidencia encontrada! La TX es para nuestra wallet. Llamando a processDeposit.`);
                         const amount = parseFloat(ethers.utils.formatUnits(tx.value, tx.tokenDecimal));
                         await processDeposit(tx, wallet, amount, 'USDT', tx.hash);
                     }
                 }
             }
+            
+            // --- DEPURACIÓN DE LA LLAMADA A LA API DE BNB ---
+            const bnbUrl = `https://api.bscscan.com/api?module=account&action=txlist&address=${wallet.address}&startblock=0&endblock=99999999&sort=asc&apikey=${process.env.BSCSCAN_API_KEY}`;
+            const bnbResponse = await axios.get(bnbUrl);
+            if (bnbResponse.data.status === '1' && Array.isArray(bnbResponse.data.result)) {
+                for (const tx of bnbResponse.data.result) {
+                    if (tx.to.toLowerCase() === wallet.address.toLowerCase() && tx.value !== "0") {
+                        console.log(`[Monitor BSC] -> ¡Coincidencia de BNB encontrada! Llamando a processDeposit.`);
+                        const amount = parseFloat(ethers.utils.formatEther(tx.value));
+                        await processDeposit(tx, wallet, amount, 'BNB', tx.hash);
+                    }
+                }
+            }
+
         } catch (error) {
-            console.error(`[Monitor] Error monitoreando wallet BSC ${wallet.address}:`, error.message);
+            console.error(`[Monitor BSC] Error catastrófico monitoreando wallet ${wallet.address}:`, error.message);
         }
     }
 }
 
-/**
- * Escanea la red Tron en busca de transacciones de TRX y USDT.
- */
+// --- Lógica de Monitoreo para TRON (TRC20) ---
 async function checkTronTransactions() {
     const wallets = await CryptoWallet.find({ chain: 'TRON' });
     if (wallets.length === 0) return;
 
     for (const wallet of wallets) {
         try {
-            // La API V1 de TronGrid devuelve transacciones nativas y de tokens en el mismo endpoint.
-            const url = `https://api.trongrid.io/v1/accounts/${wallet.address}/transactions?limit=50&only_to=true`;
+            const url = `https://api.trongrid.io/v1/accounts/${wallet.address}/transactions/trc20?limit=50&contract_address=${USDT_CONTRACT_TRON}`;
             const response = await axios.get(url, { headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY } });
 
             if (response.data.success && response.data.data.length > 0) {
                 for (const tx of response.data.data) {
-                    if (!tx.raw_data.contract || tx.raw_data.contract.length === 0) continue;
-
-                    const contract = tx.raw_data.contract[0];
-                    const txid = tx.txID;
-
-                    // 1. Monitorear TRX (moneda nativa)
-                    if (contract.type === 'TransferContract') {
-                        const amount = contract.parameter.value.amount / 1_000_000; // TRX tiene 6 decimales (1 TRX = 1,000,000 SUN)
-                        await processDeposit({ ...contract.parameter.value, txid }, wallet, amount, 'TRX', txid);
-                    }
-                    
-                    // 2. Monitorear USDT (token TRC20)
-                    if (contract.type === 'TriggerSmartContract' && contract.parameter.value.contract_address === USDT_CONTRACT_TRON) {
-                        // El método para transferencias TRC20 (transfer) es a9059cbb...
-                        if (contract.parameter.value.data.startsWith('a9059cbb')) {
-                            // Extraemos el valor del campo 'data'. Está en formato hexadecimal.
-                            const valueHex = contract.parameter.value.data.substring(72);
-                            const amount = parseInt(valueHex, 16) / 1_000_000; // USDT en TRC20 tiene 6 decimales.
-                             await processDeposit({ ...contract.parameter.value, txid }, wallet, amount, 'USDT', txid);
-                        }
+                    if (tx.to.toLowerCase() === wallet.address.toLowerCase()) {
+                        const amount = parseFloat(ethers.utils.formatUnits(tx.value, tx.token_info.decimals));
+                        await processDeposit(tx, wallet, amount, 'USDT', tx.transaction_id);
                     }
                 }
             }
         } catch (error) {
-            console.error(`[Monitor] Error monitoreando wallet TRON ${wallet.address}:`, error.message);
+            console.error(`[Monitor TRON] Error monitoreando wallet ${wallet.address}:`, error.message);
         }
     }
 }
 
-/**
- * Inicia el servicio de monitoreo, ejecutando un ciclo de escaneo cada 60 segundos.
- */
+// --- Función principal que inicia el ciclo de monitoreo ---
 const startMonitoring = () => {
   console.log('✅ Iniciando servicio de monitoreo de transacciones COMPLETO...');
   
-  // Ejecutar una vez al inicio para no esperar el primer intervalo
-  checkBscTransactions();
-  checkTronTransactions();
-
-  // Establecer el intervalo de sondeo (polling) - 60 segundos
-  setInterval(async () => {
+  const runChecks = async () => {
     // console.log('🔄 Ejecutando ciclo de monitoreo COMPLETO...');
     await checkBscTransactions();
     await checkTronTransactions();
-  }, 60000); // 60,000 milisegundos = 1 minuto
+  };
+  
+  runChecks(); // Ejecutar una vez al inicio
+  setInterval(runChecks, 60000); // Luego cada 60 segundos
 };
 
 module.exports = { startMonitoring };
