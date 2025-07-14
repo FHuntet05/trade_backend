@@ -1,54 +1,80 @@
-// backend/services/priceService.js (VERSIÓN ROBUSTA CON REINTENTOS)
+// backend/services/priceService.js (VERSIÓN FINAL CON MONGODB)
 const axios = require('axios');
+const Price = require('../models/priceModel'); // <<< 1. Importar el nuevo modelo
 
 const COINGECKO_IDS = 'binancecoin,tron';
 const API_URL = `https://api.coingecko.com/api/v3/simple/price?ids=${COINGECKO_IDS}&vs_currencies=usd`;
-const priceCache = new Map();
 
-// Función auxiliar para esperar un tiempo
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * Obtiene los precios más recientes, con una lógica de reintentos.
- */
 const updatePrices = async (retries = 3) => {
     try {
-        console.log(`🔄 Actualizando precios... (Intentos restantes: ${retries})`);
+        console.log(`🔄 Actualizando precios desde CoinGecko... (Intentos restantes: ${retries})`);
         const response = await axios.get(API_URL);
         const prices = response.data;
+        
+        // <<< 2. Lógica para guardar en MongoDB
+        const operations = [];
+        if (prices.binancecoin?.usd) {
+            operations.push({
+                updateOne: {
+                    filter: { ticker: 'BNB' },
+                    update: { $set: { priceUsd: prices.binancecoin.usd } },
+                    upsert: true // Crea el documento si no existe
+                }
+            });
+        }
+        if (prices.tron?.usd) {
+            operations.push({
+                updateOne: {
+                    filter: { ticker: 'TRX' },
+                    update: { $set: { priceUsd: prices.tron.usd } },
+                    upsert: true
+                }
+            });
+        }
+        operations.push({
+            updateOne: {
+                filter: { ticker: 'USDT' },
+                update: { $set: { priceUsd: 1 } },
+                upsert: true
+            }
+        });
 
-        if (prices.binancecoin?.usd) priceCache.set('BNB', prices.binancecoin.usd);
-        if (prices.tron?.usd) priceCache.set('TRX', prices.tron.usd);
-        priceCache.set('USDT', 1);
+        // Ejecutamos todas las operaciones de una vez para ser más eficientes.
+        await Price.bulkWrite(operations);
+        console.log('✅ Precios guardados/actualizados en MongoDB.');
+        return true;
 
-        console.log('✅ Precios actualizados:', Array.from(priceCache.entries()));
-        return true; // Éxito
     } catch (error) {
         console.error(`❌ Error al actualizar precios: ${error.message}`);
         if (retries > 0) {
-            console.log('Esperando 2 segundos para reintentar...');
             await sleep(2000);
-            return updatePrices(retries - 1); // Llamada recursiva con un intento menos
+            return updatePrices(retries - 1);
         } else {
             console.error('!!! FALLO CRÍTICO: No se pudieron obtener los precios después de varios intentos.');
-            return false; // Fallo definitivo
+            // Verificamos si hay precios antiguos en la DB como fallback.
+            const oldPricesCount = await Price.countDocuments();
+            return oldPricesCount > 0; // Si hay precios viejos, el servidor puede arrancar.
         }
     }
 };
 
-/**
- * Inicia el servicio: hace una llamada inicial y luego establece el intervalo.
- * Devuelve la promesa de la primera actualización.
- */
 const startPriceService = () => {
-    // Establecer el intervalo de actualización para futuras ejecuciones (cada 12 horas)
     const TWELVE_HOURS_IN_MS = 12 * 60 * 60 * 1000;
     setInterval(updatePrices, TWELVE_HOURS_IN_MS);
-    
-    // Devolver la promesa de la primera ejecución para que el servidor pueda esperarla.
     return updatePrices();
 };
 
-const getPrice = (ticker) => priceCache.get(ticker);
+// <<< 3. La función getPrice ahora lee de la base de datos
+const getPrice = async (ticker) => {
+    try {
+        const priceDoc = await Price.findOne({ ticker: ticker.toUpperCase() });
+        return priceDoc ? priceDoc.priceUsd : undefined;
+    } catch (error) {
+        console.error(`Error al obtener precio para ${ticker} de la DB:`, error);
+        return undefined;
+    }
+};
 
 module.exports = { startPriceService, getPrice };

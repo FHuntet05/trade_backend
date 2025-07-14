@@ -1,7 +1,10 @@
-// backend/controllers/paymentController.js
+// backend/controllers/paymentController.js (VERSIÓN FINAL CON LÓGICA ASÍNCRONA PARA PRECIOS)
+
 const { ethers } = require('ethers');
 const { TronWeb } = require('tronweb'); 
 const CryptoWallet = require('../models/cryptoWalletModel');
+// Importamos la función getPrice de nuestro servicio de precios.
+// Ahora sabemos que esta función es asíncrona porque consulta la base de datos.
 const { getPrice } = require('../services/priceService');
 
 // El nodo HD se crea exitosamente a partir de la variable de entorno.
@@ -62,25 +65,33 @@ const generateAddress = async (req, res) => {
 };
 
 /**
- * Devuelve los precios actuales de las criptomonedas soportadas desde la caché del priceService.
+ * Devuelve los precios actuales de las criptomonedas soportadas.
+ * Esta función ahora es ASÍNCRONA porque 'getPrice' consulta la base de datos.
  */
-const getPrices = (req, res) => {
+const getPrices = async (req, res) => {
     try {
+        // Hacemos las llamadas a la base de datos en paralelo para mayor eficiencia.
+        const [bnbPrice, trxPrice] = await Promise.all([
+            getPrice('BNB'),
+            getPrice('TRX')
+        ]);
+
         const prices = {
-            BNB: getPrice('BNB'),
-            TRX: getPrice('TRX'),
+            BNB: bnbPrice,
+            TRX: trxPrice,
             USDT: 1, // USDT siempre es 1
         };
 
+        // Verificamos que los precios se hayan cargado desde la base de datos.
         if (!prices.BNB || !prices.TRX) {
-            console.warn("[API] Solicitud de precios mientras el servicio aún no está listo.");
+            console.warn("[API] Solicitud de precios mientras el servicio aún no los ha guardado en la DB.");
             return res.status(503).json({ message: 'El servicio de precios no está disponible temporalmente. Intente de nuevo en un minuto.' });
         }
 
         res.status(200).json(prices);
 
     } catch (error) {
-        console.error("Error al obtener los precios:", error);
+        console.error("Error al obtener los precios desde el controlador:", error);
         res.status(500).json({ message: "Error interno al obtener los precios." });
     }
 };
