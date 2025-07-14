@@ -1,6 +1,6 @@
 // backend/controllers/paymentController.js
 const { ethers } = require('ethers');
-const TronWeb = require('tronweb'); // <<< 1. Importar TronWeb
+const { default: TronWeb } = require('tronweb'); // <<< 1. Importar TronWeb
 const CryptoWallet = require('../models/cryptoWalletModel');
 
 // --- Configuración de Wallets ---
