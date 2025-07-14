@@ -1,14 +1,18 @@
-// backend/index.js (VERSIÓN FINAL CON LÓGICA DE BOT INTEGRADA)
+// backend/index.js (COMPLETO Y FINAL)
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 require('dotenv').config();
-const { Telegraf } = require('telegraf'); // <-- Importamos Telegraf
-const PendingReferral = require('./models/pendingReferralModel'); // <-- Importamos el nuevo modelo
+const { Telegraf } = require('telegraf');
+const PendingReferral = require('./models/pendingReferralModel');
+
+// <<< Importar los servicios de segundo plano
+const { startMonitoring } = require('./services/transactionMonitor'); 
+const { startPriceService } = require('./services/priceService');
 
 const app = express();
 
-// --- CONFIGURACIÓN DE CORS (sin cambios) ---
+// --- CONFIGURACIÓN DE CORS ---
 const whitelist = [
     'https://linker-frontend.onrender.com',
     'http://localhost:5173'
@@ -27,21 +31,26 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// --- CONEXIÓN A MONGODB (sin cambios) ---
+// --- CONEXIÓN A MONGODB E INICIO DE SERVICIOS ---
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('MongoDB conectado exitosamente.'))
+  .then(() => {
+    console.log('MongoDB conectado exitosamente.');
+    // Iniciar todos los servicios de segundo plano después de conectar a la DB
+    startPriceService();
+    startMonitoring();
+  })
   .catch(err => console.error('Error de conexión a MongoDB:', err));
 
-// --- RUTAS DE LA API (sin cambios) ---
+// --- RUTAS DE LA API ---
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/tools', require('./routes/toolRoutes'));
 app.use('/api/ranking', require('./routes/rankingRoutes'));
 app.use('/api/wallet', require('./routes/walletRoutes'));
 app.use('/api/team', require('./routes/teamRoutes'));
 app.use('/api/tasks', require('./routes/taskRoutes'));
+app.use('/api/payment', require('./routes/paymentRoutes'));
 
-
-// --- INICIO DE LA NUEVA LÓGICA DEL BOT DE TELEGRAF ---
+// --- LÓGICA DEL BOT DE TELEGRAF ---
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 bot.command('start', async (ctx) => {
@@ -49,7 +58,6 @@ bot.command('start', async (ctx) => {
     const newUserId = ctx.from.id.toString();
     let referrerId = null;
 
-    // 1. Extraemos el ID del referente del payload del comando /start
     if (ctx.startPayload) {
       referrerId = ctx.startPayload.trim();
     } else {
@@ -59,8 +67,7 @@ bot.command('start', async (ctx) => {
       }
     }
 
-    // 2. Si se encontró un ID de referente, lo guardamos en la DB
-    if (referrerId && referrerId !== newUserId) { // Un usuario no puede referirse a sí mismo
+    if (referrerId && referrerId !== newUserId) {
       console.log(`[Bot] Usuario ${newUserId} referido por ${referrerId}. Guardando pre-vinculación...`);
       await PendingReferral.updateOne(
         { newUserId: newUserId },
@@ -69,7 +76,6 @@ bot.command('start', async (ctx) => {
       );
     }
     
-    // 3. Enviamos un mensaje de bienvenida con el botón para abrir la Mini App
     const webAppUrl = process.env.FRONTEND_URL;
     ctx.reply(
       '¡Bienvenido a NEURO LINK! Haz clic abajo para iniciar la aplicación y comenzar a minar.',
@@ -88,12 +94,9 @@ bot.command('start', async (ctx) => {
   }
 });
 
-// Lanzamos el bot
 bot.launch(() => {
     console.log('Bot de Telegram iniciado y escuchando...');
 });
-// --- FIN DE LA NUEVA LÓGICA DEL BOT ---
-
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Servidor corriendo en el puerto ${PORT}`));
