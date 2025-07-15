@@ -1,12 +1,11 @@
-// backend/controllers/authController.js (CORRECCIÓN FINAL Y ROBUSTA)
+// backend/controllers/authController.js (VERSIÓN COMPLETA Y FINAL)
 const User = require('../models/userModel');
 const PendingReferral = require('../models/pendingReferralModel');
-const Setting = require('../models/settingsModel'); 
+const Setting = require('../models/settingsModel');
 const jwt = require('jsonwebtoken');
 const { validate, parse } = require('@telegram-apps/init-data-node');
 const speakeasy = require('speakeasy');
 
-// ... (generateToken no cambia)
 const generateToken = (id, role, username) => {
   const payload = { id, role, username };
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
@@ -18,7 +17,6 @@ const authTelegramUser = async (req, res) => {
     return res.status(400).json({ message: 'initData es requerido.' });
   }
   try {
-    // ... (la lógica de validación y creación de usuario no cambia)
     await validate(initData, process.env.TELEGRAM_BOT_TOKEN, { expiresIn: 3600 });
     const parsedData = parse(initData);
     const userData = parsedData.user;
@@ -29,7 +27,6 @@ const authTelegramUser = async (req, res) => {
     const username = userData.username || `user_${telegramId}`;
     let user = await User.findOne({ telegramId });
     if (!user) {
-      // ... (lógica de creación de referido no cambia)
       let referrer = null;
       let referrerTelegramId = startParam;
       const pendingReferral = await PendingReferral.findOne({ newUserId: telegramId });
@@ -56,10 +53,6 @@ const authTelegramUser = async (req, res) => {
       }
     }
     
-    // --- CORRECCIÓN CLAVE ---
-    // Usamos findOneAndUpdate con upsert:true. Esto GARANTIZA que siempre
-    // obtendremos un documento de settings, creándolo con los valores por defecto
-    // si no existe.
     const [userWithTools, settings] = await Promise.all([
       User.findById(user._id).populate('activeTools.tool'),
       Setting.findOneAndUpdate(
@@ -83,7 +76,6 @@ const authTelegramUser = async (req, res) => {
   }
 };
 
-// ... (el resto del archivo, incluyendo getUserProfile y loginAdmin, se beneficia del mismo patrón, así que lo aplicamos también)
 const getUserProfile = async (req, res) => {
   try {
     const [user, settings] = await Promise.all([
@@ -107,6 +99,41 @@ const getUserProfile = async (req, res) => {
     res.status(500).json({ message: 'Error del servidor' });
   }
 };
-// ... (loginAdmin no necesita settings, así que no se toca)
+
+// --- CORRECCIÓN CLAVE: La función que faltaba ha sido restaurada ---
+const loginAdmin = async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ message: 'Por favor, ingrese usuario y contraseña.' });
+  }
+  try {
+    const adminUser = await User.findOne({ username }).select('+password');
+    if (adminUser && adminUser.role === 'admin' && (await adminUser.matchPassword(password))) {
+      
+      if (adminUser.isTwoFactorEnabled) {
+        return res.json({
+          twoFactorRequired: true,
+          userId: adminUser._id,
+        });
+      }
+      
+      const sessionTokenPayload = { id: adminUser._id, role: adminUser.role, username: adminUser.username };
+      const sessionToken = jwt.sign(sessionTokenPayload, process.env.JWT_SECRET, { expiresIn: '8h' });
+      
+      res.json({
+        _id: adminUser._id,
+        username: adminUser.username,
+        role: adminUser.role,
+        isTwoFactorEnabled: adminUser.isTwoFactorEnabled,
+        token: sessionToken,
+      });
+
+    } else {
+      res.status(401).json({ message: 'Credenciales inválidas.' });
+    }
+  } catch (error) {
+    res.status(500).json({ message: 'Error del servidor' });
+  }
+};
 
 module.exports = { authTelegramUser, getUserProfile, loginAdmin };
