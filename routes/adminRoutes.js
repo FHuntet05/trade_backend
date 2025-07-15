@@ -1,13 +1,27 @@
-// backend/routes/adminRoutes.js
+// backend/routes/adminRoutes.js (COMPLETO Y PROTEGIDO)
 
 const express = require('express');
 const router = express.Router();
-const { loginAdmin } = require('../controllers/adminController.js');
+const { 
+  createManualTransaction, // <-- Importamos
+  getAdminTestData, 
+  getAllUsers, 
+  updateUser,
+  setUserStatus,
+  getDashboardStats,
+  getAllTransactions
+} = require('../controllers/adminController.js');
+const { protect, isAdmin } = require('../middleware/authMiddleware');
 
-// Ruta pública para el login de administradores
-router.post('/login', loginAdmin);
+router.get('/stats', protect, isAdmin, getDashboardStats);
+router.get('/users', protect, isAdmin, getAllUsers);
+router.put('/users/:id', protect, isAdmin, updateUser);
+router.put('/users/:id/status', protect, isAdmin, setUserStatus);
+router.get('/transactions', protect, isAdmin, getAllTransactions);
 
-// Aquí añadiremos el resto de rutas protegidas en el futuro
-// Ejemplo: router.get('/stats', isAdmin, getAdminStats);
+// Nueva ruta para transacciones manuales
+router.post('/transactions/manual', protect, isAdmin, createManualTransaction); // <-- NUEVA RUTA
+
+router.get('/test', protect, isAdmin, getAdminTestData);
 
 module.exports = router;

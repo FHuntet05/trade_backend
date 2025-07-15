@@ -1,9 +1,22 @@
-// --- START OF FILE backend/controllers/authController.js (CORREGIDO Y MEJORADO) ---
+// backend/controllers/authController.js (COMPLETO Y CONSOLIDADO)
 
 const User = require('../models/userModel');
 const PendingReferral = require('../models/pendingReferralModel');
 const jwt = require('jsonwebtoken');
 const { validate, parse } = require('@telegram-apps/init-data-node');
+
+// Función para generar un token JWT
+const generateToken = (id, role, username) => {
+  // Unificamos el payload del token para ser consistente
+  const payload = {
+    id: id,
+    role: role,
+    username: username
+  };
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    expiresIn: '7d', // Duración estándar, para admins será de 8h pero se define en su login
+  });
+};
 
 const authTelegramUser = async (req, res) => {
   const { initData, startParam } = req.body;
@@ -23,23 +36,10 @@ const authTelegramUser = async (req, res) => {
 
     const telegramId = userData.id.toString();
     const username = userData.username || `user_${telegramId}`;
-    const language = userData.languageCode || 'es';
-    const photoUrl = userData.photoUrl || null;
-    const firstName = userData.firstName || null;
-    const lastName = userData.lastName || null;
-
     let user = await User.findOne({ telegramId });
 
-    if (user) {
-      let needsUpdate = false;
-      if (user.username !== username) { user.username = username; needsUpdate = true; }
-      if (user.photoUrl !== photoUrl) { user.photoUrl = photoUrl; needsUpdate = true; }
-      if (user.firstName !== firstName) { user.firstName = firstName; needsUpdate = true; }
-      if (user.lastName !== lastName) { user.lastName = lastName; needsUpdate = true; }
-      if (needsUpdate) {
-        await user.save();
-      }
-    } else {
+    if (!user) {
+      // Lógica para crear nuevo usuario y manejar referidos (sin cambios)
       let referrer = null;
       let referrerTelegramId = startParam;
 
@@ -55,10 +55,8 @@ const authTelegramUser = async (req, res) => {
       const newUserFields = {
         telegramId,
         username,
-        language,
-        photoUrl,
-        firstName,
-        lastName,
+        language: userData.languageCode || 'es',
+        photoUrl: userData.photoUrl || null,
         referredBy: referrer ? referrer._id : null,
       };
 
@@ -74,40 +72,33 @@ const authTelegramUser = async (req, res) => {
       }
     }
     
-    // --- SOLUCIÓN CLAVE: CONSTRUCCIÓN DEL OBJETO DE USUARIO COMPLETO ---
-    
-    // 1. Populamos los datos de las herramientas activas
     const userWithTools = await User.findById(user._id).populate('activeTools.tool');
-    
-    // 2. Convertimos el documento de Mongoose a un objeto plano de JavaScript
     const userObject = userWithTools.toObject();
 
-    // 3. Añadimos manualmente el ID de Telegram del referente, si existe
-    // Buscamos al referente en la base de datos para obtener su telegramId
     if (userObject.referredBy) {
         const referrerData = await User.findById(userObject.referredBy).select('telegramId');
         if (referrerData) {
-            userObject.referrerId = referrerData.telegramId; // <<< ESTE ES EL CAMPO QUE EL FRONTEND ESPERA
+            userObject.referrerId = referrerData.telegramId;
         }
     }
     
-    const token = jwt.sign({ user: { id: userObject._id } }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    // El token ahora incluye el rol para mayor consistencia
+    const token = generateToken(userObject._id, userObject.role, userObject.username);
 
     res.json({
       token,
-      user: userObject, // <<< Enviamos el objeto de usuario completo y enriquecido
+      user: userObject,
     });
 
   } catch (error) {
-    console.error('Error en la autenticación:', error);
+    console.error('Error en la autenticación de Telegram:', error);
     res.status(401).json({ message: `Autenticación fallida: ${error.message}` });
   }
 };
 
 const getUserProfile = async (req, res) => {
   try {
-    // --- SOLUCIÓN CLAVE 2: ASEGURAR QUE EL PERFIL TAMBIÉN DEVUELVA LOS DATOS ---
-    const user = await User.findById(req.user.id).populate('activeTools.tool');
+    const user = await User.findById(req.user._id).populate('activeTools.tool');
     if (!user) {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
@@ -129,6 +120,47 @@ const getUserProfile = async (req, res) => {
   }
 };
 
-module.exports = { authTelegramUser, getUserProfile };
 
-// --- END OF FILE backend/controllers/authController.js ---
+/**
+ * @desc    Autenticar a un administrador y obtener un token
+ * @route   POST /api/auth/login/admin
+ * @access  Public
+ */
+const loginAdmin = async (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({ message: 'Por favor, ingrese usuario y contraseña.' });
+  }
+
+  try {
+    const adminUser = await User.findOne({ username }).select('+password');
+
+    if (adminUser && adminUser.role === 'admin' && (await adminUser.matchPassword(password))) {
+      const tokenPayload = {
+        id: adminUser._id,
+        role: adminUser.role,
+        username: adminUser.username
+      };
+      
+      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, {
+        expiresIn: '8h', // Token de admin con duración de una jornada laboral
+      });
+      
+      res.json({
+        _id: adminUser._id,
+        username: adminUser.username,
+        role: adminUser.role,
+        token: token,
+      });
+    } else {
+      res.status(401).json({ message: 'Credenciales inválidas.' });
+    }
+  } catch (error) {
+    console.error('Error en el login del administrador:', error);
+    res.status(500).json({ message: 'Error del servidor' });
+  }
+};
+
+
+module.exports = { authTelegramUser, getUserProfile, loginAdmin };

@@ -1,4 +1,4 @@
-// backend/models/transactionModel.js
+// backend/models/transactionModel.js (COMPLETO CON TIPOS DE TRANSACCIÓN DE ADMIN)
 
 const mongoose = require('mongoose');
 
@@ -12,30 +12,30 @@ const transactionSchema = new mongoose.Schema({
     type: String,
     required: true,
     enum: [
-      'deposit',          // Depósito vía CryptoCloud
-      'withdrawal',       // Solicitud de retiro
-      'purchase',         // Compra de herramienta (con saldo o cripto)
-      'swap_ntx_to_usdt', // Intercambio de NTX a USDT
-      'mining_claim',     // Reclamo de ganancias de minería
-      'referral_commission',// Comisión recibida por referido
-      'task_reward',      // Recompensa por completar una tarea
+      'deposit',
+      'withdrawal',
+      'purchase',
+      'swap_ntx_to_usdt',
+      'mining_claim',
+      'referral_commission',
+      'task_reward',
+      'admin_credit', // <-- NUEVO: Crédito manual por un admin
+      'admin_debit',  // <-- NUEVO: Débito manual por un admin
     ],
   },
   amount: {
     type: Number,
-    required: true, // Siempre un valor positivo
+    required: true,
   },
   currency: {
     type: String,
     required: true,
     enum: ['NTX', 'USDT'],
   },
-  // Descripción legible para el frontend
   description: {
     type: String,
     required: true,
   },
-  // Un campo flexible para guardar datos extra, como el ID de la herramienta comprada, o de qué referido vino la comisión.
   metadata: {
     type: Map,
     of: String,
