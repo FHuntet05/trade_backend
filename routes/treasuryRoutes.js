@@ -1,19 +1,18 @@
-// backend/routes/treasuryRoutes.js (VERSIÓN FINAL)
+// backend/routes/treasuryRoutes.js (VERSIÓN 100% CORREGIDA)
 const express = require('express');
 const router = express.Router();
 const { 
     getHotWalletBalances, 
     sweepWallet, 
-    getSweepableWallets // Nuestra nueva función
+    getSweepableWallets
 } = require('../controllers/treasuryController');
 
-const { protect, admin } = require('../middleware/authMiddleware');
+// Importación correcta con desestructuración y el nombre correcto de la función
+const { protect, isAdmin } = require('../middleware/authMiddleware');
 
-// Todas las rutas aquí están bajo /api/treasury
-// y son solo para administradores.
-
-router.route('/hot-balances').get(protect, admin, getHotWalletBalances);
-router.route('/sweep').post(protect, admin, sweepWallet);
-router.route('/sweepable-wallets').get(protect, admin, getSweepableWallets);
+// Usamos `isAdmin`, que es el nombre correcto de la función
+router.route('/hot-balances').get(protect, isAdmin, getHotWalletBalances);
+router.route('/sweep').post(protect, isAdmin, sweepWallet);
+router.route('/sweepable-wallets').get(protect, isAdmin, getSweepableWallets);
 
 module.exports = router;
