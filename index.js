@@ -1,13 +1,25 @@
-// backend/index.js (VERSIÓN DE DIAGNÓSTICO DE TELEGRAM)
+// backend/index.js (VERSIÓN FINAL Y ROBUSTA)
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 
-// --- SIMPLIFICAMOS: No cargaremos otros servicios por ahora ---
-// const { startMonitoring } = require('./services/transactionMonitor'); 
-// const { startPriceService } = require('./services/priceService');
+// --- CORRECCIÓN ARQUITECTÓNICA: Carga preventiva de modelos ---
+// Importamos todos los modelos aquí para registrarlos en Mongoose al inicio.
+// Esto previene errores de "Schema hasn't been registered".
+require('./models/userModel');
+require('./models/toolModel');
+require('./models/transactionModel');
+require('./models/settingsModel');
+require('./models/pendingReferralModel');
+require('./models/cryptoWalletModel');
+// -----------------------------------------------------------
+
+// Ahora podemos importar los servicios y controladores que los usan.
+const PendingReferral = require('./models/pendingReferralModel');
+const { startMonitoring } = require('./services/transactionMonitor');
+const { startPriceService } = require('./services/priceService');
 
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
@@ -15,32 +27,57 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 app.use(cors());
 app.use(express.json());
 
-// ... (las rutas de la API permanecen igual)
+// ... (las rutas de la API no cambian)
 app.use('/api/auth', require('./routes/authRoutes'));
-// ... etc.
+app.use('/api/tools', require('./routes/toolRoutes'));
+app.use('/api/ranking', require('./routes/rankingRoutes'));
+app.use('/api/wallet', require('./routes/walletRoutes'));
+app.use('/api/team', require('./routes/teamRoutes'));
+app.use('/api/tasks', require('./routes/taskRoutes'));
+app.use('/api/payment', require('./routes/paymentRoutes'));
+app.use('/api/admin', require('./routes/adminRoutes'));
 
 const secretPath = `/api/telegram-webhook/${bot.secretPathComponent()}`;
 app.post(secretPath, (req, res) => {
     bot.handleUpdate(req.body, res);
 });
 
-// --- COMANDO /START ULTRA-SIMPLIFICADO ---
+// --- RESTAURANDO LÓGICA COMPLETA DEL COMANDO /START ---
+const WELCOME_MESSAGE =
+  `*Bienvenido a NEURO LINK* 🚀\n\n` +
+  `¡Estás a punto de entrar a un nuevo ecosistema de minería digital!\n\n` +
+  `*¿Qué puedes hacer aquí?*\n` +
+  `🔹 *Minar:* Activa tu ciclo de minado diario para ganar tokens NTX\\.\n` +
+  `🔹 *Mejorar:* Adquiere herramientas para aumentar tu velocidad de minería\\.\n` +
+  `🔹 *Crecer:* Invita a tus amigos y gana comisiones por su actividad\\.\n\n` +
+  `Haz clic en el botón de abajo para lanzar la aplicación y empezar tu viaje\\.`;
+
 bot.command('start', async (ctx) => {
-    // ESTE LOG ES LA PRUEBA MÁS IMPORTANTE.
-    console.log(`✅ [DIAGNÓSTICO] ¡Comando /start recibido del usuario ${ctx.from.id}! El Webhook funciona.`);
-    
     try {
-        // Enviamos un mensaje de texto simple, sin formato, para evitar errores de parseo.
-        await ctx.reply(
-            '¡El bot está respondiendo! La conexión con Telegram es exitosa.',
+        const newUserId = ctx.from.id.toString();
+        const startPayload = ctx.startPayload ? ctx.startPayload.trim() : null;
+        if (startPayload && startPayload !== newUserId) {
+            await PendingReferral.updateOne({ newUserId: newUserId }, { $set: { referrerId: startPayload, createdAt: new Date() } }, { upsert: true });
+        }
+        
+        const safeMessage = WELCOME_MESSAGE
+            .replace(/\./g, '\\.')
+            .replace(/!/g, '\\!');
+
+        await ctx.replyWithMarkdownV2(
+            safeMessage,
             Markup.inlineKeyboard([
               [Markup.button.webApp('🚀 Abrir App', process.env.FRONTEND_URL)]
             ])
         );
     } catch (error) {
-        console.error('[Bot] Error al responder al comando /start:', error.message);
+        console.error('[Bot] Error en el comando /start:', error);
     }
 });
+
+bot.telegram.setMyCommands([
+    { command: 'start', description: 'Inicia o reinicia la aplicación' }
+]);
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -48,32 +85,31 @@ async function startServer() {
     try {
         await mongoose.connect(process.env.MONGO_URI);
         console.log('✅ Conexión a MongoDB exitosa.');
+        
+        await startPriceService();
+        startMonitoring();
 
         const PORT = process.env.PORT || 5000;
         app.listen(PORT, async () => {
             console.log(`🚀 Servidor Express corriendo en el puerto ${PORT}`);
 
             try {
-                console.log('⏳ Esperando 12 segundos para máxima estabilización...');
-                await sleep(12000); // Aumentamos a 12 segundos.
-
-                console.log('🔧 [DIAGNÓSTICO] Verificando token del bot...');
+                console.log('⏳ Esperando 10 segundos...');
+                await sleep(10000);
+                
                 const botInfo = await bot.telegram.getMe();
-                console.log(`✅ [DIAGNÓSTICO] Conectado como bot: ${botInfo.username}. El token es VÁLIDO.`);
+                console.log(`✅ Conectado como bot: ${botInfo.username}.`);
 
-                console.log('🔧 Limpiando configuración de webhook anterior...');
+                console.log('🔧 Limpiando webhook anterior...');
                 await bot.telegram.deleteWebhook({ drop_pending_updates: true });
 
                 const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
-                console.log('🔧 Intentando registrar el nuevo webhook en la URL:', webhookUrl);
+                console.log('🔧 Registrando nuevo webhook en:', webhookUrl);
                 await bot.telegram.setWebhook(webhookUrl);
 
-                console.log(`✅ Webhook de Telegram configurado.`);
+                console.log(`✅ Webhook configurado exitosamente.`);
             } catch (webhookError) {
                 console.error("‼️ ERROR CRÍTICO AL CONFIGURAR TELEGRAM:", webhookError.message);
-                if (webhookError.message.includes('token')) {
-                    console.error("-> ¡SOSPECHA! El error contiene la palabra 'token'. Revisa la variable TELEGRAM_BOT_TOKEN en Render.");
-                }
             }
         });
 
