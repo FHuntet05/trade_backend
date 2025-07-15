@@ -18,7 +18,7 @@ console.log('[DEBUG] Dependencias base cargadas.');
 // const taskRoutes = require('./routes/taskRoutes');
 // const paymentRoutes = require('./routes/paymentRoutes');
  const adminRoutes = require('./routes/adminRoutes');
-// const treasuryRoutes = require('./routes/treasuryRoutes');
+ const treasuryRoutes = require('./routes/treasuryRoutes');
 
 console.log('[DEBUG] Fase de importación de rutas omitida.');
 
@@ -45,7 +45,7 @@ app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 // app.use('/api/tasks', taskRoutes);
 // app.use('/api/payment', paymentRoutes);
 app.use('/api/admin', adminRoutes);
-// app.use('/api/treasury', treasuryRoutes);
+ app.use('/api/treasury', treasuryRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
