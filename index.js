@@ -10,7 +10,7 @@ require('dotenv').config();
 console.log('[DEBUG] Dependencias base cargadas.');
 
 // --- Importación de Rutas (TODAS DESHABILITADAS) ---
-// const authRoutes = require('./routes/authRoutes');
+ const authRoutes = require('./routes/authRoutes');
 // const toolRoutes = require('./routes/toolRoutes');
 // const rankingRoutes = require('./routes/rankingRoutes');
 // const walletRoutes = require('./routes/walletRoutes');
@@ -37,7 +37,7 @@ app.use(express.json());
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
 // --- Uso de Rutas (TODAS DESHABILITADAS) ---
-// app.use('/api/auth', authRoutes);
+ app.use('/api/auth', authRoutes);
 // app.use('/api/tools', toolRoutes);
 // app.use('/api/ranking', rankingRoutes);
 // app.use('/api/wallet', walletRoutes);
