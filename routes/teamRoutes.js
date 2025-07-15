@@ -2,10 +2,13 @@
 const express = require('express');
 const router = express.Router();
 const { getTeamStats, getLevelDetails } = require('../controllers/teamController');
-// --- LA CORRECCIÓN CLAVE ---
-const { authMiddleware } = require('../middleware/authMiddleware');
 
-router.use(authMiddleware);
+// --- CORRECCIÓN CLAVE ---
+// Importamos 'protect' directamente del objeto exportado por authMiddleware.
+const { protect } = require('../middleware/authMiddleware');
+
+// Aplicamos el middleware 'protect' a todas las rutas de este archivo.
+router.use(protect);
 
 router.get('/stats', getTeamStats);
 router.get('/level-details/:level', getLevelDetails);

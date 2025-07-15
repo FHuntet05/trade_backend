@@ -2,10 +2,13 @@
 const express = require('express');
 const router = express.Router();
 const { getTaskStatus, claimTaskReward } = require('../controllers/taskController');
-// --- LA CORRECCIÓN CLAVE ---
-const { authMiddleware } = require('../middleware/authMiddleware');
 
-router.use(authMiddleware);
+// --- CORRECCIÓN CLAVE ---
+// Importamos 'protect' correctamente.
+const { protect } = require('../middleware/authMiddleware');
+
+// Aplicamos el middleware 'protect' a todas las rutas de este archivo.
+router.use(protect);
 
 router.get('/status', getTaskStatus);
 router.post('/claim', claimTaskReward);

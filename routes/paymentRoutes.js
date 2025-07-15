@@ -1,23 +1,15 @@
-// backend/routes/paymentRoutes.js (VERSIÓN FINAL Y COMPLETA)
+// backend/routes/paymentRoutes.js (CORREGIDO)
 const express = require('express');
 const router = express.Router();
 
-// Importamos los controladores.
 const { generateAddress, getPrices } = require('../controllers/paymentController');
 
-// Importamos el middleware de autenticación.
-const { authMiddleware } = require('../middleware/authMiddleware');
+// --- CORRECCIÓN CLAVE ---
+// Importamos 'protect' en lugar de la variable inexistente 'authMiddleware'.
+const { protect } = require('../middleware/authMiddleware');
 
-// @route   POST /api/payment/generate-address
-// @desc    Genera o recupera una dirección de depósito.
-// @access  Private
-router.post('/generate-address', authMiddleware, generateAddress);
-
-
-// @route   GET /api/payment/prices
-// @desc    Obtiene los precios actuales de las criptomonedas.
-// @access  Private
-router.get('/prices', authMiddleware, getPrices);
-
+// Usamos 'protect' para asegurar las rutas.
+router.post('/generate-address', protect, generateAddress);
+router.get('/prices', protect, getPrices);
 
 module.exports = router;
