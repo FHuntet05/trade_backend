@@ -1,3 +1,4 @@
+// backend/controllers/adminController.js (VERSIÓN FINAL CON TODAS LAS EXPORTACIONES CORREGIDAS)
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const Tool = require('../models/toolModel');
@@ -6,7 +7,6 @@ const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 
-// --- LÓGICA DE RETIROS MEJORADA CON PAGINACIÓN ---
 const getPendingWithdrawals = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -32,78 +32,34 @@ const getPendingWithdrawals = async (req, res) => {
   }
 };
 
-// --- NUEVA FUNCIÓN PARA OBTENER REFERIDOS ---
-const getUserReferrals = async (req, res) => {
-    try {
-        const userId = req.params.id;
-        const user = await User.findById(userId)
-            .populate({
-                path: 'referrals.user',
-                select: 'username fullName photoUrl createdAt balance', // Seleccionamos los campos que queremos mostrar
-            });
-
-        if (!user) {
-            return res.status(404).json({ message: "Usuario no encontrado." });
-        }
-
-        // Estructuramos los datos para el frontend
-        const referralsData = user.referrals.map(ref => ({
-            _id: ref.user._id,
-            username: ref.user.username,
-            fullName: ref.user.fullName,
-            photoUrl: ref.user.photoUrl,
-            joinDate: ref.user.createdAt,
-            totalDeposit: ref.user.balance.usdt, // Asumimos que el balance USDT refleja depósitos
-            level: ref.level
-        }));
-
-        res.json({
-            totalReferrals: referralsData.length,
-            referrals: referralsData,
-        });
-
-    } catch (error) {
-        console.error("Error en getUserReferrals:", error);
-        res.status(500).json({ message: "Error del servidor al obtener los referidos." });
-    }
-};
-
 const processWithdrawal = async (req, res) => {
-  // TODO: Implementar la lógica para aprobar o rechazar un retiro.
-  // Por ahora, devolvemos un mensaje de éxito placeholder.
   const { id } = req.params;
-  const { status, transactionHash } = req.body; // status puede ser 'completed' o 'rejected'
-  
+  const { status, transactionHash, adminNotes } = req.body;
   if (!['completed', 'rejected'].includes(status)) {
     return res.status(400).json({ message: "El estado debe ser 'completed' o 'rejected'." });
   }
-  
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
     const withdrawal = await Transaction.findById(id).session(session);
-
     if (!withdrawal || withdrawal.type !== 'withdrawal' || withdrawal.status !== 'pending') {
       throw new Error('Retiro no encontrado o ya ha sido procesado.');
     }
-
     withdrawal.status = status;
+    withdrawal.metadata.set('adminNotes', adminNotes || 'N/A');
     if (status === 'completed') {
-      withdrawal.metadata.transactionHash = transactionHash || 'N/A';
+      withdrawal.metadata.set('transactionHash', transactionHash || 'N/A');
       withdrawal.description = `Retiro completado.`;
-    } else { // status === 'rejected'
+    } else {
       const user = await User.findById(withdrawal.user).session(session);
       if (!user) throw new Error('Usuario del retiro no encontrado.');
-      // Devolver los fondos al usuario
       user.balance.usdt += withdrawal.amount;
       await user.save({ session });
       withdrawal.description = `Retiro rechazado. Fondos devueltos al usuario.`;
     }
-
     const updatedWithdrawal = await withdrawal.save({ session });
     await session.commitTransaction();
     res.json({ message: `Retiro ${status}.`, withdrawal: updatedWithdrawal });
-
   } catch (error) {
     await session.abortTransaction();
     console.error("Error en processWithdrawal:", error);
@@ -111,6 +67,30 @@ const processWithdrawal = async (req, res) => {
   } finally {
     session.endSession();
   }
+};
+
+const getUserReferrals = async (req, res) => {
+    try {
+        const userId = req.params.id;
+        const user = await User.findById(userId).populate({
+            path: 'referrals.user',
+            select: 'username fullName photoUrl createdAt balance',
+        });
+        if (!user) return res.status(404).json({ message: "Usuario no encontrado." });
+        const referralsData = user.referrals.map(ref => ({
+            _id: ref.user?._id,
+            username: ref.user?.username,
+            fullName: ref.user?.fullName,
+            photoUrl: ref.user?.photoUrl,
+            joinDate: ref.user?.createdAt,
+            totalDeposit: ref.user?.balance.usdt,
+            level: ref.level
+        })).filter(ref => ref._id); // Filtra por si un usuario referido fue eliminado
+        res.json({ totalReferrals: referralsData.length, referrals: referralsData });
+    } catch (error) {
+        console.error("Error en getUserReferrals:", error);
+        res.status(500).json({ message: "Error del servidor al obtener los referidos." });
+    }
 };
 
 // --- EL RESTO DEL CÓDIGO PERMANECE IGUAL ---
@@ -350,5 +330,5 @@ module.exports = {
   getAdminTestData, getAllUsers, updateUser, setUserStatus, getDashboardStats,
   getAllTransactions, createManualTransaction, getAllTools, createTool, updateTool, deleteTool,
   getUserDetails, getSettings, updateSettings, generateTwoFactorSecret, verifyAndEnableTwoFactor,
-  getPendingWithdrawals, processWithdrawal // <-- AÑADIDAS AQUÍ
+  getPendingWithdrawals, processWithdrawal,getUserReferrals // <-- AÑADIDAS AQUÍ
 };
