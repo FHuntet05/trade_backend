@@ -41,7 +41,7 @@ app.use('/api/team', require('./routes/teamRoutes'));
 app.use('/api/tasks', require('./routes/taskRoutes'));
 app.use('/api/payment', require('./routes/paymentRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
-app.use('/api/treasury',require('./routes/treasuryRoute'));
+app.use('/api/treasury',require('./routes/treasuryRoutes'));
 const secretPath = `/api/telegram-webhook/${bot.secretPathComponent()}`;
 app.post(secretPath, (req, res) => {
     bot.handleUpdate(req.body, res);
