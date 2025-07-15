@@ -1,27 +1,53 @@
-// backend/routes/adminRoutes.js (COMPLETO Y PROTEGIDO)
+// backend/routes/adminRoutes.js (VERSIÓN DE PRODUCCIÓN - COMPLETA Y FINAL)
 
 const express = require('express');
 const router = express.Router();
-const { 
-  createManualTransaction, // <-- Importamos
-  getAdminTestData, 
-  getAllUsers, 
-  updateUser,
-  setUserStatus,
-  getDashboardStats,
-  getAllTransactions
-} = require('../controllers/adminController.js');
+
+// Importación de controladores
+const adminController = require('../controllers/adminController.js');
+const treasuryController = require('../controllers/treasuryController.js');
+
+// Importación de middleware de seguridad
 const { protect, isAdmin } = require('../middleware/authMiddleware');
 
-router.get('/stats', protect, isAdmin, getDashboardStats);
-router.get('/users', protect, isAdmin, getAllUsers);
-router.put('/users/:id', protect, isAdmin, updateUser);
-router.put('/users/:id/status', protect, isAdmin, setUserStatus);
-router.get('/transactions', protect, isAdmin, getAllTransactions);
+// --- Rutas de Dashboard y Estadísticas ---
+router.get('/stats', protect, isAdmin, adminController.getDashboardStats);
+router.get('/test', protect, isAdmin, adminController.getAdminTestData);
 
-// Nueva ruta para transacciones manuales
-router.post('/transactions/manual', protect, isAdmin, createManualTransaction); // <-- NUEVA RUTA
+// --- Rutas de Configuración Global ---
+router.route('/settings')
+  .get(protect, isAdmin, adminController.getSettings)
+  .put(protect, isAdmin, adminController.updateSettings);
 
-router.get('/test', protect, isAdmin, getAdminTestData);
+// --- Rutas de Gestión de Usuarios ---
+router.get('/users', protect, isAdmin, adminController.getAllUsers);
+router.get('/users/:id/details', protect, isAdmin, adminController.getUserDetails);
+router.put('/users/:id', protect, isAdmin, adminController.updateUser);
+router.put('/users/:id/status', protect, isAdmin, adminController.setUserStatus);
+
+// --- Rutas de Gestión de Transacciones ---
+router.get('/transactions', protect, isAdmin, adminController.getAllTransactions);
+router.post('/transactions/manual', protect, isAdmin, adminController.createManualTransaction);
+
+// --- Rutas de Gestión de Retiros ---
+router.get('/withdrawals', protect, isAdmin, adminController.getPendingWithdrawals);
+router.put('/withdrawals/:id', protect, isAdmin, adminController.processWithdrawal);
+
+// --- Rutas de Gestión de Herramientas ---
+router.route('/tools')
+  .get(protect, isAdmin, adminController.getAllTools)
+  .post(protect, isAdmin, adminController.createTool);
+router.route('/tools/:id')
+  .put(protect, isAdmin, adminController.updateTool)
+  .delete(protect, isAdmin, adminController.deleteTool);
+
+// --- Rutas de Configuración de 2FA ---
+router.post('/2fa/generate', protect, isAdmin, adminController.generateTwoFactorSecret);
+router.post('/2fa/verify', protect, isAdmin, adminController.verifyAndEnableTwoFactor);
+
+// --- Rutas de Tesorería (Sweeping) ---
+router.get('/treasury/balances', protect, isAdmin, treasuryController.getHotWalletBalances);
+router.post('/treasury/sweep', protect, isAdmin, treasuryController.sweepWallet);
+
 
 module.exports = router;

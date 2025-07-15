@@ -1,11 +1,13 @@
-// backend/controllers/walletController.js
+// backend/controllers/walletController.js (VERSIÓN DE PRODUCCIÓN - LIMPIA Y COMPLETA)
+
 const axios = require('axios');
 const crypto = require('crypto');
 const https = require('https-proxy-agent');
+const mongoose = require('mongoose');
 const User = require('../models/userModel');
 const Tool = require('../models/toolModel');
-const WithdrawalRequest = require('../models/withdrawalRequestModel');
 const Transaction = require('../models/transactionModel');
+const Setting = require('../models/settingsModel');
 const { createTransaction } = require('../utils/transactionLogger');
 const { distributeCommissions } = require('../services/commissionService');
 
@@ -97,38 +99,29 @@ const createDepositInvoice = async (req, res) => {
 const purchaseWithBalance = async (req, res) => {
   const { toolId, quantity } = req.body;
   const userId = req.user.id;
-
   if (!toolId || !quantity || quantity <= 0) {
     return res.status(400).json({ message: 'Datos de compra inválidos.' });
   }
-
   try {
     const tool = await Tool.findById(toolId);
     if (!tool) return res.status(404).json({ message: 'La herramienta no existe.' });
-
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
-
     const totalCost = tool.price * quantity;
     if (user.balance.usdt < totalCost) {
       return res.status(400).json({ message: 'Saldo USDT insuficiente.' });
     }
-
     const now = new Date();
     user.balance.usdt -= totalCost;
     const expiryDate = new Date(now.getTime() + tool.durationDays * 24 * 60 * 60 * 1000);
-
     for (let i = 0; i < quantity; i++) {
       user.activeTools.push({ tool: tool._id, purchaseDate: now, expiryDate: expiryDate });
     }
-    
     await user.save();
     await createTransaction(userId, 'purchase', totalCost, 'USDT', `Compra de ${quantity}x ${tool.name}`);
     await distributeCommissions(user, totalCost);
-
     const finalUpdatedUser = await User.findById(userId).populate('activeTools.tool');
     res.status(200).json({ message: `¡Compra de ${quantity}x ${tool.name} exitosa!`, user: finalUpdatedUser.toObject() });
-
   } catch (error) {
     console.error('Error en purchaseWithBalance:', error);
     res.status(500).json({ message: 'Error al procesar la compra.' });
@@ -139,37 +132,29 @@ const cryptoCloudWebhook = async (req, res) => {
   const signature = req.headers['crypto-cloud-signature'];
   const payload = req.body;
   if (!signature) return res.status(400).send('Signature header missing');
-
   try {
     const sign = crypto.createHmac('sha256', SECRET_KEY).update(JSON.stringify(payload)).digest('hex');
     if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(sign))) {
       return res.status(400).send('Invalid signature');
     }
-
     if (payload.status === 'paid') {
       const order_id = payload.order_id;
       const amountPaid = parseFloat(payload.amount_usdt);
-
       if (order_id.startsWith('purchase_')) {
         const [, userId, toolId, quantityStr] = order_id.split('_');
         const quantity = parseInt(quantityStr, 10);
-        
         const user = await User.findById(userId);
         const tool = await Tool.findById(toolId);
-
         if (user && tool) {
           const now = new Date();
           const expiryDate = new Date(now.getTime() + tool.durationDays * 24 * 60 * 60 * 1000);
-          
           for (let i = 0; i < quantity; i++) {
             user.activeTools.push({ tool: tool._id, purchaseDate: now, expiryDate: expiryDate });
           }
-          
           await user.save();
           await createTransaction(userId, 'purchase', amountPaid, 'USDT', `Compra de ${quantity}x ${tool.name} (Crypto)`);
           await distributeCommissions(user, amountPaid);
         }
-
       } else if (order_id.startsWith('deposit_')) {
         const [, userId] = order_id.split('_');
         await User.findByIdAndUpdate(userId, { $inc: { 'balance.usdt': amountPaid } });
@@ -188,31 +173,23 @@ const MINING_CYCLE_DURATION_MS = 24 * 60 * 60 * 1000;
 const claim = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
-    if (!user) {
-      return res.status(404).json({ message: 'Usuario no encontrado.' });
-    }
-
+    if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
     const now = new Date();
     const lastClaim = new Date(user.lastMiningClaim);
     const timePassed = now.getTime() - lastClaim.getTime();
-
     if (timePassed < MINING_CYCLE_DURATION_MS) {
       return res.status(400).json({ message: 'El ciclo de minado de 24 horas aún no ha terminado.' });
     }
-    
     const earnedNtx = user.effectiveMiningRate;
     user.balance.ntx += earnedNtx;
     user.miningStatus = 'IDLE';
     await user.save();
-    
     await createTransaction(req.user.id, 'mining_claim', earnedNtx, 'NTX', 'Reclamo de ciclo de minería');
-    
     const updatedUser = await User.findById(req.user.id).populate('activeTools.tool');
     res.json({
       message: `¡Has reclamado ${earnedNtx.toFixed(2)} NTX!`,
       user: updatedUser.toObject(),
     });
-
   } catch (error) {
     console.error("Error al reclamar las ganancias:", error);
     res.status(500).json({ message: "Error del servidor al procesar el reclamo." });
@@ -223,49 +200,89 @@ const swapNtxToUsdt = async (req, res) => {
   const { ntxAmount } = req.body;
   const userId = req.user.id;
   const SWAP_RATE = 10000;
-  // --- CAMBIO APLICADO ---
-  const MINIMUM_NTX_SWAP = 10000;
-  if (!ntxAmount || typeof ntxAmount !== 'number' || ntxAmount < MINIMUM_NTX_SWAP) {
-      return res.status(400).json({ message: `La cantidad mínima para intercambiar es ${MINIMUM_NTX_SWAP.toLocaleString()} NTX.` });
-  }
+  const session = await mongoose.startSession();
   try {
-    const user = await User.findById(userId);
-    if (!user || user.balance.ntx < ntxAmount) return res.status(400).json({ message: 'Saldo NTX insuficiente.' });
-    const usdtToReceive = ntxAmount / SWAP_RATE;
-    user.balance.ntx -= ntxAmount;
+    session.startTransaction();
+    const settings = await Setting.findOne({ singleton: 'global_settings' }).session(session);
+    if (!settings) throw new Error('La configuración del sistema no está disponible.');
+    const numericNtxAmount = parseFloat(ntxAmount);
+    if (!numericNtxAmount || numericNtxAmount < settings.minimumSwap) {
+      return res.status(400).json({ message: `La cantidad mínima para intercambiar es ${settings.minimumSwap.toLocaleString()} NTX.` });
+    }
+    const user = await User.findById(userId).session(session);
+    if (!user || user.balance.ntx < numericNtxAmount) {
+      return res.status(400).json({ message: 'Saldo NTX insuficiente.' });
+    }
+    const feeAmount = numericNtxAmount * (settings.swapFeePercent / 100);
+    const amountAfterFee = numericNtxAmount - feeAmount;
+    const usdtToReceive = amountAfterFee / SWAP_RATE;
+    user.balance.ntx -= numericNtxAmount;
     user.balance.usdt += usdtToReceive;
-    await user.save();
-    await createTransaction(userId, 'swap_ntx_to_usdt', ntxAmount, 'NTX', `Intercambio a ${usdtToReceive.toFixed(2)} USDT`);
+    await createTransaction(userId, 'swap_ntx_to_usdt', numericNtxAmount, 'NTX', `Intercambio a ${usdtToReceive.toFixed(4)} USDT`, session);
+    await user.save({ session });
+    await session.commitTransaction();
     const updatedUser = await User.findById(userId).populate('activeTools.tool');
     res.status(200).json({ message: `¡Intercambio exitoso!`, user: updatedUser.toObject() });
   } catch (error) {
+    await session.abortTransaction();
     console.error('Error en swapNtxToUsdt:', error);
-    res.status(500).json({ message: 'Error interno al procesar el intercambio.' });
+    res.status(500).json({ message: error.message || 'Error interno al procesar el intercambio.' });
+  } finally {
+    session.endSession();
   }
 };
 
 const requestWithdrawal = async (req, res) => {
-  const { amount, network, walletAddress } = req.body;
+  const { amount, walletAddress } = req.body;
   const userId = req.user.id;
-  // --- CAMBIO VERIFICADO (YA ESTABA EN 1.0) ---
-  const MINIMUM_WITHDRAWAL = 1.0;
-  if (!amount || typeof amount !== 'number' || amount < MINIMUM_WITHDRAWAL) {
-      return res.status(400).json({ message: `El retiro mínimo es ${MINIMUM_WITHDRAWAL} USDT.` });
-  }
-  if (!network || !walletAddress) return res.status(400).json({ message: 'La red y la dirección de billetera son requeridas.' });
+  const session = await mongoose.startSession();
   try {
-    const user = await User.findById(userId);
-    if (!user || user.balance.usdt < amount) return res.status(400).json({ message: 'Saldo USDT insuficiente.' });
-    user.balance.usdt -= amount;
-    await user.save();
-    await createTransaction(userId, 'withdrawal', amount, 'USDT', `Solicitud de retiro a ${walletAddress} (${network})`);
-    const newRequest = new WithdrawalRequest({ user: userId, amount, network, walletAddress, status: 'pending' });
-    await newRequest.save();
+    session.startTransaction();
+    const settings = await Setting.findOne({ singleton: 'global_settings' }).session(session);
+    if (!settings) throw new Error('La configuración del sistema no está disponible.');
+    const numericAmount = parseFloat(amount);
+    if (!numericAmount || numericAmount < settings.minimumWithdrawal) {
+      return res.status(400).json({ message: `El retiro mínimo es ${settings.minimumWithdrawal} USDT.` });
+    }
+    if (!walletAddress) {
+      return res.status(400).json({ message: 'La dirección de billetera es requerida.' });
+    }
+    const user = await User.findById(userId).session(session);
+    if (!user || user.balance.usdt < numericAmount) {
+      return res.status(400).json({ message: 'Saldo USDT insuficiente.' });
+    }
+    const feeAmount = numericAmount * (settings.withdrawalFeePercent / 100);
+    const netAmount = numericAmount - feeAmount;
+    user.balance.usdt -= numericAmount;
+    await user.save({ session });
+    const withdrawalTransaction = new Transaction({
+      user: userId,
+      type: 'withdrawal',
+      status: 'pending',
+      amount: numericAmount,
+      currency: 'USDT',
+      description: `Solicitud de retiro a ${walletAddress}`,
+      metadata: {
+        walletAddress,
+        network: 'USDT-BEP20',
+        feePercent: settings.withdrawalFeePercent.toString(),
+        feeAmount: feeAmount.toFixed(4),
+        netAmount: netAmount.toFixed(4),
+      }
+    });
+    await withdrawalTransaction.save({ session });
+    await session.commitTransaction();
     const updatedUser = await User.findById(userId).populate('activeTools.tool');
-    res.status(201).json({ message: 'Tu solicitud de retiro ha sido enviada con éxito.', user: updatedUser.toObject() });
+    res.status(201).json({ 
+      message: 'Tu solicitud de retiro ha sido enviada con éxito y está pendiente de revisión.', 
+      user: updatedUser.toObject() 
+    });
   } catch (error) {
+    await session.abortTransaction();
     console.error('Error en requestWithdrawal:', error);
-    res.status(500).json({ message: 'Error interno al procesar la solicitud.' });
+    res.status(500).json({ message: error.message || 'Error interno al procesar la solicitud.' });
+  } finally {
+    session.endSession();
   }
 };
 

@@ -1,30 +1,28 @@
-// backend/index.js (VERSIÓN FINAL, PACIENTE Y TOLERANTE A FALLOS)
+// backend/index.js (VERSIÓN DE PRODUCCIÓN - REFINADA Y COMENTADA)
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 require('dotenv').config();
-const { Telegraf } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf');
 const PendingReferral = require('./models/pendingReferralModel');
-const adminRoutes = require('./routes/adminRoutes');
 
 // Importación de servicios y modelos
 const { startMonitoring } = require('./services/transactionMonitor'); 
 const { startPriceService } = require('./services/priceService');
-const Price = require('./models/priceModel'); // Importamos el modelo para verificar precios antiguos
+const Price = require('./models/priceModel');
 
 const app = express();
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// --- CONFIGURACIÓN DE MIDDLEWARE ---
+// --- 1. CONFIGURACIÓN DE MIDDLEWARE ---
+// Permite solicitudes de diferentes orígenes (nuestro frontend)
 app.use(cors());
+// Permite al servidor entender y procesar JSON en los bodies de las peticiones
 app.use(express.json());
 
-// --- CONFIGURACIÓN DE TELEGRAF PARA WEBHOOKS ---
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-// Generamos una ruta secreta y única para el webhook para añadir una capa de seguridad.
-const secretPath = `/api/telegram-webhook/${bot.secretPathComponent()}`;
 
-
-// --- REGISTRO DE TODAS LAS RUTAS DE LA API ---
+// --- 2. REGISTRO DE RUTAS DE LA API ---
+// Centralizamos todas las rutas de la aplicación para una mejor organización.
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/tools', require('./routes/toolRoutes'));
 app.use('/api/ranking', require('./routes/rankingRoutes'));
@@ -35,95 +33,108 @@ app.use('/api/payment', require('./routes/paymentRoutes'));
 app.use('/api/admin',  require('./routes/adminRoutes'));
 
 
-// --- ENDPOINT DEL WEBHOOK ---
-// Aquí es donde Telegram enviará las actualizaciones del bot.
-// El servidor "recibe" en lugar de "preguntar", eliminando los errores 409.
+// --- 3. LÓGICA DEL BOT DE TELEGRAM ---
+// Generamos una ruta secreta y única para el webhook para añadir seguridad.
+const secretPath = `/api/telegram-webhook/${bot.secretPathComponent()}`;
+
+// Endpoint que recibe las actualizaciones de Telegram (modo Webhook)
 app.post(secretPath, (req, res) => {
     bot.handleUpdate(req.body, res);
 });
 
+// Mensaje de bienvenida mejorado
+const WELCOME_MESSAGE = 
+  `*Bienvenido a NEURO LINK* 🚀\n\n` +
+  `¡Estás a punto de entrar a un nuevo ecosistema de minería digital!\n\n` +
+  `*¿Qué puedes hacer aquí?*\n` +
+  `🔹 *Minar:* Activa tu ciclo de minado diario para ganar tokens NTX\\.\n` +
+  `🔹 *Mejorar:* Adquiere herramientas para aumentar tu velocidad de minería\\.\n` +
+  `🔹 *Crecer:* Invita a tus amigos y gana comisiones por su actividad\\.\n\n` +
+  `Haz clic en el botón de abajo para lanzar la aplicación y empezar tu viaje\\.`;
 
-// --- LÓGICA DE COMANDOS DEL BOT ---
+// Comando /start: El punto de entrada para todos los usuarios.
 bot.command('start', async (ctx) => {
     try {
         const newUserId = ctx.from.id.toString();
-        let referrerId = ctx.startPayload ? ctx.startPayload.trim() : (ctx.message.text.split(' ')[1] || null);
+        const startPayload = ctx.startPayload ? ctx.startPayload.trim() : null;
 
-        if (referrerId && referrerId !== newUserId) {
+        // Lógica de referidos robustecida
+        if (startPayload && startPayload !== newUserId) {
             await PendingReferral.updateOne(
                 { newUserId: newUserId },
-                { $set: { referrerId: referrerId, createdAt: new Date() } },
+                { $set: { referrerId: startPayload, createdAt: new Date() } },
                 { upsert: true }
             );
         }
         
-        const webAppUrl = process.env.FRONTEND_URL;
-        ctx.reply(
-            '¡Bienvenido a NEURO LINK! Haz clic abajo para iniciar la aplicación.',
-            {
-                reply_markup: {
-                    inline_keyboard: [[{ text: '🚀 Abrir App', web_app: { url: webAppUrl } }]]
-                }
-            }
+        // Enviamos la respuesta con formato MarkdownV2
+        await ctx.replyWithMarkdownV2(
+            WELCOME_MESSAGE.replace(/\./g, '\\.'), // Escapamos los puntos para MarkdownV2
+            Markup.inlineKeyboard([
+              [Markup.button.webApp('🚀 Abrir App', process.env.FRONTEND_URL)]
+            ])
         );
     } catch (error) {
         console.error('[Bot] Error en el comando /start:', error);
     }
 });
 
-// Función auxiliar para crear una pausa
+// Configuración del menú persistente del bot
+bot.telegram.setMyCommands([
+    { command: 'start', description: 'Inicia o reinicia la aplicación' }
+]);
+
+
+// --- 4. FUNCIÓN PRINCIPAL DE ARRANQUE DEL SERVIDOR ---
+
+// Función auxiliar para crear una pausa (utilizada para el registro del webhook)
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// --- FUNCIÓN PRINCIPAL DE ARRANQUE DEL SERVIDOR ---
 async function startServer() {
     try {
+        // Conexión a la base de datos MongoDB
         await mongoose.connect(process.env.MONGO_URI);
-        console.log('MongoDB conectado exitosamente.');
+        console.log('✅ Conexión a MongoDB exitosa.');
 
-        // --- LÓGICA DE PRECIOS MEJORADA ---
+        // Inicialización del servicio de precios con fallback
         const pricesLoaded = await startPriceService();
         if (!pricesLoaded) {
-            // Si la API de CoinGecko falla, revisamos si tenemos datos viejos en la DB como respaldo.
             const oldPricesCount = await Price.countDocuments();
-            if (oldPricesCount < 3) { // Asumimos que necesitamos al menos BNB, TRX, USDT.
-                // Si no hay datos de respaldo, el fallo es fatal.
-                throw new Error("El servicio de precios falló y no hay datos de respaldo en la base de datos.");
+            if (oldPricesCount < 3) {
+                throw new Error("Servicio de precios falló y no hay datos de respaldo.");
             }
-            // Si hay datos de respaldo, el servidor puede continuar, pero con una advertencia clara.
-            console.warn("ADVERTENCIA: No se pudo contactar a CoinGecko. Usando precios antiguos de la base de datos.");
+            console.warn("⚠️ ADVERTENCIA: No se pudo contactar a CoinGecko. Usando precios de la BD.");
+        } else {
+            console.log("✅ Servicio de precios inicializado.");
         }
         
-        // Iniciamos el monitor de transacciones.
+        // Inicialización del monitor de transacciones en segundo plano
         startMonitoring();
+        console.log("✅ Monitor de transacciones iniciado.");
 
-        // Iniciamos el servidor Express para que empiece a escuchar peticiones.
+        // Arranque del servidor Express
         const PORT = process.env.PORT || 5000;
         app.listen(PORT, async () => {
-            console.log(`Servidor corriendo en el puerto ${PORT}`);
+            console.log(`🚀 Servidor Express corriendo en el puerto ${PORT}`);
 
-            // --- LÓGICA DE REGISTRO DEL WEBHOOK MEJORADA ---
+            // Configuración del Webhook de Telegram
             try {
-                // Esperamos 5 segundos antes de registrar el webhook.
-                // Esto le da tiempo al DNS de Render a propagarse, evitando el error "Failed to resolve host".
-                console.log("Esperando 5 segundos antes de configurar el webhook para la propagación del DNS...");
-                await sleep(5000);
-
+                // Pequeña pausa para asegurar la propagación del DNS en entornos como Render
+                await sleep(2000); 
                 const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
                 await bot.telegram.setWebhook(webhookUrl);
-                console.log(`✅ Webhook de Telegram configurado exitosamente en: ${webhookUrl}`);
-                console.log("El bot ahora funciona en modo Webhook. El sistema está 100% operativo.");
+                console.log(`✅ Webhook de Telegram configurado en: ${webhookUrl}`);
+                console.log("🤖 El sistema está 100% operativo en modo Webhook.");
             } catch (webhookError) {
-                // Si el registro del webhook falla, el servidor no se caerá.
-                // Registrará un error crítico para que lo podamos investigar, pero la API seguirá funcionando.
-                console.error("!!! ERROR CRÍTICO AL CONFIGURAR EL WEBHOOK:", webhookError.message);
+                console.error("‼️ ERROR CRÍTICO: No se pudo configurar el Webhook de Telegram.", webhookError.message);
             }
         });
 
     } catch (error) {
-        console.error("!!! ERROR FATAL DURANTE EL ARRANQUE DEL SERVIDOR:", error.message);
-        process.exit(1); // Detiene el proceso si ocurre un error irrecuperable.
+        console.error("‼️ ERROR FATAL DURANTE EL ARRANQUE:", error.message);
+        process.exit(1); // Detiene el proceso si ocurre un error irrecuperable
     }
 }
-//Forzando un nuevo build
+
 // Ejecutar la función de arranque principal.
 startServer();
