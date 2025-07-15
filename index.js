@@ -22,7 +22,7 @@ const PendingReferral = require('./models/pendingReferralModel');
 const { startMonitoring } = require('./services/transactionMonitor');
 const { startPriceService } = require('./services/priceService');
 
-// --- Importación de Rutas (Ahora sabemos que son seguras) ---
+// --- Importación de Rutas ---
 const authRoutes = require('./routes/authRoutes');
 const toolRoutes = require('./routes/toolRoutes');
 const rankingRoutes = require('./routes/rankingRoutes');
@@ -41,16 +41,13 @@ const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 // -----------------------------------------------------------------------------
 const app = express();
 
-// --- ¡¡¡LA CORRECCIÓN MÁS IMPORTANTE!!! ---
-// Detiene el servidor con un error claro si el token no existe.
 if (!process.env.TELEGRAM_BOT_TOKEN) {
     console.error("ERROR FATAL: La variable de entorno TELEGRAM_BOT_TOKEN no está definida.");
     console.error("ACCIÓN: Vaya al Dashboard de Render > Environment y añada la variable TELEGRAM_BOT_TOKEN.");
-    process.exit(1); // Detiene la ejecución inmediatamente.
+    process.exit(1);
 }
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// --- Configuración de CORS Avanzada y Específica ---
 const whitelist = [process.env.FRONTEND_URL, process.env.ADMIN_URL].filter(Boolean);
 const corsOptions = {
     origin: function (origin, callback) {
@@ -94,11 +91,28 @@ app.post(secretPath, (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// 4. LÓGICA DEL BOT DE TELEGRAM (Simplificada para brevedad)
-// ... (Toda tu lógica de bot.command('start', etc.) va aquí sin cambios) ...
-const WELCOME_MESSAGE = `*Bienvenido a NEURO LINK* 🚀...`; // Tu mensaje
-function escapeMarkdownV2(text) { /* Tu función */ return text; }
-bot.command('start', async (ctx) => { /* Tu lógica de start */ });
+// 4. LÓGICA DEL BOT DE TELEGRAM
+// -----------------------------------------------------------------------------
+const WELCOME_MESSAGE = `*Bienvenido a NEURO LINK* 🚀\n\n¡Estás a punto de entrar a un nuevo ecosistema de minería digital!\n\n*¿Qué puedes hacer aquí?*\n🔹 *Minar:* Activa tu ciclo de minado diario para ganar tokens NTX.\n🔹 *Mejorar:* Adquiere herramientas para aumentar tu velocidad de minería.\n🔹 *Crecer:* Invita a tus amigos y gana comisiones por su actividad.\n\nHaz clic en el botón de abajo para lanzar la aplicación y empezar tu viaje.`;
+function escapeMarkdownV2(text) {
+  const charsToEscape = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
+  return charsToEscape.reduce((acc, char) => acc.replace(new RegExp('\\' + char, 'g'), '\\' + char), text);
+}
+bot.command('start', async (ctx) => {
+    try {
+        const newUserId = ctx.from.id.toString();
+        const startPayload = ctx.startPayload ? ctx.startPayload.trim() : null;
+        if (startPayload && startPayload !== newUserId) {
+            await PendingReferral.updateOne({ newUserId }, { $set: { referrerId: startPayload, createdAt: new Date() } }, { upsert: true });
+        }
+        await ctx.replyWithMarkdownV2(
+            escapeMarkdownV2(WELCOME_MESSAGE),
+            Markup.inlineKeyboard([ [Markup.button.webApp('🚀 Abrir App', process.env.FRONTEND_URL)] ])
+        );
+    } catch (error) {
+        console.error('[Bot] Error en el comando /start:', error.message);
+    }
+});
 bot.telegram.setMyCommands([ { command: 'start', description: 'Inicia o reinicia la aplicación' } ]);
 
 // -----------------------------------------------------------------------------
@@ -110,8 +124,6 @@ app.use(errorHandler);
 // -----------------------------------------------------------------------------
 // 6. FUNCIÓN DE ARRANQUE DEL SERVIDOR
 // -----------------------------------------------------------------------------
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 async function startServer() {
     try {
         console.log('Intentando conectar a MongoDB...');
@@ -124,22 +136,15 @@ async function startServer() {
         const PORT = process.env.PORT || 5000;
         app.listen(PORT, async () => {
             console.log(`🚀 Servidor Express corriendo en el puerto ${PORT}`);
-            
             try {
                 const botInfo = await bot.telegram.getMe();
                 console.log(`✅ Conectado como bot: ${botInfo.username}.`);
-
                 const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
                 console.log(`🔧 Configurando webhook en: ${webhookUrl}`);
-                
-                await sleep(2000); 
-                
                 await bot.telegram.setWebhook(webhookUrl, { drop_pending_updates: true });
                 console.log(`✅ Webhook configurado exitosamente.`);
-
             } catch (telegramError) {
                 console.error("ERROR CRÍTICO AL CONFIGURAR TELEGRAM:", telegramError.message);
-                console.log("--> Verifique que el TELEGRAM_BOT_TOKEN es correcto y que la URL del backend es accesible públicamente.");
             }
         });
     } catch (error) {

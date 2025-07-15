@@ -1,4 +1,4 @@
-// backend/routes/adminRoutes.js (VERSIÓN DE PRODUCCIÓN - COMPLETA Y FINAL)
+// backend/routes/adminRoutes.js (VERSIÓN CORREGIDA Y FINAL)
 
 const express = require('express');
 const router = express.Router();
@@ -24,7 +24,9 @@ router.get('/users/:id/details', protect, isAdmin, adminController.getUserDetail
 router.put('/users/:id', protect, isAdmin, adminController.updateUser);
 router.put('/users/:id/status', protect, isAdmin, adminController.setUserStatus);
 router.get('/users/:id/referrals', protect, isAdmin, adminController.getUserReferrals);
+
 // --- Rutas de Gestión de Transacciones ---
+// LA BARRA DIAGONAL ERRÓNEA HA SIDO ELIMINADA DE AQUÍ
 router.get('/transactions', protect, isAdmin, adminController.getAllTransactions);
 router.post('/transactions/manual', protect, isAdmin, adminController.createManualTransaction);
 
@@ -43,7 +45,5 @@ router.route('/tools/:id')
 // --- Rutas de Configuración de 2FA ---
 router.post('/2fa/generate', protect, isAdmin, adminController.generateTwoFactorSecret);
 router.post('/2fa/verify', protect, isAdmin, adminController.verifyAndEnableTwoFactor);
-
-
 
 module.exports = router;
