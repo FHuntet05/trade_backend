@@ -1,6 +1,7 @@
-// backend/controllers/authController.js (VERSIÓN DE PRODUCCIÓN - LIMPIA Y COMPLETA)
+// backend/controllers/authController.js (CORREGIDO - Devuelve settings en el login)
 const User = require('../models/userModel');
 const PendingReferral = require('../models/pendingReferralModel');
+const Setting = require('../models/settingsModel'); // <-- 1. Importar el modelo de configuración
 const jwt = require('jsonwebtoken');
 const { validate, parse } = require('@telegram-apps/init-data-node');
 const speakeasy = require('speakeasy');
@@ -58,7 +59,13 @@ const authTelegramUser = async (req, res) => {
       }
     }
     
-    const userWithTools = await User.findById(user._id).populate('activeTools.tool');
+    // --- 2. OBTENER USUARIO Y SETTINGS EN PARALELO ---
+    // Usamos Promise.all para una mayor eficiencia.
+    const [userWithTools, settings] = await Promise.all([
+      User.findById(user._id).populate('activeTools.tool'),
+      Setting.findOne({ singleton: 'global_settings' })
+    ]);
+
     const userObject = userWithTools.toObject();
 
     if (userObject.referredBy) {
@@ -69,7 +76,9 @@ const authTelegramUser = async (req, res) => {
     }
     
     const token = generateToken(userObject._id, userObject.role, userObject.username);
-    res.json({ token, user: userObject });
+
+    // --- 3. DEVOLVER TODO EN UNA SOLA RESPUESTA ---
+    res.json({ token, user: userObject, settings });
 
   } catch (error) {
     res.status(401).json({ message: `Autenticación fallida: ${error.message}` });
@@ -78,7 +87,13 @@ const authTelegramUser = async (req, res) => {
 
 const getUserProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).populate('activeTools.tool');
+    // --- TAMBIÉN AÑADIMOS SETTINGS A LA RESPUESTA DEL PERFIL ---
+    // Esto es útil si el usuario recarga la app y ya tiene un token.
+    const [user, settings] = await Promise.all([
+        User.findById(req.user._id).populate('activeTools.tool'),
+        Setting.findOne({ singleton: 'global_settings' })
+    ]);
+
     if (!user) {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
@@ -89,7 +104,7 @@ const getUserProfile = async (req, res) => {
             userObject.referrerId = referrerData.telegramId;
         }
     }
-    res.json(userObject);
+    res.json({ user: userObject, settings });
   } catch (error) {
     res.status(500).json({ message: 'Error del servidor' });
   }
