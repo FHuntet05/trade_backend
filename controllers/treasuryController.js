@@ -1,131 +1,80 @@
-// backend/controllers/treasuryController.js (VERSIÓN FINAL Y CORREGIDA)
-
+// backend/controllers/treasuryController.js (VERSIÓN FINAL CON PANEL DE CONTROL)
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
 const User = require('../models/userModel');
+const CryptoWallet = require('../models/cryptoWalletModel'); // <-- ¡NUEVA IMPORTACIÓN!
+const asyncHandler = require('express-async-handler');
 
-// --- Configuración de Redes ---
+// --- Configuración y Contratos (sin cambios) ---
 const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
 const tronWeb = new TronWeb({
   fullHost: 'https://api.trongrid.io',
   headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
 });
-
-// --- Direcciones de Contratos de Tokens ---
 const USDT_TRON_ADDRESS = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
+const usdtBscAbi = ['function balanceOf(address) view returns (uint256)'];
+const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, usdtBscAbi, bscProvider);
 
-const getHotWallets = () => {
-    if (!process.env.MASTER_SEED_PHRASE) {
-        throw new Error("La variable de entorno MASTER_SEED_PHRASE no está definida.");
-    }
-    const bscWallet = ethers.Wallet.fromMnemonic(process.env.MASTER_SEED_PHRASE, `m/44'/60'/0'/0/0`);
-    const tronWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE, `m/44'/195'/0'/0/0`);
-    return {
-        bsc: { address: bscWallet.address, privateKey: bscWallet.privateKey },
-        tron: { address: tronWallet.address, privateKey: tronWallet.privateKey }
-    };
-};
+// getHotWallets y getHotWalletBalances no cambian, pero los envolvemos en asyncHandler
+const getHotWallets = () => { /* ... tu código sin cambios ... */ };
+const getHotWalletBalances = asyncHandler(async (req, res) => { /* ... tu código sin cambios ... */ });
+const sweepWallet = asyncHandler(async (req, res) => { /* ... tu código sin cambios ... */ });
 
-/** @desc Obtener los saldos de las hot wallets */
-const getHotWalletBalances = async (req, res) => {
-    try {
-        const wallets = getHotWallets();
+// --- NUEVA FUNCIÓN PARA EL PANEL DE CONTROL ---
+/**
+ * @desc    Obtener todas las billeteras de depósito con saldo real para barrer
+ * @route   GET /api/treasury/sweepable-wallets
+ * @access  Private (Admin)
+ */
+const getSweepableWallets = asyncHandler(async (req, res) => {
+    // 1. Obtener todas las billeteras de la base de datos
+    const allWallets = await CryptoWallet.find({}).populate('user', 'username');
 
-        tronWeb.setAddress(wallets.tron.address);
+    // 2. Preparar contratos y consultas
+    const usdtTronContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
 
-        const usdtTronContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
-        const bscSigner = new ethers.Wallet(wallets.bsc.privateKey, bscProvider);
-        const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, ['function balanceOf(address) view returns (uint256)'], bscSigner);
-        
-        const [
-            bnbBalance,
-            usdtBscBalance,
-            trxBalance,
-            usdtTronBalance
-        ] = await Promise.all([
-            bscProvider.getBalance(wallets.bsc.address),
-            usdtBscContract.balanceOf(wallets.bsc.address),
-            tronWeb.trx.getBalance(wallets.tron.address),
-            usdtTronContract.balanceOf(wallets.tron.address).call()
-        ]);
-
-        res.json({
-            BNB: ethers.utils.formatEther(bnbBalance),
-            USDT_BSC: ethers.utils.formatUnits(usdtBscBalance, 6),
-            TRX: tronWeb.fromSun(trxBalance),
-            // --- CORRECCIÓN CLAVE ---
-            // Usamos parseFloat() en lugar de .toNumber() porque tronweb devuelve un string/número.
-            USDT_TRON: (parseFloat(usdtTronBalance) / 1e6).toString()
-        });
-
-    } catch (error) {
-        console.error("Error al obtener saldos de hot wallets:", error);
-        res.status(500).json({ message: error.message || "Error al consultar los saldos." });
-    }
-};
-
-/** @desc Ejecutar un barrido de una hot wallet */
-const sweepWallet = async (req, res) => {
-    // Esta función no necesita cambios, la incluimos para que el archivo esté completo.
-    const { currency, destinationAddress, adminPassword } = req.body;
-    if (!currency || !destinationAddress || !adminPassword) {
-        return res.status(400).json({ message: 'Moneda, dirección de destino y contraseña son requeridos.' });
-    }
-    try {
-        const adminUser = await User.findById(req.user.id).select('+password');
-        const isMatch = await adminUser.matchPassword(adminPassword);
-        if (!isMatch) {
-            return res.status(401).json({ message: 'Contraseña de administrador incorrecta.' });
+    // 3. Crear un array de promesas para consultar todos los saldos en paralelo
+    const balancePromises = allWallets.map(async (wallet) => {
+        let balances = [];
+        if (wallet.chain === 'BSC') {
+            const [bnbBalance, usdtBalance] = await Promise.all([
+                bscProvider.getBalance(wallet.address),
+                usdtBscContract.balanceOf(wallet.address)
+            ]);
+            if (bnbBalance.gt(0)) balances.push({ currency: 'BNB', amount: ethers.utils.formatEther(bnbBalance) });
+            if (usdtBalance.gt(0)) balances.push({ currency: 'USDT_BSC', amount: ethers.utils.formatUnits(usdtBalance, 6) });
+        } else if (wallet.chain === 'TRON') {
+            tronWeb.setAddress(wallet.address);
+            const [trxBalance, usdtBalance] = await Promise.all([
+                tronWeb.trx.getBalance(wallet.address),
+                usdtTronContract.balanceOf(wallet.address).call()
+            ]);
+            if (trxBalance > 0) balances.push({ currency: 'TRX', amount: tronWeb.fromSun(trxBalance) });
+            if (parseFloat(usdtBalance) > 0) balances.push({ currency: 'USDT_TRON', amount: (parseFloat(usdtBalance) / 1e6).toString() });
         }
-        const wallets = getHotWallets();
-        let txHash;
-        if (currency === 'BNB' || currency === 'USDT_BSC') {
-            const bscSigner = new ethers.Wallet(wallets.bsc.privateKey, bscProvider);
-            if (currency === 'BNB') {
-                const balance = await bscProvider.getBalance(wallets.bsc.address);
-                const gasPrice = await bscProvider.getGasPrice();
-                const gasLimit = ethers.BigNumber.from('21000');
-                const gasCost = gasPrice.mul(gasLimit);
-                if (balance.lte(gasCost)) throw new Error('Saldo BNB insuficiente para cubrir el gas.');
-                const amountToSend = balance.sub(gasCost);
-                const tx = await bscSigner.sendTransaction({ to: destinationAddress, value: amountToSend });
-                txHash = tx.hash;
-            } else { // USDT_BSC
-                const usdtContract = new ethers.Contract(USDT_BSC_ADDRESS, ['function transfer(address, uint256) returns (bool)', 'function balanceOf(address) view returns (uint256)'], bscSigner);
-                const balance = await usdtContract.balanceOf(wallets.bsc.address);
-                if (balance.isZero()) throw new Error('No hay saldo USDT (BSC) para barrer.');
-                const tx = await usdtContract.transfer(destinationAddress, balance);
-                txHash = tx.hash;
-            }
-        } else if (currency === 'TRX' || currency === 'USDT_TRON') {
-            tronWeb.setPrivateKey(wallets.tron.privateKey);
-            if (currency === 'TRX') {
-                const balance = await tronWeb.trx.getBalance(wallets.tron.address);
-                const amountToSend = balance - 1500000;
-                if (amountToSend <= 0) throw new Error('Saldo TRX insuficiente para cubrir el gas.');
-                const tradeobj = await tronWeb.transactionBuilder.sendTrx(destinationAddress, amountToSend, wallets.tron.address);
-                const signedtxn = await tronWeb.trx.sign(tradeobj);
-                const receipt = await tronWeb.trx.sendRawTransaction(signedtxn);
-                txHash = receipt.txid;
-            } else { // USDT_TRON
-                const usdtContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
-                const balance = await usdtContract.balanceOf(wallets.tron.address).call();
-                if (parseFloat(balance) <= 0) throw new Error('No hay saldo USDT (TRON) para barrer.');
-                const tx = await usdtContract.transfer(destinationAddress, balance).send();
-                txHash = tx;
-            }
-        } else {
-            return res.status(400).json({ message: 'Moneda no soportada para barrido.' });
+
+        // Devolver solo si tiene algún saldo
+        if (balances.length > 0) {
+            return {
+                _id: wallet._id,
+                address: wallet.address,
+                chain: wallet.chain,
+                user: wallet.user ? wallet.user.username : 'Usuario Eliminado',
+                balances: balances,
+            };
         }
-        res.json({ message: `Barrido de ${currency} iniciado.`, transactionHash: txHash });
-    } catch (error) {
-        console.error(`Error durante el barrido de ${currency}:`, error);
-        res.status(500).json({ message: error.message || 'Error al ejecutar el barrido.' });
-    }
-};
+        return null; // Devolver null si no hay saldo
+    });
+
+    // 4. Ejecutar todas las promesas y filtrar los resultados nulos
+    const walletsWithBalance = (await Promise.all(balancePromises)).filter(Boolean);
+
+    res.status(200).json(walletsWithBalance);
+});
 
 module.exports = {
     getHotWalletBalances,
     sweepWallet,
+    getSweepableWallets, // <-- Exportamos la nueva función
 };

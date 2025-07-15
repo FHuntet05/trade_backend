@@ -5,7 +5,6 @@ const router = express.Router();
 
 // Importación de controladores
 const adminController = require('../controllers/adminController.js');
-const treasuryController = require('../controllers/treasuryController.js');
 
 // Importación de middleware de seguridad
 const { protect, isAdmin } = require('../middleware/authMiddleware');
@@ -45,9 +44,6 @@ router.route('/tools/:id')
 router.post('/2fa/generate', protect, isAdmin, adminController.generateTwoFactorSecret);
 router.post('/2fa/verify', protect, isAdmin, adminController.verifyAndEnableTwoFactor);
 
-// --- Rutas de Tesorería (Sweeping) ---
-router.get('/treasury/balances', protect, isAdmin, treasuryController.getHotWalletBalances);
-router.post('/treasury/sweep', protect, isAdmin, treasuryController.sweepWallet);
 
 
 module.exports = router;

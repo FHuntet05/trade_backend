@@ -16,7 +16,6 @@ require('./models/cryptoWalletModel');
 // --- Servicios ---
 const { startMonitoring } = require('./services/transactionMonitor');
 const { startPriceService } = require('./services/priceService');
-
 // --- FUNCIÓN DE UTILIDAD PARA ESCAPAR MARKDOWNV2 ---
 function escapeMarkdownV2(text) {
   const charsToEscape = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
@@ -42,7 +41,7 @@ app.use('/api/team', require('./routes/teamRoutes'));
 app.use('/api/tasks', require('./routes/taskRoutes'));
 app.use('/api/payment', require('./routes/paymentRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
-
+app.use('/api/treasury',require('./routes/treasuryRoute'));
 const secretPath = `/api/telegram-webhook/${bot.secretPathComponent()}`;
 app.post(secretPath, (req, res) => {
     bot.handleUpdate(req.body, res);
@@ -69,7 +68,7 @@ bot.command('start', async (ctx) => {
             .replace(/-/g, '\\-')
             .replace(/\./g, '\\.')
             .replace(/!/g, '\\!');
-            
+
         await ctx.replyWithMarkdownV2(
             escapeMarkdownV2(WELCOME_MESSAGE),
             Markup.inlineKeyboard([
