@@ -5,21 +5,27 @@ const cors = require('cors');
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 
-// --- CORRECCIÓN ARQUITECTÓNICA: Carga preventiva de modelos ---
-// Importamos todos los modelos aquí para registrarlos en Mongoose al inicio.
-// Esto previene errores de "Schema hasn't been registered".
+// --- Carga preventiva de modelos ---
 require('./models/userModel');
 require('./models/toolModel');
 require('./models/transactionModel');
 require('./models/settingsModel');
-require('./models/pendingReferralModel');
+const PendingReferral = require('./models/pendingReferralModel'); // Se necesita la variable aquí
 require('./models/cryptoWalletModel');
-// -----------------------------------------------------------
 
-// Ahora podemos importar los servicios y controladores que los usan.
-const PendingReferral = require('./models/pendingReferralModel');
+// --- Servicios ---
 const { startMonitoring } = require('./services/transactionMonitor');
 const { startPriceService } = require('./services/priceService');
+
+// --- FUNCIÓN DE UTILIDAD PARA ESCAPAR MARKDOWNV2 ---
+function escapeMarkdownV2(text) {
+  const charsToEscape = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
+  let escapedText = text;
+  for (const char of charsToEscape) {
+    escapedText = escapedText.replace(new RegExp('\\' + char, 'g'), '\\' + char);
+  }
+  return escapedText;
+}
 
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
@@ -27,7 +33,7 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 app.use(cors());
 app.use(express.json());
 
-// ... (las rutas de la API no cambian)
+// --- Rutas de la API ---
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/tools', require('./routes/toolRoutes'));
 app.use('/api/ranking', require('./routes/rankingRoutes'));
@@ -42,15 +48,15 @@ app.post(secretPath, (req, res) => {
     bot.handleUpdate(req.body, res);
 });
 
-// --- RESTAURANDO LÓGICA COMPLETA DEL COMANDO /START ---
+// --- MENSAJE DE BIENVENIDA NATURAL ---
 const WELCOME_MESSAGE =
   `*Bienvenido a NEURO LINK* 🚀\n\n` +
   `¡Estás a punto de entrar a un nuevo ecosistema de minería digital!\n\n` +
   `*¿Qué puedes hacer aquí?*\n` +
-  `🔹 *Minar:* Activa tu ciclo de minado diario para ganar tokens NTX\\.\n` +
-  `🔹 *Mejorar:* Adquiere herramientas para aumentar tu velocidad de minería\\.\n` +
-  `🔹 *Crecer:* Invita a tus amigos y gana comisiones por su actividad\\.\n\n` +
-  `Haz clic en el botón de abajo para lanzar la aplicación y empezar tu viaje\\.`;
+  `🔹 *Minar:* Activa tu ciclo de minado diario para ganar tokens NTX.\n` +
+  `🔹 *Mejorar:* Adquiere herramientas para aumentar tu velocidad de minería.\n` +
+  `🔹 *Crecer:* Invita a tus amigos y gana comisiones por su actividad.\n\n` +
+  `Haz clic en el botón de abajo para lanzar la aplicación y empezar tu viaje.`;
 
 bot.command('start', async (ctx) => {
     try {
@@ -60,18 +66,14 @@ bot.command('start', async (ctx) => {
             await PendingReferral.updateOne({ newUserId: newUserId }, { $set: { referrerId: startPayload, createdAt: new Date() } }, { upsert: true });
         }
         
-        const safeMessage = WELCOME_MESSAGE
-            .replace(/\./g, '\\.')
-            .replace(/!/g, '\\!');
-
         await ctx.replyWithMarkdownV2(
-            safeMessage,
+            escapeMarkdownV2(WELCOME_MESSAGE),
             Markup.inlineKeyboard([
               [Markup.button.webApp('🚀 Abrir App', process.env.FRONTEND_URL)]
             ])
         );
     } catch (error) {
-        console.error('[Bot] Error en el comando /start:', error);
+        console.error('[Bot] Error en el comando /start:', error.message);
     }
 });
 

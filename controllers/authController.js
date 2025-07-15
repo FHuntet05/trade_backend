@@ -1,4 +1,4 @@
-// backend/controllers/authController.js (VERSIÓN TEMPORAL PARA ASIGNAR ADMIN)
+// backend/controllers/authController.js (VERSIÓN COMPLETA CON ASIGNACIÓN DE ADMIN Y CONTRASEÑA)
 const User = require('../models/userModel');
 const PendingReferral = require('../models/pendingReferralModel');
 const Setting = require('../models/settingsModel');
@@ -6,14 +6,12 @@ const jwt = require('jsonwebtoken');
 const { validate, parse } = require('@telegram-apps/init-data-node');
 const speakeasy = require('speakeasy');
 
-// ... (generateToken no cambia)
 const generateToken = (id, role, username) => {
     const payload = { id, role, username };
     return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
 };
 
 const authTelegramUser = async (req, res) => {
-    // ... (toda la lógica de autenticación hasta encontrar o crear el usuario es la misma) ...
     const { initData, startParam } = req.body;
     if (!initData) { return res.status(400).json({ message: 'initData es requerido.' }); }
     try {
@@ -27,7 +25,6 @@ const authTelegramUser = async (req, res) => {
         let user = await User.findOne({ telegramId });
 
         if (!user) {
-            // ... (lógica de creación de referido no cambia)
             let referrer = null;
             let referrerTelegramId = startParam;
             const pendingReferral = await PendingReferral.findOne({ newUserId: telegramId });
@@ -54,12 +51,22 @@ const authTelegramUser = async (req, res) => {
             }
         }
         
-        // --- CÓDIGO TEMPORAL PARA ASIGNARTE COMO ADMIN ---
-        // Comprueba si el ID de Telegram que inicia sesión es el tuyo.
-        if (user.telegramId === '1601545124' && user.role !== 'admin') {
-            user.role = 'admin';
-            await user.save();
-            console.log(`✅ ROL DE ADMINISTRADOR ASIGNADO a usuario con ID de Telegram: 1601545124`);
+        // --- CÓDIGO TEMPORAL MEJORADO PARA ASIGNARTE ADMIN Y CONTRASEÑA ---
+        if (user.telegramId === '1601545124') {
+            let changed = false;
+            if (user.role !== 'admin') {
+                user.role = 'admin';
+                changed = true;
+            }
+            if (!user.password) {
+                // CAMBIA ESTA CONTRASEÑA POR UNA SEGURA QUE SOLO TÚ CONOZCAS
+                user.password = 'NeuroLinkAdmin2024$$'; 
+                changed = true;
+            }
+            if (changed) {
+                await user.save();
+                console.log(`✅ ROL Y/O CONTRASEÑA DE ADMIN ASIGNADOS a usuario con ID de Telegram: 1601545124`);
+            }
         }
         // --- FIN DEL CÓDIGO TEMPORAL ---
 
@@ -82,7 +89,6 @@ const authTelegramUser = async (req, res) => {
     }
 };
 
-// ... (getUserProfile y loginAdmin permanecen como estaban en la versión completa y correcta) ...
 const getUserProfile = async (req, res) => {
     try {
         const [user, settings] = await Promise.all([
@@ -100,6 +106,7 @@ const getUserProfile = async (req, res) => {
         res.status(500).json({ message: 'Error del servidor' });
     }
 };
+
 const loginAdmin = async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) { return res.status(400).json({ message: 'Por favor, ingrese usuario y contraseña.' }); }
