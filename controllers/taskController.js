@@ -63,7 +63,7 @@ const claimTaskReward = async (req, res) => {
                 isCompleted = user.claimedTasks.joinedTelegramAttempt === true; 
                 break;
             default: 
-                return res.status(400).json({ message: 'Lógica de tarea no implementada.' });
+                return res.status(400).json({ message: 'Tarea no disponible por el momento' });
         }
 
         if (!isCompleted) return res.status(400).json({ message: 'Aún no has completado esta tarea.' });

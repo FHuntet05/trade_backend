@@ -1,12 +1,11 @@
-// backend/index.js (CORREGIDO - Webhook más robusto)
+// backend/index.js (VERSIÓN COMPLETA Y CORREGIDA)
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors');
+const cors =require('cors');
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const PendingReferral = require('./models/pendingReferralModel');
 
-// Importación de servicios y modelos
 const { startMonitoring } = require('./services/transactionMonitor'); 
 const { startPriceService } = require('./services/priceService');
 const Price = require('./models/priceModel');
@@ -14,12 +13,13 @@ const Price = require('./models/priceModel');
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// --- 1. CONFIGURACIÓN DE MIDDLEWARE ---
 app.use(cors());
 app.use(express.json());
 
+app.get('/api/health', (req, res) => {
+    res.status(200).json({ status: 'ok', message: 'El servidor está vivo y respondiendo.', serverTime: new Date().toISOString() });
+});
 
-// --- 2. REGISTRO DE RUTAS DE LA API ---
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/tools', require('./routes/toolRoutes'));
 app.use('/api/ranking', require('./routes/rankingRoutes'));
@@ -27,10 +27,8 @@ app.use('/api/wallet', require('./routes/walletRoutes'));
 app.use('/api/team', require('./routes/teamRoutes'));
 app.use('/api/tasks', require('./routes/taskRoutes'));
 app.use('/api/payment', require('./routes/paymentRoutes'));
-app.use('/api/admin',  require('./routes/adminRoutes'));
+app.use('/api/admin', require('./routes/adminRoutes'));
 
-
-// --- 3. LÓGICA DEL BOT DE TELEGRAM ---
 const secretPath = `/api/telegram-webhook/${bot.secretPathComponent()}`;
 app.post(secretPath, (req, res) => {
     bot.handleUpdate(req.body, res);
@@ -50,14 +48,16 @@ bot.command('start', async (ctx) => {
         const newUserId = ctx.from.id.toString();
         const startPayload = ctx.startPayload ? ctx.startPayload.trim() : null;
         if (startPayload && startPayload !== newUserId) {
-            await PendingReferral.updateOne(
-                { newUserId: newUserId },
-                { $set: { referrerId: startPayload, createdAt: new Date() } },
-                { upsert: true }
-            );
+            await PendingReferral.updateOne({ newUserId: newUserId }, { $set: { referrerId: startPayload, createdAt: new Date() } }, { upsert: true });
         }
+        
+        // CORRECCIÓN: Escapamos los caracteres reservados para MarkdownV2: '.', '!'
+        const safeMessage = WELCOME_MESSAGE
+            .replace(/\./g, '\\.')
+            .replace(/!/g, '\\!');
+
         await ctx.replyWithMarkdownV2(
-            WELCOME_MESSAGE.replace(/\./g, '\\.'),
+            safeMessage,
             Markup.inlineKeyboard([
               [Markup.button.webApp('🚀 Abrir App', process.env.FRONTEND_URL)]
             ])
@@ -71,8 +71,6 @@ bot.telegram.setMyCommands([
     { command: 'start', description: 'Inicia o reinicia la aplicación' }
 ]);
 
-
-// --- 4. FUNCIÓN PRINCIPAL DE ARRANQUE DEL SERVIDOR ---
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function startServer() {
@@ -91,8 +89,6 @@ async function startServer() {
                 console.log('⏳ Esperando 10 segundos para la estabilización del DNS...');
                 await sleep(10000);
 
-                // --- CORRECCIÓN CLAVE ---
-                // Eliminamos cualquier webhook antiguo para asegurar un estado limpio.
                 console.log('🔧 Limpiando configuración de webhook anterior...');
                 await bot.telegram.deleteWebhook({ drop_pending_updates: true });
 
