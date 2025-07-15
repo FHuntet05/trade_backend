@@ -16,7 +16,7 @@ const rankingRoutes = require('./routes/rankingRoutes');
  const walletRoutes = require('./routes/walletRoutes');
  const teamRoutes = require('./routes/teamRoutes');
  const taskRoutes = require('./routes/taskRoutes');
-// const paymentRoutes = require('./routes/paymentRoutes');
+ const paymentRoutes = require('./routes/paymentRoutes');
  const adminRoutes = require('./routes/adminRoutes');
  const treasuryRoutes = require('./routes/treasuryRoutes');
 
@@ -43,7 +43,7 @@ app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
  app.use('/api/wallet', walletRoutes);
  app.use('/api/team', teamRoutes);
  app.use('/api/tasks', taskRoutes);
-// app.use('/api/payment', paymentRoutes);
+ app.use('/api/payment', paymentRoutes);
 app.use('/api/admin', adminRoutes);
  app.use('/api/treasury', treasuryRoutes);
 
