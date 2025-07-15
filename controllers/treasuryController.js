@@ -1,13 +1,15 @@
-// backend/controllers/treasuryController.js (CORREGIDO PARA ETHERS V5)
+// backend/controllers/treasuryController.js (CORREGIDO FINAL - ETHERS V5 y TRONWEB)
 
-const { ethers } = require('ethers'); // Importamos ethers completo para acceder a sus sub-módulos
-const TronWeb = require('tronweb');
-const User = require('../models/userModel'); // Para validar la contraseña del admin
+const { ethers } = require('ethers');
+// --- CORRECCIÓN CLAVE ---
+// Importamos la clase constructora desde la propiedad 'default' del módulo requerido.
+const TronWeb = require('tronweb').default; 
+const User = require('../models/userModel');
 
 // --- Configuración de Redes ---
-// CAMBIO 1: Sintaxis de Ethers v5 para inicializar el proveedor.
 const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
 
+// Ahora 'new TronWeb' funcionará porque la variable TronWeb contiene la clase correcta.
 const tronWeb = new TronWeb({
   fullHost: 'https://api.trongrid.io',
   headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
@@ -17,11 +19,9 @@ const tronWeb = new TronWeb({
 const USDT_TRON_ADDRESS = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
 
-// La función 'fromPhrase' de Ethers v5 está en 'ethers.Wallet', no 'ethers.HDNodeWallet'.
-// La lógica actual ya era compatible con v5, así que no se necesita cambio aquí.
 const getHotWallets = () => {
-    // CAMBIO 2: Ethers v5 utiliza ethers.Wallet.fromMnemonic, no fromPhrase.
     const bscWallet = ethers.Wallet.fromMnemonic(process.env.MASTER_SEED_PHRASE, `m/44'/60'/0'/0/0`);
+    // La llamada estática 'TronWeb.fromMnemonic' ahora también funcionará correctamente.
     const tronWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE, `m/44'/195'/0'/0/0`);
     return {
         bsc: { address: bscWallet.address, privateKey: bscWallet.privateKey },
@@ -50,13 +50,11 @@ const getHotWalletBalances = async (req, res) => {
             usdtTronContract.balanceOf(wallets.tron.address).call()
         ]);
 
-        // CAMBIO 3: Usamos ethers.utils.formatEther en v5.
-        // CAMBIO 4: Usamos ethers.utils.formatUnits en v5.
         res.json({
             BNB: ethers.utils.formatEther(bnbBalance),
-            USDT_BSC: ethers.utils.formatUnits(usdtBscBalance, 6), // USDT en BSC suele tener 6 decimales
+            USDT_BSC: ethers.utils.formatUnits(usdtBscBalance, 6),
             TRX: tronWeb.fromSun(trxBalance),
-            USDT_TRON: (usdtTronBalance.toNumber() / 1e6).toString() // USDT en Tron tiene 6 decimales
+            USDT_TRON: (usdtTronBalance.toNumber() / 1e6).toString()
         });
 
     } catch (error) {
@@ -87,15 +85,14 @@ const sweepWallet = async (req, res) => {
             const bscSigner = new ethers.Wallet(wallets.bsc.privateKey, bscProvider);
             if (currency === 'BNB') {
                 const balance = await bscProvider.getBalance(wallets.bsc.address);
-                // CAMBIO 5: En v5, getFeeData() no existe de esta forma. Usamos getGasPrice().
                 const gasPrice = await bscProvider.getGasPrice();
-                const gasLimit = ethers.BigNumber.from('21000'); // Usar BigNumber de Ethers v5
+                const gasLimit = ethers.BigNumber.from('21000');
                 const gasCost = gasPrice.mul(gasLimit);
                 
-                if (balance.lte(gasCost)) { // Usar .lte() para comparar BigNumbers
+                if (balance.lte(gasCost)) {
                     throw new Error('Saldo BNB insuficiente para cubrir el gas.');
                 }
-                const amountToSend = balance.sub(gasCost); // Usar .sub() para restar BigNumbers
+                const amountToSend = balance.sub(gasCost);
                 const tx = await bscSigner.sendTransaction({ to: destinationAddress, value: amountToSend });
                 txHash = tx.hash;
             } else { // USDT_BSC
@@ -106,7 +103,6 @@ const sweepWallet = async (req, res) => {
                 txHash = tx.hash;
             }
         } else if (currency === 'TRX' || currency === 'USDT_TRON') {
-            // La lógica de TronWeb no depende de Ethers, así que no hay cambios aquí.
             tronWeb.setPrivateKey(wallets.tron.privateKey);
             if (currency === 'TRX') {
                 const balance = await tronWeb.trx.getBalance(wallets.tron.address);
