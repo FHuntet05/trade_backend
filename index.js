@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN FINAL, COMPLETA Y DE DEPURACIÓN FORZADA)
+// backend/index.js (VERSIÓN CORREGIDA Y ROBUSTA v14.0)
 
 // -----------------------------------------------------------------------------
 // 1. IMPORTACIONES
@@ -44,8 +44,30 @@ const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// --- Configuración de Middlewares de Express ---
-app.use(cors());
+// --- MEJORA: Configuración de CORS Avanzada y Específica ---
+const whitelist = [process.env.FRONTEND_URL, process.env.ADMIN_URL];
+const corsOptions = {
+    origin: function (origin, callback) {
+        // Permitir peticiones sin 'origin' (como Postman o apps móviles) o si el origen está en la whitelist
+        if (!origin || whitelist.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
+    credentials: true, // Permitir cookies y cabeceras de autorización
+    allowedHeaders: "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+};
+
+// **PASO 1: Responder a las Preflight Requests (OPTIONS) en TODAS las rutas.**
+// Esto es CRÍTICO para que las peticiones con 'Authorization' header funcionen.
+app.options('*', cors(corsOptions)); 
+
+// **PASO 2: Aplicar la configuración de CORS a TODAS las peticiones posteriores.**
+app.use(cors(corsOptions));
+// app.use(cors()); // <-- LÍNEA PROBLEMÁTICA ELIMINADA
+
 app.use(express.json());
 // Usamos morgan en modo 'dev' para tener logs detallados de cada petición
 app.use(morgan('dev'));
