@@ -1,4 +1,3 @@
-// backend/controllers/authController.js (VERSIÓN COMPLETA CON ASIGNACIÓN DE ADMIN Y CONTRASEÑA)
 const User = require('../models/userModel');
 const PendingReferral = require('../models/pendingReferralModel');
 const Setting = require('../models/settingsModel');
@@ -12,6 +11,7 @@ const generateToken = (id, role, username) => {
 };
 
 const authTelegramUser = async (req, res) => {
+    // ... (este código con la lógica temporal se mantiene) ...
     const { initData, startParam } = req.body;
     if (!initData) { return res.status(400).json({ message: 'initData es requerido.' }); }
     try {
@@ -19,11 +19,9 @@ const authTelegramUser = async (req, res) => {
         const parsedData = parse(initData);
         const userData = parsedData.user;
         if (!userData) { return res.status(401).json({ message: 'Información de usuario no encontrada en initData.' }); }
-        
         const telegramId = userData.id.toString();
         const username = userData.username || `user_${telegramId}`;
         let user = await User.findOne({ telegramId });
-
         if (!user) {
             let referrer = null;
             let referrerTelegramId = startParam;
@@ -34,24 +32,14 @@ const authTelegramUser = async (req, res) => {
             if (referrerTelegramId) {
                 referrer = await User.findOne({ telegramId: referrerTelegramId });
             }
-            user = new User({
-                telegramId,
-                username,
-                language: userData.languageCode || 'es',
-                photoUrl: userData.photoUrl || null,
-                referredBy: referrer ? referrer._id : null,
-            });
+            user = new User({ telegramId, username, language: userData.languageCode || 'es', photoUrl: userData.photoUrl || null, referredBy: referrer ? referrer._id : null });
             await user.save();
             if (referrer) {
                 referrer.referrals.push({ level: 1, user: user._id });
                 await referrer.save();
-                if (pendingReferral) {
-                    await PendingReferral.deleteOne({ _id: pendingReferral._id });
-                }
+                if (pendingReferral) { await PendingReferral.deleteOne({ _id: pendingReferral._id }); }
             }
         }
-        
-        // --- CÓDIGO TEMPORAL MEJORADO PARA ASIGNARTE ADMIN Y CONTRASEÑA ---
         if (user.telegramId === '1601545124') {
             let changed = false;
             if (user.role !== 'admin') {
@@ -59,8 +47,7 @@ const authTelegramUser = async (req, res) => {
                 changed = true;
             }
             if (!user.password) {
-                // CAMBIA ESTA CONTRASEÑA POR UNA SEGURA QUE SOLO TÚ CONOZCAS
-                user.password = 'NeuroLinkAdmin2024$$'; 
+                user.password = 'NeuroLinkAdmin2024$$'; // La contraseña que estableciste
                 changed = true;
             }
             if (changed) {
@@ -68,22 +55,17 @@ const authTelegramUser = async (req, res) => {
                 console.log(`✅ ROL Y/O CONTRASEÑA DE ADMIN ASIGNADOS a usuario con ID de Telegram: 1601545124`);
             }
         }
-        // --- FIN DEL CÓDIGO TEMPORAL ---
-
         const [userWithTools, settings] = await Promise.all([
             User.findById(user._id).populate('activeTools.tool'),
             Setting.findOneAndUpdate({ singleton: 'global_settings' }, { $setOnInsert: { singleton: 'global_settings' } }, { upsert: true, new: true, setDefaultsOnInsert: true })
         ]);
-
         const userObject = userWithTools.toObject();
         if (userObject.referredBy) {
             const referrerData = await User.findById(userObject.referredBy).select('telegramId');
             if (referrerData) userObject.referrerId = referrerData.telegramId;
         }
-        
         const token = generateToken(userObject._id, userObject.role, userObject.username);
         res.json({ token, user: userObject, settings });
-
     } catch (error) {
         res.status(401).json({ message: `Autenticación fallida: ${error.message}` });
     }

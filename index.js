@@ -65,7 +65,11 @@ bot.command('start', async (ctx) => {
         if (startPayload && startPayload !== newUserId) {
             await PendingReferral.updateOne({ newUserId: newUserId }, { $set: { referrerId: startPayload, createdAt: new Date() } }, { upsert: true });
         }
-        
+        const safeMessage = WELCOME_MESSAGE
+            .replace(/-/g, '\\-')
+            .replace(/\./g, '\\.')
+            .replace(/!/g, '\\!');
+            
         await ctx.replyWithMarkdownV2(
             escapeMarkdownV2(WELCOME_MESSAGE),
             Markup.inlineKeyboard([
