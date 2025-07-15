@@ -1,3 +1,4 @@
+// ARCHIVO COMPLETO A USAR: backend/controllers/authController.js
 const User = require('../models/userModel');
 const PendingReferral = require('../models/pendingReferralModel');
 const Setting = require('../models/settingsModel');
@@ -11,7 +12,6 @@ const generateToken = (id, role, username) => {
 };
 
 const authTelegramUser = async (req, res) => {
-    // ... (este código con la lógica temporal se mantiene) ...
     const { initData, startParam } = req.body;
     if (!initData) { return res.status(400).json({ message: 'initData es requerido.' }); }
     try {
@@ -91,20 +91,58 @@ const getUserProfile = async (req, res) => {
 
 const loginAdmin = async (req, res) => {
     const { username, password } = req.body;
-    if (!username || !password) { return res.status(400).json({ message: 'Por favor, ingrese usuario y contraseña.' }); }
+    console.log(`[DIAGNÓSTICO] Intento de login de admin recibido.`);
+    console.log(`[DIAGNÓSTICO] Buscando con: ${username}`);
+    console.log(`[DIAGNÓSTICO] Con contraseña de longitud: ${password ? password.length : 0}`);
+
+    if (!username || !password) {
+        return res.status(400).json({ message: 'Por favor, ingrese usuario y contraseña.' });
+    }
     try {
-        const adminUser = await User.findOne({ username }).select('+password');
-        if (adminUser && adminUser.role === 'admin' && (await adminUser.matchPassword(password))) {
-            if (adminUser.isTwoFactorEnabled) {
-                return res.json({ twoFactorRequired: true, userId: adminUser._id });
-            }
-            const sessionTokenPayload = { id: adminUser._id, role: adminUser.role, username: adminUser.username };
-            const sessionToken = jwt.sign(sessionTokenPayload, process.env.JWT_SECRET, { expiresIn: '8h' });
-            res.json({ _id: adminUser._id, username: adminUser.username, role: adminUser.role, isTwoFactorEnabled: adminUser.isTwoFactorEnabled, token: sessionToken });
-        } else {
-            res.status(401).json({ message: 'Credenciales inválidas.' });
+        const adminUser = await User.findOne({
+            $or: [{ username: username }, { telegramId: username }]
+        }).select('+password +role');
+
+        if (!adminUser) {
+            console.error('[DIAGNÓSTICO] ¡FALLO! No se encontró ningún usuario con ese username o telegramId.');
+            return res.status(401).json({ message: 'Credenciales inválidas (usuario no encontrado).' });
         }
+
+        console.log(`[DIAGNÓSTICO] Usuario encontrado: ${adminUser.username} (ID: ${adminUser._id})`);
+        console.log(`[DIAGNÓSTICO] Rol del usuario encontrado: ${adminUser.role}`);
+
+        if (adminUser.role !== 'admin') {
+            console.error('[DIAGNÓSTICO] ¡FALLO! El usuario encontrado no tiene el rol de "admin".');
+            return res.status(401).json({ message: 'Credenciales inválidas (no es admin).' });
+        }
+        
+        console.log(`[DIAGNÓSTICO] El usuario es admin. Procediendo a comparar contraseñas...`);
+        const isMatch = await adminUser.matchPassword(password);
+
+        if (!isMatch) {
+            console.error('[DIAGNÓSTICO] ¡FALLO! La comparación de contraseñas ha devuelto "false".');
+            return res.status(401).json({ message: 'Credenciales inválidas (contraseña incorrecta).' });
+        }
+        
+        console.log(`[DIAGNÓSTICO] ¡ÉXITO! La contraseña coincide. Generando token...`);
+
+        if (adminUser.isTwoFactorEnabled) {
+            return res.json({ twoFactorRequired: true, userId: adminUser._id });
+        }
+        
+        const sessionTokenPayload = { id: adminUser._id, role: adminUser.role, username: adminUser.username };
+        const sessionToken = jwt.sign(sessionTokenPayload, process.env.JWT_SECRET, { expiresIn: '8h' });
+        
+        res.json({
+            _id: adminUser._id,
+            username: adminUser.username,
+            role: adminUser.role,
+            isTwoFactorEnabled: adminUser.isTwoFactorEnabled,
+            token: sessionToken,
+        });
+
     } catch (error) {
+        console.error('[DIAGNÓSTICO] Error catastrófico en el bloque try/catch:', error);
         res.status(500).json({ message: 'Error del servidor' });
     }
 };
