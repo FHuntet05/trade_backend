@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN FINAL, COMPLETA Y ORDENADA)
+// backend/index.js (VERSIÓN FINAL, COMPLETA Y DE DEPURACIÓN FORZADA)
 
 // -----------------------------------------------------------------------------
 // 1. IMPORTACIONES
@@ -7,11 +7,11 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
+const morgan = require('morgan'); // Logger para peticiones HTTP
 require('dotenv').config();
-require('colors'); // Para logs de consola coloridos (npm install colors)
+require('colors'); 
 
 // --- Carga preventiva de modelos de Mongoose ---
-// Esto previene errores de "Schema hasn't been registered"
 require('./models/userModel');
 require('./models/toolModel');
 require('./models/transactionModel');
@@ -35,7 +35,6 @@ const adminRoutes = require('./routes/adminRoutes');
 const treasuryRoutes = require('./routes/treasuryRoutes');
 
 // --- Importación de Middlewares de Manejo de Errores ---
-// Estos son cruciales para evitar que las peticiones se queden colgadas
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 
 
@@ -46,13 +45,21 @@ const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 // --- Configuración de Middlewares de Express ---
-// El orden es importante: CORS -> JSON Parser -> RUTAS -> Error Handlers
-app.use(cors());       // Habilita Cross-Origin Resource Sharing
-app.use(express.json()); // Permite al servidor aceptar y parsear JSON en el body de las peticiones
+app.use(cors());
+app.use(express.json());
+// Usamos morgan en modo 'dev' para tener logs detallados de cada petición
+app.use(morgan('dev'));
 
 // -----------------------------------------------------------------------------
 // 3. DEFINICIÓN DE RUTAS DE LA API
 // -----------------------------------------------------------------------------
+
+// Ruta de diagnóstico de salud
+app.get('/health', (req, res) => {
+    console.log(`[HEALTH CHECK] Ruta /health alcanzada a las ${new Date().toISOString()}`.bgGreen.black);
+    res.status(200).json({ status: 'ok', time: new Date() });
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/tools', toolRoutes);
 app.use('/api/ranking', rankingRoutes);
@@ -66,7 +73,6 @@ app.use('/api/treasury', treasuryRoutes);
 // --- Ruta especial para el Webhook de Telegram ---
 const secretPath = `/api/telegram-webhook/${bot.secretPathComponent()}`;
 app.post(secretPath, (req, res) => {
-    // Pasa la petición directamente al manejador de Telegraf
     bot.handleUpdate(req.body, res);
 });
 
@@ -83,7 +89,6 @@ const WELCOME_MESSAGE =
   `🔹 *Crecer:* Invita a tus amigos y gana comisiones por su actividad.\n\n` +
   `Haz clic en el botón de abajo para lanzar la aplicación y empezar tu viaje.`;
 
-// Función de utilidad para escapar caracteres especiales de MarkdownV2
 function escapeMarkdownV2(text) {
   const charsToEscape = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
   return charsToEscape.reduce((acc, char) => acc.replace(new RegExp('\\' + char, 'g'), '\\' + char), text);
@@ -94,17 +99,11 @@ bot.command('start', async (ctx) => {
         const newUserId = ctx.from.id.toString();
         const startPayload = ctx.startPayload ? ctx.startPayload.trim() : null;
         if (startPayload && startPayload !== newUserId) {
-            await PendingReferral.updateOne(
-                { newUserId: newUserId }, 
-                { $set: { referrerId: startPayload, createdAt: new Date() } }, 
-                { upsert: true }
-            );
+            await PendingReferral.updateOne({ newUserId }, { $set: { referrerId: startPayload, createdAt: new Date() } }, { upsert: true });
         }
         await ctx.replyWithMarkdownV2(
             escapeMarkdownV2(WELCOME_MESSAGE),
-            Markup.inlineKeyboard([
-              [Markup.button.webApp('🚀 Abrir App', process.env.FRONTEND_URL)]
-            ])
+            Markup.inlineKeyboard([ [Markup.button.webApp('🚀 Abrir App', process.env.FRONTEND_URL)] ])
         );
     } catch (error) {
         console.error('[Bot] Error en el comando /start:'.red, error.message);
@@ -119,10 +118,7 @@ bot.telegram.setMyCommands([
 // -----------------------------------------------------------------------------
 // 5. MANEJO DE ERRORES GLOBALES
 // -----------------------------------------------------------------------------
-// Estos deben ser los ÚLTIMOS middlewares en ser añadidos.
-// Si ninguna ruta anterior coincide, se ejecutará `notFound`.
 app.use(notFound);
-// Si cualquier ruta anterior lanza un error, se ejecutará `errorHandler`.
 app.use(errorHandler);
 
 
@@ -133,10 +129,10 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function startServer() {
     try {
+        console.log('Intentando conectar a MongoDB...'.yellow);
         await mongoose.connect(process.env.MONGO_URI);
         console.log('✅ Conexión a MongoDB exitosa.'.green.bold);
         
-        // Iniciar servicios de fondo
         await startPriceService();
         startMonitoring();
 
@@ -144,7 +140,6 @@ async function startServer() {
         app.listen(PORT, async () => {
             console.log(`🚀 Servidor Express corriendo en el puerto ${PORT}`.cyan.bold);
             
-            // Configuración del Webhook de Telegram después de que el servidor esté escuchando
             try {
                 console.log('⏳ Esperando 10 segundos para estabilizar...'.yellow);
                 await sleep(10000);
@@ -167,9 +162,9 @@ async function startServer() {
 
     } catch (error) {
         console.error("‼️ ERROR FATAL DURANTE EL ARRANQUE:".red.bold, error.message);
-        process.exit(1); // Detiene la aplicación si no se puede conectar a la DB
+        console.error(error); // Imprime el objeto de error completo para más detalles
+        process.exit(1);
     }
 }
 
-// Iniciar el servidor
 startServer();
