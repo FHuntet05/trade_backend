@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN CORREGIDA Y ROBUSTA v14.0)
+// backend/index.js (VERSIÓN CORREGIDA, ROBUSTA Y BLINDADA v14.0)
 
 // -----------------------------------------------------------------------------
 // 1. IMPORTACIONES
@@ -7,9 +7,9 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
-const morgan = require('morgan'); // Logger para peticiones HTTP
+const morgan = require('morgan');
 require('dotenv').config();
-require('colors'); 
+require('colors');
 
 // --- Carga preventiva de modelos de Mongoose ---
 require('./models/userModel');
@@ -37,48 +37,46 @@ const treasuryRoutes = require('./routes/treasuryRoutes');
 // --- Importación de Middlewares de Manejo de Errores ---
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 
-
 // -----------------------------------------------------------------------------
 // 2. INICIALIZACIÓN Y CONFIGURACIÓN
 // -----------------------------------------------------------------------------
 const app = express();
+
+// --- MEJORA CRÍTICA: Validación de variables de entorno esenciales ---
+if (!process.env.TELEGRAM_BOT_TOKEN) {
+    console.error("‼️ ERROR FATAL: La variable de entorno TELEGRAM_BOT_TOKEN no está definida.".red.bold);
+    process.exit(1); // Detiene la ejecución si el token no existe
+}
+
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// --- MEJORA: Configuración de CORS Avanzada y Específica ---
-const whitelist = [process.env.FRONTEND_URL, process.env.ADMIN_URL];
+// --- Configuración de CORS Avanzada y Específica ---
+const whitelist = [process.env.FRONTEND_URL, process.env.ADMIN_URL].filter(Boolean); // filter(Boolean) elimina valores undefined/null
 const corsOptions = {
     origin: function (origin, callback) {
-        // Permitir peticiones sin 'origin' (como Postman o apps móviles) o si el origen está en la whitelist
         if (!origin || whitelist.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
-            callback(new Error('Not allowed by CORS'));
+            callback(new Error(`El origen '${origin}' no está permitido por CORS.`));
         }
     },
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
-    credentials: true, // Permitir cookies y cabeceras de autorización
+    credentials: true,
     allowedHeaders: "Origin, X-Requested-With, Content-Type, Accept, Authorization"
 };
 
-// **PASO 1: Responder a las Preflight Requests (OPTIONS) en TODAS las rutas.**
-// Esto es CRÍTICO para que las peticiones con 'Authorization' header funcionen.
 app.options('*', cors(corsOptions)); 
-
-// **PASO 2: Aplicar la configuración de CORS a TODAS las peticiones posteriores.**
 app.use(cors(corsOptions));
-// app.use(cors()); // <-- LÍNEA PROBLEMÁTICA ELIMINADA
 
 app.use(express.json());
-// Usamos morgan en modo 'dev' para tener logs detallados de cada petición
 app.use(morgan('dev'));
 
 // -----------------------------------------------------------------------------
 // 3. DEFINICIÓN DE RUTAS DE LA API
 // -----------------------------------------------------------------------------
+const secretPath = `/api/telegram-webhook/${bot.secretPathComponent()}`;
 
-// Ruta de diagnóstico de salud
 app.get('/health', (req, res) => {
-    console.log(`[HEALTH CHECK] Ruta /health alcanzada a las ${new Date().toISOString()}`.bgGreen.black);
     res.status(200).json({ status: 'ok', time: new Date() });
 });
 
@@ -93,11 +91,10 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
 
 // --- Ruta especial para el Webhook de Telegram ---
-const secretPath = `/api/telegram-webhook/${bot.secretPathComponent()}`;
+// Se define después de las rutas principales para mayor claridad
 app.post(secretPath, (req, res) => {
     bot.handleUpdate(req.body, res);
 });
-
 
 // -----------------------------------------------------------------------------
 // 4. LÓGICA DEL BOT DE TELEGRAM
@@ -136,13 +133,11 @@ bot.telegram.setMyCommands([
     { command: 'start', description: 'Inicia o reinicia la aplicación' }
 ]);
 
-
 // -----------------------------------------------------------------------------
 // 5. MANEJO DE ERRORES GLOBALES
 // -----------------------------------------------------------------------------
 app.use(notFound);
 app.use(errorHandler);
-
 
 // -----------------------------------------------------------------------------
 // 6. FUNCIÓN DE ARRANQUE DEL SERVIDOR
@@ -163,28 +158,27 @@ async function startServer() {
             console.log(`🚀 Servidor Express corriendo en el puerto ${PORT}`.cyan.bold);
             
             try {
-                console.log('⏳ Esperando 10 segundos para estabilizar...'.yellow);
-                await sleep(10000);
-                
                 const botInfo = await bot.telegram.getMe();
                 console.log(`✅ Conectado como bot: ${botInfo.username}.`.blue);
 
-                console.log('🔧 Limpiando webhook anterior...'.yellow);
-                await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-
                 const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
-                console.log('🔧 Registrando nuevo webhook en:'.yellow, webhookUrl);
-                await bot.telegram.setWebhook(webhookUrl);
-
+                console.log('🔧 Configurando webhook en:'.yellow, webhookUrl);
+                
+                // Espera opcional antes de configurar el webhook
+                await sleep(2000); 
+                
+                await bot.telegram.setWebhook(webhookUrl, { drop_pending_updates: true });
                 console.log(`✅ Webhook configurado exitosamente.`.green.bold);
-            } catch (webhookError) {
-                console.error("‼️ ERROR CRÍTICO AL CONFIGURAR TELEGRAM:".red.bold, webhookError.message);
+
+            } catch (telegramError) {
+                console.error("‼️ ERROR CRÍTICO AL CONFIGURAR TELEGRAM:".red.bold, telegramError.message);
+                console.log("--> Verifique que el TELEGRAM_BOT_TOKEN es correcto y que la URL del backend es accesible públicamente.".yellow);
             }
         });
 
     } catch (error) {
         console.error("‼️ ERROR FATAL DURANTE EL ARRANQUE:".red.bold, error.message);
-        console.error(error); // Imprime el objeto de error completo para más detalles
+        console.error(error);
         process.exit(1);
     }
 }
