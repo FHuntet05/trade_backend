@@ -79,40 +79,32 @@ async function startServer() {
     try {
         await mongoose.connect(process.env.MONGO_URI);
         console.log('✅ Conexión a MongoDB exitosa.');
-
-        const pricesLoaded = await startPriceService();
-        if (!pricesLoaded) {
-            const oldPricesCount = await Price.countDocuments();
-            if (oldPricesCount < 3) {
-                console.warn("⚠️ ADVERTENCIA: Servicio de precios falló y no hay datos de respaldo. La app podría no funcionar correctamente.");
-            } else {
-                console.warn("⚠️ ADVERTENCIA: No se pudo contactar a CoinGecko. Usando precios de la BD.");
-            }
-        } else {
-            console.log("✅ Servicio de precios inicializado.");
-        }
         
+        await startPriceService();
         startMonitoring();
-        console.log("✅ Monitor de transacciones iniciado.");
 
         const PORT = process.env.PORT || 5000;
         app.listen(PORT, async () => {
             console.log(`🚀 Servidor Express corriendo en el puerto ${PORT}`);
 
-            // --- CORRECCIÓN CLAVE ---
-            // Aumentamos el tiempo de espera a 8 segundos (8000ms).
-            // Esto le da a Render tiempo suficiente para que el DNS de la URL pública se propague
-            // antes de que intentemos registrar el webhook con Telegram.
             try {
-                console.log('⏳ Esperando 8 segundos para la estabilización del DNS antes de configurar el webhook...');
-                await sleep(8000); 
+                console.log('⏳ Esperando 10 segundos para la estabilización del DNS...');
+                await sleep(10000);
+
+                // --- CORRECCIÓN CLAVE ---
+                // Eliminamos cualquier webhook antiguo para asegurar un estado limpio.
+                console.log('🔧 Limpiando configuración de webhook anterior...');
+                await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+
                 const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
+                console.log('🔧 Intentando registrar el nuevo webhook en la URL:', webhookUrl);
                 await bot.telegram.setWebhook(webhookUrl);
-                console.log(`✅ Webhook de Telegram configurado en: ${webhookUrl}`);
+
+                console.log(`✅ Webhook de Telegram configurado exitosamente.`);
                 console.log("🤖 El sistema está 100% operativo en modo Webhook.");
             } catch (webhookError) {
-                console.error("‼️ ERROR CRÍTICO: No se pudo configurar el Webhook de Telegram.", webhookError.message);
-                console.error("-> Causa probable: La variable de entorno BACKEND_URL no está configurada correctamente en Render o el DNS aún no se ha propagado.");
+                console.error("‼️ ERROR CRÍTICO: No se pudo configurar el Webhook de Telegram.");
+                console.error("-> Mensaje de Error:", webhookError.message);
             }
         });
 
