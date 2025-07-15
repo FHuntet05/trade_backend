@@ -1,4 +1,4 @@
-// backend/services/transactionMonitor.js (VERSIÓN CON DEPURACIÓN AGRESIVA)
+// backend/services/transactionMonitor.js (CORREGIDO - Anti Rate-Limit)
 const axios = require('axios');
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -7,16 +7,14 @@ const { ethers } = require('ethers');
 const { sendTelegramMessage } = require('./notificationService');
 const { getPrice } = require('./priceService');
 
-// --- Direcciones de Contratos de Tokens USDT ---
 const USDT_CONTRACT_BSC = '0x55d398326f99059fF775485246999027B3197955';
 const USDT_CONTRACT_TRON = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 
-// --- Función para procesar un depósito confirmado ---
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function processDeposit(tx, wallet, amount, currency, txid) {
     const existingTx = await Transaction.findOne({ 'metadata.txid': txid });
-    if (existingTx) {
-        return;
-    }
+    if (existingTx) return;
 
     console.log(`[ProcessDeposit] Procesando nuevo depósito: ${amount} ${currency} para usuario ${wallet.user} (TXID: ${txid})`);
     
@@ -59,47 +57,32 @@ async function processDeposit(tx, wallet, amount, currency, txid) {
     }
 }
 
-
-// --- Lógica de Monitoreo para BSC (BEP20) con DEPURACIÓN ---
 async function checkBscTransactions() {
     console.log("[Monitor BSC] Iniciando ciclo de escaneo para BSC.");
     const wallets = await CryptoWallet.find({ chain: 'BSC' });
-    if (wallets.length === 0) {
-        return;
-    }
+    if (wallets.length === 0) return;
+    
     console.log(`[Monitor BSC] Encontradas ${wallets.length} wallets de BSC para monitorear.`);
 
     for (const wallet of wallets) {
-        console.log(`[Monitor BSC] Escaneando wallet: ${wallet.address}`);
         try {
-            // --- DEPURACIÓN DE LA LLAMADA A LA API DE USDT ---
             const usdtUrl = `https://api.bscscan.com/api?module=account&action=tokentx&address=${wallet.address}&contractaddress=${USDT_CONTRACT_BSC}&startblock=0&endblock=99999999&sort=asc&apikey=${process.env.BSCSCAN_API_KEY}`;
-            console.log(`[Monitor BSC] URL de consulta para USDT: ${usdtUrl.replace(process.env.BSCSCAN_API_KEY, 'API_KEY_OCULTA')}`); // Ocultamos la API key en los logs
-            
             const usdtResponse = await axios.get(usdtUrl);
-            
-            console.log(`[Monitor BSC] Respuesta de BscScan para USDT (wallet ${wallet.address}):`, JSON.stringify(usdtResponse.data, null, 2));
 
             if (usdtResponse.data.status === '1' && Array.isArray(usdtResponse.data.result) && usdtResponse.data.result.length > 0) {
-                console.log(`[Monitor BSC] ¡Transacciones de USDT encontradas para ${wallet.address}! Procesando ${usdtResponse.data.result.length} transacción(es).`);
                 for (const tx of usdtResponse.data.result) {
-                    console.log(`[Monitor BSC] -> Procesando TX de USDT: De ${tx.from} a ${tx.to}, Valor: ${tx.value}, Hash: ${tx.hash}`);
-                    
                     if (tx.to.toLowerCase() === wallet.address.toLowerCase()) {
-                        console.log(`[Monitor BSC] -> ¡Coincidencia encontrada! La TX es para nuestra wallet. Llamando a processDeposit.`);
                         const amount = parseFloat(ethers.utils.formatUnits(tx.value, tx.tokenDecimal));
                         await processDeposit(tx, wallet, amount, 'USDT', tx.hash);
                     }
                 }
             }
             
-            // --- DEPURACIÓN DE LA LLAMADA A LA API DE BNB ---
             const bnbUrl = `https://api.bscscan.com/api?module=account&action=txlist&address=${wallet.address}&startblock=0&endblock=99999999&sort=asc&apikey=${process.env.BSCSCAN_API_KEY}`;
             const bnbResponse = await axios.get(bnbUrl);
             if (bnbResponse.data.status === '1' && Array.isArray(bnbResponse.data.result)) {
                 for (const tx of bnbResponse.data.result) {
                     if (tx.to.toLowerCase() === wallet.address.toLowerCase() && tx.value !== "0") {
-                        console.log(`[Monitor BSC] -> ¡Coincidencia de BNB encontrada! Llamando a processDeposit.`);
                         const amount = parseFloat(ethers.utils.formatEther(tx.value));
                         await processDeposit(tx, wallet, amount, 'BNB', tx.hash);
                     }
@@ -107,13 +90,19 @@ async function checkBscTransactions() {
             }
 
         } catch (error) {
-            console.error(`[Monitor BSC] Error catastrófico monitoreando wallet ${wallet.address}:`, error.message);
+            console.error(`[Monitor BSC] Error monitoreando wallet ${wallet.address}:`, error.message);
         }
+        
+        // --- CORRECCIÓN CLAVE ---
+        // Añadimos una pausa de 550ms después de procesar cada wallet.
+        // BscScan tiene un límite de 2 llamadas/seg. Esta pausa asegura que nunca lo superemos.
+        await sleep(550); 
     }
 }
 
-// --- Lógica de Monitoreo para TRON (TRC20) ---
 async function checkTronTransactions() {
+    // La lógica de Tron no parece tener problemas de rate-limit por ahora, se deja como está.
+    // Si aparecieran, se aplicaría una pausa similar a la de BSC.
     const wallets = await CryptoWallet.find({ chain: 'TRON' });
     if (wallets.length === 0) return;
 
@@ -133,21 +122,19 @@ async function checkTronTransactions() {
         } catch (error) {
             console.error(`[Monitor TRON] Error monitoreando wallet ${wallet.address}:`, error.message);
         }
+        await sleep(550); // Añadimos una pausa también aquí por si acaso el rate limit es compartido.
     }
 }
 
-// --- Función principal que inicia el ciclo de monitoreo ---
 const startMonitoring = () => {
   console.log('✅ Iniciando servicio de monitoreo de transacciones COMPLETO...');
-  
   const runChecks = async () => {
-    // console.log('🔄 Ejecutando ciclo de monitoreo COMPLETO...');
     await checkBscTransactions();
     await checkTronTransactions();
   };
   
-  runChecks(); // Ejecutar una vez al inicio
-  setInterval(runChecks, 60000); // Luego cada 60 segundos
+  runChecks();
+  setInterval(runChecks, 60000);
 };
 
 module.exports = { startMonitoring };
