@@ -1,4 +1,4 @@
-// backend/controllers/adminController.js (VERSIÓN DE PRODUCCIÓN - LIMPIA Y COMPLETA)
+// backend/controllers/adminController.js (CORREGIDO Y COMPLETO)
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const Tool = require('../models/toolModel');
@@ -6,6 +6,67 @@ const Setting = require('../models/settingsModel');
 const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
+
+// --- IMPLEMENTACIONES FALTANTES AÑADIDAS ---
+
+const getPendingWithdrawals = async (req, res) => {
+  // TODO: Implementar la lógica para obtener retiros pendientes.
+  // Por ahora, devolvemos un array vacío para que la ruta funcione.
+  try {
+    const pendingWithdrawals = await Transaction.find({ type: 'withdrawal', status: 'pending' }).populate('user', 'username telegramId');
+    res.json(pendingWithdrawals);
+  } catch (error) {
+    console.error("Error en getPendingWithdrawals:", error);
+    res.status(500).json({ message: "Error del servidor al obtener retiros pendientes." });
+  }
+};
+
+const processWithdrawal = async (req, res) => {
+  // TODO: Implementar la lógica para aprobar o rechazar un retiro.
+  // Por ahora, devolvemos un mensaje de éxito placeholder.
+  const { id } = req.params;
+  const { status, transactionHash } = req.body; // status puede ser 'completed' o 'rejected'
+  
+  if (!['completed', 'rejected'].includes(status)) {
+    return res.status(400).json({ message: "El estado debe ser 'completed' o 'rejected'." });
+  }
+  
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction();
+    const withdrawal = await Transaction.findById(id).session(session);
+
+    if (!withdrawal || withdrawal.type !== 'withdrawal' || withdrawal.status !== 'pending') {
+      throw new Error('Retiro no encontrado o ya ha sido procesado.');
+    }
+
+    withdrawal.status = status;
+    if (status === 'completed') {
+      withdrawal.metadata.transactionHash = transactionHash || 'N/A';
+      withdrawal.description = `Retiro completado.`;
+    } else { // status === 'rejected'
+      const user = await User.findById(withdrawal.user).session(session);
+      if (!user) throw new Error('Usuario del retiro no encontrado.');
+      // Devolver los fondos al usuario
+      user.balance.usdt += withdrawal.amount;
+      await user.save({ session });
+      withdrawal.description = `Retiro rechazado. Fondos devueltos al usuario.`;
+    }
+
+    const updatedWithdrawal = await withdrawal.save({ session });
+    await session.commitTransaction();
+    res.json({ message: `Retiro ${status}.`, withdrawal: updatedWithdrawal });
+
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Error en processWithdrawal:", error);
+    res.status(500).json({ message: error.message || "Error del servidor al procesar el retiro." });
+  } finally {
+    session.endSession();
+  }
+};
+
+// --- EL RESTO DEL CÓDIGO PERMANECE IGUAL ---
 
 const getAdminTestData = async (req, res) => {
   const userCount = await User.countDocuments();
@@ -237,8 +298,10 @@ const verifyAndEnableTwoFactor = async (req, res) => {
   }
 };
 
+// --- CORRECCIÓN FINAL: AÑADIR LAS FUNCIONES FALTANTES A LAS EXPORTACIONES ---
 module.exports = {
   getAdminTestData, getAllUsers, updateUser, setUserStatus, getDashboardStats,
   getAllTransactions, createManualTransaction, getAllTools, createTool, updateTool, deleteTool,
   getUserDetails, getSettings, updateSettings, generateTwoFactorSecret, verifyAndEnableTwoFactor,
+  getPendingWithdrawals, processWithdrawal // <-- AÑADIDAS AQUÍ
 };
