@@ -23,7 +23,7 @@ router.get('/users', protect, isAdmin, adminController.getAllUsers);
 router.get('/users/:id/details', protect, isAdmin, adminController.getUserDetails);
 router.put('/users/:id', protect, isAdmin, adminController.updateUser);
 router.put('/users/:id/status', protect, isAdmin, adminController.setUserStatus);
-
+router.get('/users/:id/referrals', protect, isAdmin, adminController.getUserReferrals);
 // --- Rutas de Gestión de Transacciones ---
 router.get('/transactions', protect, isAdmin, adminController.getAllTransactions);
 router.post('/transactions/manual', protect, isAdmin, adminController.createManualTransaction);

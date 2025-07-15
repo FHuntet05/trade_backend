@@ -1,4 +1,3 @@
-// backend/controllers/adminController.js (CORREGIDO Y COMPLETO)
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const Tool = require('../models/toolModel');
@@ -7,18 +6,66 @@ const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 
-// --- IMPLEMENTACIONES FALTANTES AÑADIDAS ---
-
+// --- LÓGICA DE RETIROS MEJORADA CON PAGINACIÓN ---
 const getPendingWithdrawals = async (req, res) => {
-  // TODO: Implementar la lógica para obtener retiros pendientes.
-  // Por ahora, devolvemos un array vacío para que la ruta funcione.
   try {
-    const pendingWithdrawals = await Transaction.find({ type: 'withdrawal', status: 'pending' }).populate('user', 'username telegramId');
-    res.json(pendingWithdrawals);
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const filter = { type: 'withdrawal', status: 'pending' };
+
+    const totalWithdrawals = await Transaction.countDocuments(filter);
+    const pendingWithdrawals = await Transaction.find(filter)
+      .populate('user', 'username telegramId photoUrl')
+      .sort({ createdAt: 'desc' })
+      .limit(limit)
+      .skip(limit * (page - 1));
+
+    res.json({
+      withdrawals: pendingWithdrawals,
+      page,
+      pages: Math.ceil(totalWithdrawals / limit),
+      total: totalWithdrawals
+    });
   } catch (error) {
     console.error("Error en getPendingWithdrawals:", error);
     res.status(500).json({ message: "Error del servidor al obtener retiros pendientes." });
   }
+};
+
+// --- NUEVA FUNCIÓN PARA OBTENER REFERIDOS ---
+const getUserReferrals = async (req, res) => {
+    try {
+        const userId = req.params.id;
+        const user = await User.findById(userId)
+            .populate({
+                path: 'referrals.user',
+                select: 'username fullName photoUrl createdAt balance', // Seleccionamos los campos que queremos mostrar
+            });
+
+        if (!user) {
+            return res.status(404).json({ message: "Usuario no encontrado." });
+        }
+
+        // Estructuramos los datos para el frontend
+        const referralsData = user.referrals.map(ref => ({
+            _id: ref.user._id,
+            username: ref.user.username,
+            fullName: ref.user.fullName,
+            photoUrl: ref.user.photoUrl,
+            joinDate: ref.user.createdAt,
+            totalDeposit: ref.user.balance.usdt, // Asumimos que el balance USDT refleja depósitos
+            level: ref.level
+        }));
+
+        res.json({
+            totalReferrals: referralsData.length,
+            referrals: referralsData,
+        });
+
+    } catch (error) {
+        console.error("Error en getUserReferrals:", error);
+        res.status(500).json({ message: "Error del servidor al obtener los referidos." });
+    }
 };
 
 const processWithdrawal = async (req, res) => {
