@@ -1,4 +1,4 @@
-// backend/controllers/treasuryController.js (CORREGIDO - Arreglo de TronWeb)
+// backend/controllers/treasuryController.js (VERSIÓN FINAL Y CORREGIDA)
 
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
@@ -11,12 +11,11 @@ const tronWeb = new TronWeb({
   headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
 });
 
-// ... (direcciones de contratos y getHotWallets no cambian) ...
+// --- Direcciones de Contratos de Tokens ---
 const USDT_TRON_ADDRESS = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
 
 const getHotWallets = () => {
-    // Verificación de variable de entorno
     if (!process.env.MASTER_SEED_PHRASE) {
         throw new Error("La variable de entorno MASTER_SEED_PHRASE no está definida.");
     }
@@ -33,8 +32,6 @@ const getHotWalletBalances = async (req, res) => {
     try {
         const wallets = getHotWallets();
 
-        // --- CORRECCIÓN CLAVE ---
-        // Establecemos la dirección por defecto para las llamadas de solo lectura en TronWeb.
         tronWeb.setAddress(wallets.tron.address);
 
         const usdtTronContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
@@ -50,14 +47,16 @@ const getHotWalletBalances = async (req, res) => {
             bscProvider.getBalance(wallets.bsc.address),
             usdtBscContract.balanceOf(wallets.bsc.address),
             tronWeb.trx.getBalance(wallets.tron.address),
-            usdtTronContract.balanceOf(wallets.tron.address).call() // Ahora esta llamada funcionará
+            usdtTronContract.balanceOf(wallets.tron.address).call()
         ]);
 
         res.json({
             BNB: ethers.utils.formatEther(bnbBalance),
             USDT_BSC: ethers.utils.formatUnits(usdtBscBalance, 6),
             TRX: tronWeb.fromSun(trxBalance),
-            USDT_TRON: (usdtTronBalance.toNumber() / 1e6).toString()
+            // --- CORRECCIÓN CLAVE ---
+            // Usamos parseFloat() en lugar de .toNumber() porque tronweb devuelve un string/número.
+            USDT_TRON: (parseFloat(usdtTronBalance) / 1e6).toString()
         });
 
     } catch (error) {
@@ -68,8 +67,62 @@ const getHotWalletBalances = async (req, res) => {
 
 /** @desc Ejecutar un barrido de una hot wallet */
 const sweepWallet = async (req, res) => {
-    // ... (la función sweepWallet no necesita cambios, ya configura la private key que es suficiente) ...
-    // ... (el resto del archivo es idéntico) ...
+    // Esta función no necesita cambios, la incluimos para que el archivo esté completo.
+    const { currency, destinationAddress, adminPassword } = req.body;
+    if (!currency || !destinationAddress || !adminPassword) {
+        return res.status(400).json({ message: 'Moneda, dirección de destino y contraseña son requeridos.' });
+    }
+    try {
+        const adminUser = await User.findById(req.user.id).select('+password');
+        const isMatch = await adminUser.matchPassword(adminPassword);
+        if (!isMatch) {
+            return res.status(401).json({ message: 'Contraseña de administrador incorrecta.' });
+        }
+        const wallets = getHotWallets();
+        let txHash;
+        if (currency === 'BNB' || currency === 'USDT_BSC') {
+            const bscSigner = new ethers.Wallet(wallets.bsc.privateKey, bscProvider);
+            if (currency === 'BNB') {
+                const balance = await bscProvider.getBalance(wallets.bsc.address);
+                const gasPrice = await bscProvider.getGasPrice();
+                const gasLimit = ethers.BigNumber.from('21000');
+                const gasCost = gasPrice.mul(gasLimit);
+                if (balance.lte(gasCost)) throw new Error('Saldo BNB insuficiente para cubrir el gas.');
+                const amountToSend = balance.sub(gasCost);
+                const tx = await bscSigner.sendTransaction({ to: destinationAddress, value: amountToSend });
+                txHash = tx.hash;
+            } else { // USDT_BSC
+                const usdtContract = new ethers.Contract(USDT_BSC_ADDRESS, ['function transfer(address, uint256) returns (bool)', 'function balanceOf(address) view returns (uint256)'], bscSigner);
+                const balance = await usdtContract.balanceOf(wallets.bsc.address);
+                if (balance.isZero()) throw new Error('No hay saldo USDT (BSC) para barrer.');
+                const tx = await usdtContract.transfer(destinationAddress, balance);
+                txHash = tx.hash;
+            }
+        } else if (currency === 'TRX' || currency === 'USDT_TRON') {
+            tronWeb.setPrivateKey(wallets.tron.privateKey);
+            if (currency === 'TRX') {
+                const balance = await tronWeb.trx.getBalance(wallets.tron.address);
+                const amountToSend = balance - 1500000;
+                if (amountToSend <= 0) throw new Error('Saldo TRX insuficiente para cubrir el gas.');
+                const tradeobj = await tronWeb.transactionBuilder.sendTrx(destinationAddress, amountToSend, wallets.tron.address);
+                const signedtxn = await tronWeb.trx.sign(tradeobj);
+                const receipt = await tronWeb.trx.sendRawTransaction(signedtxn);
+                txHash = receipt.txid;
+            } else { // USDT_TRON
+                const usdtContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
+                const balance = await usdtContract.balanceOf(wallets.tron.address).call();
+                if (parseFloat(balance) <= 0) throw new Error('No hay saldo USDT (TRON) para barrer.');
+                const tx = await usdtContract.transfer(destinationAddress, balance).send();
+                txHash = tx;
+            }
+        } else {
+            return res.status(400).json({ message: 'Moneda no soportada para barrido.' });
+        }
+        res.json({ message: `Barrido de ${currency} iniciado.`, transactionHash: txHash });
+    } catch (error) {
+        console.error(`Error durante el barrido de ${currency}:`, error);
+        res.status(500).json({ message: error.message || 'Error al ejecutar el barrido.' });
+    }
 };
 
 module.exports = {
