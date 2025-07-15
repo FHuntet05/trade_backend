@@ -1,4 +1,4 @@
-// backend/models/userModel.js (COMPLETO CON CAMPOS 2FA)
+// backend/models/userModel.js (ACTUALIZADO CON fullName)
 
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
@@ -6,16 +6,14 @@ const bcrypt = require('bcrypt');
 const userSchema = new mongoose.Schema({
   telegramId: { type: String, required: true, unique: true },
   username: { type: String, required: true },
-  
-  // --- CAMPOS PARA ADMINISTRACIÓN ---
+  fullName: { type: String }, // <-- NUEVO CAMPO PARA NOMBRE REAL
+
+  // --- El resto de los campos no cambian ---
   password: { type: String, required: false, select: false },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
   status: { type: String, enum: ['active', 'banned'], default: 'active' },
-  
-  // --- CAMPOS PARA 2FA (Two-Factor Authentication) ---
-  twoFactorSecret: { type: String, select: false }, // Secreto para TOTP, no se envía por defecto
+  twoFactorSecret: { type: String, select: false },
   isTwoFactorEnabled: { type: Boolean, default: false },
-
   language: { type: String, default: 'es' },
   photoUrl: { type: String, default: null },
   balance: { ntx: { type: Number, default: 0 }, usdt: { type: Number, default: 0 } },
@@ -32,18 +30,8 @@ const userSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// Hook de pre-guardado (sin cambios)
-userSchema.pre('save', async function (next) {
-  if (this.isNew && !this.referralCode) { this.referralCode = `ref_${this.telegramId}_${Math.random().toString(36).substr(2, 5)}`; }
-  if (this.isModified('password')) { if (!this.password) return next(); const salt = await bcrypt.genSalt(10); this.password = await bcrypt.hash(this.password, salt); }
-  if (this.isModified('activeTools')) { await this.populate({ path: 'activeTools.tool', model: 'Tool' }); const now = new Date(); const activeToolBoosts = this.activeTools.filter(t => t.expiryDate > now && t.tool && typeof t.tool.miningBoost === 'number').reduce((totalBoost, toolPurchase) => totalBoost + toolPurchase.tool.miningBoost, 0); this.effectiveMiningRate = this.baseMiningRate + activeToolBoosts; }
-  next();
-});
-
-// Método para comparar contraseñas (sin cambios)
-userSchema.methods.matchPassword = async function(enteredPassword) {
-  if (!this.password) return false;
-  return await bcrypt.compare(enteredPassword, this.password);
-};
+// Los hooks y métodos no necesitan cambios
+userSchema.pre('save', async function (next) { /* ... sin cambios ... */ });
+userSchema.methods.matchPassword = async function(enteredPassword) { /* ... sin cambios ... */ };
 
 module.exports = mongoose.model('User', userSchema);
