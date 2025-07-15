@@ -1,18 +1,10 @@
-// backend/routes/treasuryRoutes.js (VERSIÓN 100% CORREGIDA)
 const express = require('express');
 const router = express.Router();
-const { 
-    getHotWalletBalances, 
-    sweepWallet, 
-    getSweepableWallets
-} = require('../controllers/treasuryController');
-
-// Importación correcta con desestructuración y el nombre correcto de la función
+const { getHotWalletBalances, sweepWallet, getSweepableWallets } = require('../controllers/treasuryController');
 const { protect, isAdmin } = require('../middleware/authMiddleware');
 
-// Usamos `isAdmin`, que es el nombre correcto de la función
-router.route('/hot-balances').get(protect, isAdmin, getHotWalletBalances);
-router.route('/sweep').post(protect, isAdmin, sweepWallet);
-router.route('/sweepable-wallets').get(protect, isAdmin, getSweepableWallets);
+router.get('/hot-balances', protect, isAdmin, getHotWalletBalances);
+router.post('/sweep', protect, isAdmin, sweepWallet);
+router.get('/sweepable-wallets', protect, isAdmin, getSweepableWallets);
 
 module.exports = router;
