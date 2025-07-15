@@ -22,6 +22,12 @@ const cryptoWalletSchema = new mongoose.Schema({
     type: Number,
     required: true,
   },
+  // --- NUEVO CAMPO STATEFUL ---
+  lastScannedBlock: {
+    type: Number,
+    required: true,
+    default: 0, // Inicia en 0 para billeteras nuevas
+  },
 }, { timestamps: true });
 
 // Índice compuesto para asegurar que un usuario solo tenga una wallet por cadena
