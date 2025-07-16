@@ -1,3 +1,4 @@
+// backend/routes/treasuryRoutes.js (VERSIÓN v17.7 - SIMPLIFICADA)
 const express = require('express');
 const router = express.Router();
 const { getHotWalletBalances, sweepWallet, getSweepableWallets } = require('../controllers/treasuryController');
