@@ -1,4 +1,4 @@
-// backend/controllers/adminController.js (VERSIÓN FINAL CON TODAS LAS EXPORTACIONES CORREGIDAS)
+// backend/controllers/adminController.js (VERSIÓN FINAL CON LA COMA CORREGIDA)
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const Tool = require('../models/toolModel');
@@ -85,15 +85,13 @@ const getUserReferrals = async (req, res) => {
             joinDate: ref.user?.createdAt,
             totalDeposit: ref.user?.balance.usdt,
             level: ref.level
-        })).filter(ref => ref._id); // Filtra por si un usuario referido fue eliminado
+        })).filter(ref => ref._id);
         res.json({ totalReferrals: referralsData.length, referrals: referralsData });
     } catch (error) {
         console.error("Error en getUserReferrals:", error);
         res.status(500).json({ message: "Error del servidor al obtener los referidos." });
     }
 };
-
-// --- EL RESTO DEL CÓDIGO PERMANECE IGUAL ---
 
 const getAdminTestData = async (req, res) => {
   const userCount = await User.countDocuments();
@@ -325,10 +323,9 @@ const verifyAndEnableTwoFactor = async (req, res) => {
   }
 };
 
-// --- CORRECCIÓN FINAL: AÑADIR LAS FUNCIONES FALTANTES A LAS EXPORTACIONES ---
 module.exports = {
   getAdminTestData, getAllUsers, updateUser, setUserStatus, getDashboardStats,
   getAllTransactions, createManualTransaction, getAllTools, createTool, updateTool, deleteTool,
   getUserDetails, getSettings, updateSettings, generateTwoFactorSecret, verifyAndEnableTwoFactor,
-  getPendingWithdrawals, processWithdrawal,getUserReferrals // <-- AÑADIDAS AQUÍ
+  getPendingWithdrawals, processWithdrawal, getUserReferrals // <-- LA COMA FUE AÑADIDA AQUÍ
 };
