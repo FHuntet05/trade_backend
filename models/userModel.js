@@ -1,6 +1,6 @@
-// backend/models/userModel.js (VERSIÓN v15.0 - CAMPO DE FOTO CORREGIDO)
+// backend/models/userModel.js (VERSIÓN v15.1 - REVERSIÓN A BCRYPT)
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs'); // Usar bcryptjs es una buena práctica para evitar dependencias de compilación
+const bcrypt = require('bcrypt'); // <-- CORRECCIÓN: Revertido a 'bcrypt' para una solución inmediata.
 
 const userSchema = new mongoose.Schema({
   telegramId: { type: String, required: true, unique: true, index: true },
@@ -16,8 +16,6 @@ const userSchema = new mongoose.Schema({
   
   language: { type: String, default: 'es' },
   
-  // --- CAMBIO ARQUITECTÓNICO CLAVE ---
-  // Reemplazamos photoUrl (temporal) por photoFileId (permanente).
   photoFileId: { type: String, default: null },
 
   balance: { 
@@ -49,28 +47,22 @@ const userSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// Hasheo de contraseña antes de guardar (si se proporciona)
 userSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) {
-    next();
+  if (!this.isModified('password') || !this.password) {
+    return next();
   }
-  if (this.password) {
-      const salt = await bcrypt.genSalt(10);
-      this.password = await bcrypt.hash(this.password, salt);
-  }
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
   next();
 });
 
-// Comparación de contraseña para el login
 userSchema.methods.matchPassword = async function(enteredPassword) {
-  if (!this.password) return false;
+  if (!this.password || !enteredPassword) return false;
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
-// Pequeña mejora: Generar código de referido si no existe al guardar un nuevo usuario
 userSchema.pre('save', function(next) {
     if (this.isNew && !this.referralCode) {
-        // Genera un código simple basado en el timestamp y un aleatorio.
         this.referralCode = `ref_${Date.now().toString(36)}${Math.random().toString(36).substr(2, 5)}`;
     }
     next();
