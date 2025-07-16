@@ -9,6 +9,7 @@ const QRCode = require('qrcode');
 const transactionService = require('../services/transactionService');
 // CORRECCIÓN v17.1: Se añade la importación que faltaba.
 const { getTemporaryPhotoUrl } = require('./userController'); 
+const asyncHandler = require('express-async-handler');
 
 const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const PLACEHOLDER_AVATAR_URL = `${process.env.FRONTEND_URL}/assets/images/user-avatar-placeholder.png`;

@@ -7,6 +7,7 @@ const Transaction = require('../models/transactionModel');
 const asyncHandler = require('express-async-handler');
 const transactionService = require('../services/transactionService');
 const mongoose = require('mongoose');
+const asyncHandler = require('express-async-handler');
 
 const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
 const tronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY } });
