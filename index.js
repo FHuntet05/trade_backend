@@ -73,7 +73,7 @@ async function startServer() {
         startMonitoring();
         const PORT = process.env.PORT || 5000;
         app.listen(PORT, async () => {
-            console.log(`🚀 Servidor Express corriendo en el puerto ${PORT}`);
+            console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
             try {
                 const botInfo = await bot.telegram.getMe();
                 console.log(`✅ Conectado como bot: ${botInfo.username}.`);
