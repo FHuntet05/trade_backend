@@ -1,5 +1,6 @@
-// backend/controllers/treasuryController.js (VERSIÓN v15.1 - CON BARRIDO REAL)
+// backend/controllers/treasuryController.js (VERSIÓN v15.2 - IMPORTE DE TRONWEB CORREGIDO)
 const { ethers } = require('ethers');
+// --- CORRECCIÓN DEFINITIVA ---
 const TronWeb = require('tronweb').default.TronWeb; 
 const User = require('../models/userModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
@@ -34,8 +35,9 @@ const getHotWalletBalances = asyncHandler(async (req, res) => {
 const getSweepableWallets = asyncHandler(async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const page = parseInt(req.query.page) || 1;
-    const totalWallets = await CryptoWallet.countDocuments({ $or: [ { 'balances.0': { $exists: true } } ] });
-    const walletsOnPage = await CryptoWallet.find({ $or: [ { 'balances.0': { $exists: true } } ] }).populate('user', 'username').limit(limit).skip(limit * (page - 1));
+    const query = {}; // Podemos añadir filtros si es necesario
+    const totalWallets = await CryptoWallet.countDocuments(query);
+    const walletsOnPage = await CryptoWallet.find(query).populate('user', 'username').limit(limit).skip(limit * (page - 1));
     const usdtTronContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
     const balancePromises = walletsOnPage.map(async (wallet) => {
         let balances = [];
@@ -51,7 +53,7 @@ const getSweepableWallets = asyncHandler(async (req, res) => {
                 if (usdtAmount > 0) balances.push({ currency: 'USDT_TRON', amount: usdtAmount.toString() });
             }
         } catch (e) { console.error(`Error al consultar saldo para wallet ${wallet.address}: ${e.message}`); }
-        if (balances.length > 0) return { _id: wallet._id, address: wallet.address, chain: wallet.chain, user: wallet.user ? wallet.user.username : 'Usuario Eliminado', balances: balances };
+        if (balances.length > 0) return { _id: wallet._id, address: wallet.address, chain: wallet.chain, user: wallet.user ? wallet.user.username : 'Usuario Eliminado', derivationIndex: wallet.derivationIndex, balances: balances };
         return null;
     });
     const results = await Promise.allSettled(balancePromises);

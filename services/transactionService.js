@@ -1,6 +1,7 @@
-// backend/services/transactionService.js (VERSIÓN v15.1 - CON LÓGICA DE BARRIDO)
+// backend/services/transactionService.js (VERSIÓN v15.2 - IMPORTE DE TRONWEB CORREGIDO)
 const { ethers } = require('ethers');
-const TronWeb = require('tronweb');
+// --- CORRECCIÓN DEFINITIVA ---
+const TronWeb = require('tronweb').default.TronWeb;
 
 const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
 const tronWeb = new TronWeb({
