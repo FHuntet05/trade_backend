@@ -1,4 +1,4 @@
-// backend/controllers/adminController.js (VERSIÓN v15.1 COMPLETA - SIN OMISIONES)
+// backend/controllers/adminController.js (VERSIÓN v16.7 - OPTIMIZADA)
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const Tool = require('../models/toolModel');
@@ -11,6 +11,7 @@ const transactionService = require('../services/transactionService');
 
 const qrCodeToDataURLPromise = util.promisify(QRCode.toDataURL);
 
+// OPTIMIZADO: Consulta directa y paginada.
 const getPendingWithdrawals = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -19,10 +20,11 @@ const getPendingWithdrawals = async (req, res) => {
 
     const totalWithdrawals = await Transaction.countDocuments(filter);
     const pendingWithdrawals = await Transaction.find(filter)
-      .populate('user', 'username telegramId photoFileId')
+      .populate('user', 'username telegramId') // No necesitamos photoFileId aquí.
       .sort({ createdAt: 'desc' })
       .limit(limit)
-      .skip(limit * (page - 1));
+      .skip(limit * (page - 1))
+      .lean(); // .lean() para un rendimiento mucho más rápido en lecturas.
 
     res.json({
       withdrawals: pendingWithdrawals,
@@ -61,14 +63,14 @@ const processWithdrawal = async (req, res) => {
     if (status === 'completed') {
       const recipientAddress = withdrawal.metadata.get('walletAddress');
       const amount = withdrawal.amount;
-      const currency = withdrawal.currency;
+      const currency = withdrawal.metadata.get('currency'); // Obtener de metadata
 
       if (!recipientAddress || !amount || !currency) {
         throw new Error('Datos de retiro incompletos (dirección, monto o moneda faltante) en la transacción.');
       }
       
       let txHash;
-      if (currency === 'USDT_TRON') {
+      if (currency.startsWith('USDT')) { // Más flexible
         console.log(`[ProcessWithdrawal] Iniciando envío de ${amount} ${currency} a ${recipientAddress}`);
         txHash = await transactionService.sendUsdtOnTron(recipientAddress, amount);
       } else {
@@ -80,13 +82,15 @@ const processWithdrawal = async (req, res) => {
       }
 
       withdrawal.metadata.set('transactionHash', txHash);
-      withdrawal.description = `Retiro completado automáticamente. Hash: ${txHash.substring(0,15)}...`;
+      withdrawal.description = `Retiro completado. Hash: ${txHash.substring(0,15)}...`;
 
     } else { // status === 'rejected'
       const user = await User.findById(withdrawal.user).session(session);
       if (!user) throw new Error('Usuario del retiro no encontrado.');
       
-      user.balance.usdt += withdrawal.amount;
+      const currencyKey = withdrawal.metadata.get('currency').split('_')[0].toLowerCase();
+      user.balance[currencyKey] += withdrawal.amount;
+      
       await user.save({ session });
       withdrawal.description = `Retiro rechazado. Fondos devueltos al saldo del usuario.`;
     }
@@ -105,29 +109,58 @@ const processWithdrawal = async (req, res) => {
   }
 };
 
+
+/**
+ * CORRECCIÓN v16.7: Reescribimos completamente la función.
+ * En lugar de usar .populate() que es extremadamente ineficiente para listas grandes,
+ * hacemos una consulta directa y paginada sobre la colección de usuarios, buscando
+ * aquellos cuyo 'referredBy' sea el ID del usuario actual.
+ * Esto es órdenes de magnitud más rápido y escalable.
+ */
 const getUserReferrals = async (req, res) => {
     try {
         const userId = req.params.id;
-        const user = await User.findById(userId).populate({
-            path: 'referrals.user',
-            select: 'username fullName photoUrl createdAt balance',
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
+            return res.status(400).json({ message: "ID de usuario no válido." });
+        }
+
+        const filter = { referredBy: new mongoose.Types.ObjectId(userId) };
+
+        const totalReferrals = await User.countDocuments(filter);
+        const referrals = await User.find(filter)
+            .select('username fullName telegramId createdAt balance.usdt')
+            .sort({ createdAt: -1 })
+            .limit(limit)
+            .skip(limit * (page - 1))
+            .lean(); // .lean() para un rendimiento óptimo
+        
+        const referralsData = referrals.map(ref => ({
+            _id: ref._id,
+            username: ref.username,
+            fullName: ref.fullName,
+            // Construimos la URL de la foto en el backend para que el frontend no tenga que hacerlo
+            photoUrl: `${process.env.BACKEND_URL}/api/users/${ref.telegramId}/photo`,
+            joinDate: ref.createdAt,
+            totalDeposit: ref.balance.usdt, // Asumimos que el depósito es en usdt
+            level: 1 // Simplificado a nivel 1, se puede expandir si es necesario
+        }));
+        
+        res.json({ 
+            totalReferrals, 
+            referrals: referralsData,
+            page,
+            pages: Math.ceil(totalReferrals / limit)
         });
-        if (!user) return res.status(404).json({ message: "Usuario no encontrado." });
-        const referralsData = user.referrals.map(ref => ({
-            _id: ref.user?._id,
-            username: ref.user?.username,
-            fullName: ref.user?.fullName,
-            photoUrl: ref.user?.photoUrl,
-            joinDate: ref.user?.createdAt,
-            totalDeposit: ref.user?.balance.usdt,
-            level: ref.level
-        })).filter(ref => ref._id);
-        res.json({ totalReferrals: referralsData.length, referrals: referralsData });
+
     } catch (error) {
         console.error("Error en getUserReferrals:", error);
         res.status(500).json({ message: "Error del servidor al obtener los referidos." });
     }
 };
+
 
 const getAdminTestData = async (req, res) => {
   try {
@@ -154,7 +187,12 @@ const getAllUsers = async (req, res) => {
       filter.$or = [{ username: searchRegex }, { telegramId: searchRegex }];
     }
     const count = await User.countDocuments(filter);
-    const users = await User.find(filter).sort({ createdAt: -1 }).limit(pageSize).skip(pageSize * (page - 1));
+    const users = await User.find(filter)
+      .select('username telegramId role status createdAt balance')
+      .sort({ createdAt: -1 })
+      .limit(pageSize)
+      .skip(pageSize * (page - 1))
+      .lean();
     res.json({ users, page, pages: Math.ceil(count / pageSize), totalUsers: count });
   } catch (error) {
     console.error("Error en getAllUsers:", error);
@@ -219,12 +257,18 @@ const getAllTransactions = async (req, res) => {
     const filter = {};
     if (type) filter.type = type;
     if (search) {
-      const searchRegex = new RegExp(search, 'i');
-      const usersFound = await User.find({ $or: [{ username: searchRegex }, { telegramId: searchRegex }] }).select('_id');
+      const usersFound = await User.find({ 
+          $or: [{ username: { $regex: search, $options: 'i' } }, { telegramId: { $regex: search, $options: 'i' } }] 
+      }).select('_id').lean();
       filter.user = { $in: usersFound.map(user => user._id) };
     }
     const count = await Transaction.countDocuments(filter);
-    const transactions = await Transaction.find(filter).sort({ createdAt: -1 }).populate('user', 'username photoUrl').limit(pageSize).skip(pageSize * (page - 1));
+    const transactions = await Transaction.find(filter)
+      .sort({ createdAt: -1 })
+      .populate('user', 'username telegramId')
+      .limit(pageSize)
+      .skip(pageSize * (page - 1))
+      .lean();
     res.json({ transactions, page, pages: Math.ceil(count / pageSize), totalTransactions: count });
   } catch (error) {
     console.error("Error en getAllTransactions:", error);
@@ -242,13 +286,13 @@ const createManualTransaction = async (req, res) => {
     session.startTransaction();
     const user = await User.findById(userId).session(session);
     if (!user) throw new Error('Usuario no encontrado.');
-    const balanceField = currency.toLowerCase() === 'usdt' ? 'balance.usdt' : 'balance.ntx';
-    const originalBalance = user.balance[currency.toLowerCase()];
+    const currencyKey = currency.toLowerCase();
+    const originalBalance = user.balance[currencyKey] || 0;
     if (type === 'admin_credit') {
-      user.balance[currency.toLowerCase()] += amount;
+      user.balance[currencyKey] += amount;
     } else {
       if (originalBalance < amount) throw new Error('Saldo insuficiente para realizar el débito.');
-      user.balance[currency.toLowerCase()] -= amount;
+      user.balance[currencyKey] -= amount;
     }
     await user.save({ session });
     const transaction = new Transaction({ user: userId, type, currency, amount, description: reason, status: 'completed', metadata: { adminId: req.user._id.toString(), adminUsername: req.user.username, originalBalance: originalBalance.toString() } });
@@ -266,7 +310,7 @@ const createManualTransaction = async (req, res) => {
 
 const getAllTools = async (req, res) => {
   try {
-    const tools = await Tool.find({}).sort({ vipLevel: 1 });
+    const tools = await Tool.find({}).sort({ vipLevel: 1 }).lean();
     res.json(tools);
   } catch (error) { res.status(500).json({ message: 'Error al obtener herramientas.' }); }
 };
@@ -312,12 +356,12 @@ const deleteTool = async (req, res) => {
 const getUserDetails = async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ message: 'ID de usuario no válido.' });
   try {
-    const user = await User.findById(req.params.id);
+    const user = await User.findById(req.params.id).lean(); // .lean() para un rendimiento óptimo
     if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
     const page = Number(req.query.page) || 1;
     const pageSize = 10;
     const transactionsCount = await Transaction.countDocuments({ user: user._id });
-    const transactions = await Transaction.find({ user: user._id }).sort({ createdAt: -1 }).limit(pageSize).skip(pageSize * (page - 1));
+    const transactions = await Transaction.find({ user: user._id }).sort({ createdAt: -1 }).limit(pageSize).skip(pageSize * (page - 1)).lean();
     res.json({ user, transactions: { items: transactions, page, pages: Math.ceil(transactionsCount / pageSize) } });
   } catch (error) {
     console.error("Error en getUserDetails:", error);
@@ -327,7 +371,7 @@ const getUserDetails = async (req, res) => {
 
 const getSettings = async (req, res) => {
   try {
-    const settings = await Setting.findOneAndUpdate({ singleton: 'global_settings' }, { $setOnInsert: { singleton: 'global_settings' } }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    const settings = await Setting.findOneAndUpdate({ singleton: 'global_settings' }, { $setOnInsert: { singleton: 'global_settings' } }, { upsert: true, new: true, setDefaultsOnInsert: true }).lean();
     res.json(settings);
   } catch (error) { res.status(500).json({ message: 'Error al obtener la configuración.' }); }
 };
