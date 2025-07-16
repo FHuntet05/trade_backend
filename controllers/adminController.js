@@ -1,4 +1,4 @@
-// backend/controllers/adminController.js (VERSIÓN FINAL CON LA COMA CORREGIDA)
+// backend/controllers/adminController.js (VERSIÓN CORREGIDA Y ENDURECIDA v15.0)
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const Tool = require('../models/toolModel');
@@ -6,6 +6,10 @@ const Setting = require('../models/settingsModel');
 const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
+const util = require('util'); // <-- PASO 1: Importar util
+
+// PASO 2: Crear una versión "promisificada" de la función de callback
+const qrCodeToDataURLPromise = util.promisify(QRCode.toDataURL);
 
 const getPendingWithdrawals = async (req, res) => {
   try {
@@ -93,13 +97,19 @@ const getUserReferrals = async (req, res) => {
     }
 };
 
+// MEJORA DE ESTABILIDAD: Añadido try-catch
 const getAdminTestData = async (req, res) => {
-  const userCount = await User.countDocuments();
-  res.json({
-    message: `Hola, admin ${req.user.username}! Has accedido a una ruta protegida.`,
-    serverTime: new Date().toISOString(),
-    totalUsersInDB: userCount,
-  });
+  try {
+    const userCount = await User.countDocuments();
+    res.json({
+      message: `Hola, admin ${req.user.username}! Has accedido a una ruta protegida.`,
+      serverTime: new Date().toISOString(),
+      totalUsersInDB: userCount,
+    });
+  } catch(error) {
+      console.error("Error en getAdminTestData:", error);
+      res.status(500).json({ message: "Error del servidor al obtener datos de prueba." });
+  }
 };
 
 const getAllUsers = async (req, res) => {
@@ -116,6 +126,7 @@ const getAllUsers = async (req, res) => {
     const users = await User.find(filter).sort({ createdAt: -1 }).limit(pageSize).skip(pageSize * (page - 1));
     res.json({ users, page, pages: Math.ceil(count / pageSize), totalUsers: count });
   } catch (error) {
+    console.error("Error en getAllUsers:", error);
     res.status(500).json({ message: 'Error del servidor al obtener la lista de usuarios.' });
   }
 };
@@ -131,6 +142,7 @@ const updateUser = async (req, res) => {
     const updatedUser = await user.save();
     res.json(updatedUser);
   } catch (error) {
+    console.error("Error en updateUser:", error);
     res.status(500).json({ message: 'Error del servidor al actualizar el usuario.' });
   }
 };
@@ -147,6 +159,7 @@ const setUserStatus = async (req, res) => {
     const updatedUser = await user.save();
     res.json(updatedUser);
   } catch (error) {
+    console.error("Error en setUserStatus:", error);
     res.status(500).json({ message: 'Error del servidor al cambiar el estado del usuario.' });
   }
 };
@@ -162,6 +175,7 @@ const getDashboardStats = async (req, res) => {
     ]);
     res.json({ totalUsers, totalDepositVolume: totalDepositVolume[0]?.totalVolume || 0, userGrowthData: userGrowthData.map(item => ({ date: item._id, NuevosUsuarios: item.count })) });
   } catch (error) {
+    console.error("Error en getDashboardStats:", error);
     res.status(500).json({ message: 'Error del servidor al obtener las estadísticas.' });
   }
 };
@@ -182,6 +196,7 @@ const getAllTransactions = async (req, res) => {
     const transactions = await Transaction.find(filter).sort({ createdAt: -1 }).populate('user', 'username photoUrl').limit(pageSize).skip(pageSize * (page - 1));
     res.json({ transactions, page, pages: Math.ceil(count / pageSize), totalTransactions: count });
   } catch (error) {
+    console.error("Error en getAllTransactions:", error);
     res.status(500).json({ message: 'Error del servidor al obtener la lista de transacciones.' });
   }
 };
@@ -199,18 +214,19 @@ const createManualTransaction = async (req, res) => {
     const balanceField = currency.toLowerCase() === 'usdt' ? 'balance.usdt' : 'balance.ntx';
     const originalBalance = user.balance[currency.toLowerCase()];
     if (type === 'admin_credit') {
-      user[balanceField] += amount;
+      user.balance[currency.toLowerCase()] += amount;
     } else {
       if (originalBalance < amount) throw new Error('Saldo insuficiente para realizar el débito.');
-      user[balanceField] -= amount;
+      user.balance[currency.toLowerCase()] -= amount;
     }
     await user.save({ session });
-    const transaction = new Transaction({ user: userId, type, currency, amount, description: reason, metadata: { adminId: req.user._id.toString(), adminUsername: req.user.username, originalBalance: originalBalance.toString() } });
+    const transaction = new Transaction({ user: userId, type, currency, amount, description: reason, status: 'completed', metadata: { adminId: req.user._id.toString(), adminUsername: req.user.username, originalBalance: originalBalance.toString() } });
     await transaction.save({ session });
     await session.commitTransaction();
     res.status(201).json({ message: 'Transacción manual creada y saldo actualizado exitosamente.', user: user.toObject() });
   } catch (error) {
     await session.abortTransaction();
+    console.error("Error en createManualTransaction:", error);
     res.status(500).json({ message: error.message || 'Error del servidor al procesar la transacción.' });
   } finally {
     session.endSession();
@@ -273,6 +289,7 @@ const getUserDetails = async (req, res) => {
     const transactions = await Transaction.find({ user: user._id }).sort({ createdAt: -1 }).limit(pageSize).skip(pageSize * (page - 1));
     res.json({ user, transactions: { items: transactions, page, pages: Math.ceil(transactionsCount / pageSize) } });
   } catch (error) {
+    console.error("Error en getUserDetails:", error);
     res.status(500).json({ message: 'Error del servidor.' });
   }
 };
@@ -291,15 +308,18 @@ const updateSettings = async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Error al actualizar la configuración.' }); }
 };
 
+// <-- FUNCIÓN COMPLETAMENTE CORREGIDA -->
 const generateTwoFactorSecret = async (req, res) => {
   try {
     const secret = speakeasy.generateSecret({ name: `NeuroLink Admin (${req.user.username})` });
     await User.findByIdAndUpdate(req.user.id, { twoFactorSecret: secret.base32 });
-    QRCode.toDataURL(secret.otpauth_url, (err, data_url) => {
-      if (err) throw new Error('No se pudo generar el código QR.');
-      res.json({ secret: secret.base32, qrCodeUrl: data_url });
-    });
+    
+    // PASO 3: Usar la versión promisificada con await dentro del try-catch
+    const data_url = await qrCodeToDataURLPromise(secret.otpauth_url);
+    res.json({ secret: secret.base32, qrCodeUrl: data_url });
+
   } catch (error) {
+    console.error("Error en generateTwoFactorSecret:", error);
     res.status(500).json({ message: 'Error al generar el secreto 2FA.' });
   }
 };
@@ -319,6 +339,7 @@ const verifyAndEnableTwoFactor = async (req, res) => {
       res.status(400).json({ message: 'Token de verificación inválido.' });
     }
   } catch (error) {
+    console.error("Error en verifyAndEnableTwoFactor:", error);
     res.status(500).json({ message: 'Error al verificar el token 2FA.' });
   }
 };
@@ -327,5 +348,5 @@ module.exports = {
   getAdminTestData, getAllUsers, updateUser, setUserStatus, getDashboardStats,
   getAllTransactions, createManualTransaction, getAllTools, createTool, updateTool, deleteTool,
   getUserDetails, getSettings, updateSettings, generateTwoFactorSecret, verifyAndEnableTwoFactor,
-  getPendingWithdrawals, processWithdrawal, getUserReferrals // <-- LA COMA FUE AÑADIDA AQUÍ
+  getPendingWithdrawals, processWithdrawal, getUserReferrals
 };
