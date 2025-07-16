@@ -1,4 +1,4 @@
-// backend/controllers/adminController.js (VERSIÓN CORREGIDA Y ENDURECIDA v15.0)
+// backend/controllers/adminController.js (VERSIÓN v15.1 COMPLETA - SIN OMISIONES)
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const Tool = require('../models/toolModel');
@@ -6,9 +6,9 @@ const Setting = require('../models/settingsModel');
 const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
-const util = require('util'); // <-- PASO 1: Importar util
+const util = require('util');
+const transactionService = require('../services/transactionService');
 
-// PASO 2: Crear una versión "promisificada" de la función de callback
 const qrCodeToDataURLPromise = util.promisify(QRCode.toDataURL);
 
 const getPendingWithdrawals = async (req, res) => {
@@ -19,7 +19,7 @@ const getPendingWithdrawals = async (req, res) => {
 
     const totalWithdrawals = await Transaction.countDocuments(filter);
     const pendingWithdrawals = await Transaction.find(filter)
-      .populate('user', 'username telegramId photoUrl')
+      .populate('user', 'username telegramId photoFileId')
       .sort({ createdAt: 'desc' })
       .limit(limit)
       .skip(limit * (page - 1));
@@ -37,33 +37,65 @@ const getPendingWithdrawals = async (req, res) => {
 };
 
 const processWithdrawal = async (req, res) => {
+  const { status, adminNotes } = req.body;
   const { id } = req.params;
-  const { status, transactionHash, adminNotes } = req.body;
+
   if (!['completed', 'rejected'].includes(status)) {
     return res.status(400).json({ message: "El estado debe ser 'completed' o 'rejected'." });
   }
+
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
+    
     const withdrawal = await Transaction.findById(id).session(session);
     if (!withdrawal || withdrawal.type !== 'withdrawal' || withdrawal.status !== 'pending') {
-      throw new Error('Retiro no encontrado o ya ha sido procesado.');
+      await session.abortTransaction();
+      return res.status(404).json({ message: 'Retiro no encontrado o ya ha sido procesado.' });
     }
+    
     withdrawal.status = status;
     withdrawal.metadata.set('adminNotes', adminNotes || 'N/A');
+    withdrawal.metadata.set('processedBy', req.user.username);
+
     if (status === 'completed') {
-      withdrawal.metadata.set('transactionHash', transactionHash || 'N/A');
-      withdrawal.description = `Retiro completado.`;
-    } else {
+      const recipientAddress = withdrawal.metadata.get('walletAddress');
+      const amount = withdrawal.amount;
+      const currency = withdrawal.currency;
+
+      if (!recipientAddress || !amount || !currency) {
+        throw new Error('Datos de retiro incompletos (dirección, monto o moneda faltante) en la transacción.');
+      }
+      
+      let txHash;
+      if (currency === 'USDT_TRON') {
+        console.log(`[ProcessWithdrawal] Iniciando envío de ${amount} ${currency} a ${recipientAddress}`);
+        txHash = await transactionService.sendUsdtOnTron(recipientAddress, amount);
+      } else {
+        throw new Error(`La moneda de retiro '${currency}' no está soportada para envíos automáticos.`);
+      }
+
+      if (!txHash) {
+        throw new Error('La transacción fue enviada pero no se recibió un hash.');
+      }
+
+      withdrawal.metadata.set('transactionHash', txHash);
+      withdrawal.description = `Retiro completado automáticamente. Hash: ${txHash.substring(0,15)}...`;
+
+    } else { // status === 'rejected'
       const user = await User.findById(withdrawal.user).session(session);
       if (!user) throw new Error('Usuario del retiro no encontrado.');
+      
       user.balance.usdt += withdrawal.amount;
       await user.save({ session });
-      withdrawal.description = `Retiro rechazado. Fondos devueltos al usuario.`;
+      withdrawal.description = `Retiro rechazado. Fondos devueltos al saldo del usuario.`;
     }
+
     const updatedWithdrawal = await withdrawal.save({ session });
     await session.commitTransaction();
-    res.json({ message: `Retiro ${status}.`, withdrawal: updatedWithdrawal });
+    
+    res.json({ message: `Retiro ${status} exitosamente.`, withdrawal: updatedWithdrawal });
+
   } catch (error) {
     await session.abortTransaction();
     console.error("Error en processWithdrawal:", error);
@@ -97,7 +129,6 @@ const getUserReferrals = async (req, res) => {
     }
 };
 
-// MEJORA DE ESTABILIDAD: Añadido try-catch
 const getAdminTestData = async (req, res) => {
   try {
     const userCount = await User.countDocuments();
@@ -308,13 +339,11 @@ const updateSettings = async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Error al actualizar la configuración.' }); }
 };
 
-// <-- FUNCIÓN COMPLETAMENTE CORREGIDA -->
 const generateTwoFactorSecret = async (req, res) => {
   try {
     const secret = speakeasy.generateSecret({ name: `NeuroLink Admin (${req.user.username})` });
     await User.findByIdAndUpdate(req.user.id, { twoFactorSecret: secret.base32 });
     
-    // PASO 3: Usar la versión promisificada con await dentro del try-catch
     const data_url = await qrCodeToDataURLPromise(secret.otpauth_url);
     res.json({ secret: secret.base32, qrCodeUrl: data_url });
 

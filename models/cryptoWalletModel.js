@@ -1,4 +1,4 @@
-// backend/models/cryptoWalletModel.js
+// backend/models/cryptoWalletModel.js (CÓDIGO CONFIRMADO Y VALIDADO v15.0)
 const mongoose = require('mongoose');
 
 const cryptoWalletSchema = new mongoose.Schema({
@@ -10,7 +10,7 @@ const cryptoWalletSchema = new mongoose.Schema({
   chain: {
     type: String,
     required: true,
-    enum: ['BSC', 'TRON'], // Cadenas soportadas
+    enum: ['BSC', 'TRON'],
   },
   address: {
     type: String,
@@ -18,19 +18,20 @@ const cryptoWalletSchema = new mongoose.Schema({
     unique: true,
     index: true,
   },
+  // --- CAMPO CRÍTICO PARA EL BARRIDO ---
+  // Este índice nos permite regenerar la clave privada de esta wallet
+  // usando la MASTER_SEED_PHRASE y la ruta de derivación correcta (ej. m/44'/195'/0'/0/{derivationIndex}).
   derivationIndex: {
     type: Number,
     required: true,
   },
-  // --- NUEVO CAMPO STATEFUL ---
   lastScannedBlock: {
     type: Number,
     required: true,
-    default: 0, // Inicia en 0 para billeteras nuevas
+    default: 0,
   },
 }, { timestamps: true });
 
-// Índice compuesto para asegurar que un usuario solo tenga una wallet por cadena
 cryptoWalletSchema.index({ user: 1, chain: 1 }, { unique: true });
 
 const CryptoWallet = mongoose.model('CryptoWallet', cryptoWalletSchema);

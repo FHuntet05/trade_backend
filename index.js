@@ -1,9 +1,9 @@
-// backend/index.js (VERSIÓN CORREGIDA v15.0)
+// backend/index.js (VERSIÓN v15.0 - INTEGRACIÓN DE FOTOS COMPLETADA)
 
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const { Telegraf, Markup } = require('telegraf'); // <-- CORRECCIÓN: Se añade 'Markup' a la importación.
+const { Telegraf, Markup } = require('telegraf');
 const morgan = require('morgan');
 const crypto = require('crypto');
 
@@ -23,8 +23,7 @@ function checkEnvVariables() {
 checkEnvVariables();
 
 console.log('[SISTEMA] Cargando módulos internos...');
-// NOTA: Se asume que PendingReferral está en userModel. Si no, habría que importarlo.
-const User = require('./models/userModel'); 
+// NOTA: No es necesario importar User o PendingReferral aquí si no se usan directamente.
 const authRoutes = require('./routes/authRoutes');
 const toolRoutes = require('./routes/toolRoutes');
 const rankingRoutes = require('./routes/rankingRoutes');
@@ -34,6 +33,7 @@ const taskRoutes = require('./routes/taskRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const treasuryRoutes = require('./routes/treasuryRoutes');
+const userRoutes = require('./routes/userRoutes'); // <-- PASO 1: IMPORTAR LA NUEVA RUTA
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 console.log('[SISTEMA] Módulos internos cargados.');
 
@@ -61,6 +61,8 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+
+// Registro de Rutas de la API
 app.use('/api/auth', authRoutes);
 app.use('/api/tools', toolRoutes);
 app.use('/api/ranking', rankingRoutes);
@@ -70,6 +72,7 @@ app.use('/api/tasks', taskRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
+app.use('/api/users', userRoutes); // <-- PASO 2: REGISTRAR LA NUEVA RUTA
 app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
 console.log('[SISTEMA] Rutas de API registradas.');
 
@@ -82,21 +85,15 @@ bot.command('start', async (ctx) => {
         const startPayload = ctx.startPayload ? ctx.startPayload.trim() : null;
         
         if (startPayload) {
-            // Lógica para manejar el referenciador. 
-            // Se asume que se registrará el usuario cuando abra la Web App.
-            // Aquí podríamos guardar una relación temporal si fuera necesario, 
-            // pero la lógica de registro de usuario se maneja en el backend de la app.
             console.log(`[Bot] Usuario ${telegramId} ha llegado con el payload de referido: ${startPayload}`);
         }
-
-        // Ahora 'Markup' está definido y la llamada funcionará correctamente.
+        
         await ctx.replyWithMarkdownV2(escapeMarkdownV2(WELCOME_MESSAGE), Markup.inlineKeyboard([
             Markup.button.webApp('🚀 Abrir App', `${process.env.FRONTEND_URL}?ref=${startPayload || ''}`)
         ]));
 
     } catch (error) { 
         console.error('[Bot] Error en /start:', error.message, error); 
-        // Enviar un mensaje de fallback al usuario si es posible
         await ctx.reply('Ocurrió un error al procesar tu solicitud. Por favor, intenta de nuevo más tarde.').catch(e => console.error('[Bot] Error al enviar mensaje de fallback:', e.message));
     }
 });
