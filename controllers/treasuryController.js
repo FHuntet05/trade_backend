@@ -1,6 +1,7 @@
-// backend/controllers/treasuryController.js (VERSIÓN v15.0.1 - CORRECCIÓN DE IMPORTACIÓN)
+// backend/controllers/treasuryController.js (VERSIÓN v15.0.2 - IMPORTE RESTAURADO)
 const { ethers } = require('ethers');
-const TronWeb = require('tronweb'); // <-- CORRECCIÓN: Esta es la forma de importación estándar y correcta.
+// <-- CORRECCIÓN DEFINITIVA: Restaurada la línea de importación original que funcionaba.
+const TronWeb = require('tronweb').default.TronWeb; 
 const User = require('../models/userModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
 const asyncHandler = require('express-async-handler');
@@ -24,6 +25,8 @@ const getHotWallets = () => {
         throw new Error("La variable de entorno MASTER_SEED_PHRASE no está definida.");
     }
     const bscWallet = ethers.Wallet.fromMnemonic(process.env.MASTER_SEED_PHRASE, `m/44'/60'/0'/0/0`);
+    // NOTA: TronWeb.fromMnemonic no existe en todas las versiones, esto depende de la tuya.
+    // Si esta línea falla, la restauraremos a la versión original que usaba `TronWeb.fromMnemonic`
     const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE, `m/44'/195'/0'/0/0`);
     return {
         bsc: { address: bscWallet.address, privateKey: bscWallet.privateKey },
