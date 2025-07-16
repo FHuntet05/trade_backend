@@ -188,12 +188,24 @@ const getAllUsers = async (req, res) => {
     }
     const count = await User.countDocuments(filter);
     const users = await User.find(filter)
-      .select('username telegramId role status createdAt balance')
+      .select('username telegramId role status createdAt balance photoFileId') // Necesitamos photoFileId
       .sort({ createdAt: -1 })
       .limit(pageSize)
       .skip(pageSize * (page - 1))
       .lean();
-    res.json({ users, page, pages: Math.ceil(count / pageSize), totalUsers: count });
+
+    // CORRECCIÓN: Enriquecer cada usuario con su URL de foto temporal
+    const usersWithPhotoUrl = await Promise.all(
+        users.map(async (user) => {
+            const photoUrl = await getTemporaryPhotoUrl(user.photoFileId);
+            return {
+                ...user,
+                photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL
+            };
+        })
+    );
+    
+    res.json({ users: usersWithPhotoUrl, page, pages: Math.ceil(count / pageSize), totalUsers: count });
   } catch (error) {
     console.error("Error en getAllUsers:", error);
     res.status(500).json({ message: 'Error del servidor al obtener la lista de usuarios.' });

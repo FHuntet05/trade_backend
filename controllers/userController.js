@@ -1,52 +1,62 @@
-// backend/controllers/userController.js (NUEVO ARCHIVO v15.0)
+// backend/controllers/userController.js (VERSIÓN v17.0 - CON FUNCIÓN REUTILIZABLE)
 const axios = require('axios');
 const User = require('../models/userModel');
 const asyncHandler = require('express-async-handler');
 
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
+const PLACEHOLDER_AVATAR = '/assets/images/user-avatar-placeholder.png'; // Placeholder por defecto
 
 /**
- * @desc    Obtiene la URL de la foto de perfil de un usuario y redirige.
+ * @desc    Obtiene la URL de descarga temporal de una foto de Telegram.
+ * @param   {string} photoFileId - El file_id permanente de la foto.
+ * @returns {Promise<string|null>} La URL temporal o null si falla.
+ */
+const getTemporaryPhotoUrl = async (photoFileId) => {
+    if (!photoFileId) {
+        return null;
+    }
+    try {
+        const fileInfoResponse = await axios.get(`${TELEGRAM_API_URL}/getFile`, {
+            params: { file_id: photoFileId },
+            timeout: 4000 // Timeout agresivo para no bloquear
+        });
+
+        if (!fileInfoResponse.data.ok) {
+            console.error(`Telegram API no pudo obtener la info del archivo para file_id: ${photoFileId}`);
+            return null;
+        }
+
+        const filePath = fileInfoResponse.data.result.file_path;
+        return `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${filePath}`;
+    } catch (error) {
+        console.error(`Error al resolver la foto para el file_id ${photoFileId}:`, error.message);
+        return null;
+    }
+};
+
+/**
+ * @desc    (Deprecado) Redirige a la URL de la foto. Ya no es la estrategia principal.
  * @route   GET /api/users/:telegramId/photo
  * @access  Public
  */
 const getUserPhoto = asyncHandler(async (req, res) => {
     const { telegramId } = req.params;
-
-    // Usamos una caché simple para no consultar la DB en cada petición de imagen
-    // NOTA: Para producción a gran escala, se usaría una caché externa como Redis.
     const user = await User.findOne({ telegramId }).select('photoFileId').lean();
 
     if (!user || !user.photoFileId) {
-        // Redirigir a una imagen de placeholder si no hay foto
-        // Asegúrate de que esta imagen exista en tu frontend público
-        return res.redirect('/assets/images/user-avatar-placeholder.png');
+        return res.redirect(PLACEHOLDER_AVATAR);
     }
 
-    try {
-        // 1. Pedir a Telegram la información del archivo usando el file_id permanente
-        const fileInfoResponse = await axios.get(`${TELEGRAM_API_URL}/getFile`, {
-            params: { file_id: user.photoFileId }
-        });
-
-        if (!fileInfoResponse.data.ok) {
-            throw new Error('Telegram API no pudo obtener la información del archivo.');
-        }
-
-        const filePath = fileInfoResponse.data.result.file_path;
-
-        // 2. Construir la URL de descarga temporal
-        const temporaryFileUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${filePath}`;
-        
-        // 3. Redirigir al cliente a la URL de la imagen. Código 302 indica redirección temporal.
+    const temporaryFileUrl = await getTemporaryPhotoUrl(user.photoFileId);
+    
+    if (temporaryFileUrl) {
         res.redirect(302, temporaryFileUrl);
-
-    } catch (error) {
-        console.error(`Error al resolver la foto para el file_id ${user.photoFileId}:`, error.message);
-        res.redirect('/assets/images/user-avatar-placeholder.png');
+    } else {
+        res.redirect(PLACEHOLDER_AVATAR);
     }
 });
 
 module.exports = {
-    getUserPhoto
+    getUserPhoto,
+    getTemporaryPhotoUrl // <--- EXPORTAMOS LA FUNCIÓN
 };
