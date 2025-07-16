@@ -102,8 +102,43 @@ const sendUsdtOnTron = async (toAddress, amount) => {
   }
 };
 
+// --- FUNCIÓN NUEVA ---
+const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddress) => {
+    if (derivationIndex === undefined || !destinationAddress) {
+        throw new Error("Índice de derivación y dirección de destino son requeridos.");
+    }
+    const hdNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+    const depositWalletNode = hdNode.derivePath(`m/44'/60'/0'/0/${derivationIndex}`);
+    const depositWallet = new ethers.Wallet(depositWalletNode.privateKey, bscProvider);
+    
+    const usdtContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_BSC_ABI, depositWallet);
+    const balance = await usdtContract.provider.getBalance(depositWallet.address); // Chequear BNB para fee
+
+    if (balance.lt(ethers.utils.parseEther("0.001"))) { // Comprobar si hay suficiente BNB para la comisión
+        throw new Error(`Fondos BNB insuficientes para el fee en la wallet ${depositWallet.address}.`);
+    }
+
+    const usdtBalance = await new ethers.Contract(USDT_BSC_ADDRESS, ['function balanceOf(address) view returns (uint256)'], bscProvider).balanceOf(depositWallet.address);
+
+    if (usdtBalance.isZero()) {
+        throw new Error(`La wallet ${depositWallet.address} no tiene saldo de USDT (BSC) para barrer.`);
+    }
+
+    console.log(`[SweepService] Iniciando barrido de ${ethers.utils.formatUnits(usdtBalance, 18)} USDT (BSC) desde ${depositWallet.address}`);
+    try {
+        const tx = await usdtContract.transfer(destinationAddress, usdtBalance);
+        console.log(`[SweepService] Barrido de ${depositWallet.address} (BSC) iniciado. Hash: ${tx.hash}`);
+        return tx.hash;
+    } catch(error) {
+        console.error(`[SweepService] ERROR al barrer ${depositWallet.address} (BSC):`, error);
+        throw new Error(`Fallo en la transacción de barrido BSC. Detalles: ${error.message}`);
+    }
+};
+
 module.exports = {
   sendUsdtOnTron,
   sweepUsdtOnTronFromDerivedWallet,
+  // --- NUEVOS EXPORTS ---
+  sweepUsdtOnBscFromDerivedWallet,
   initializeHotWallet
 };

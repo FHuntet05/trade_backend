@@ -1,4 +1,4 @@
-// backend/controllers/treasuryController.js (VERSIÓN v17.7 - ESCANEO AUTOMÁTICO INTEGRADO)
+// backend/controllers/treasuryController.js (VERSIÓN v18.1 - FINAL Y FUNCIONAL)
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb; 
 const User = require('../models/userModel');
@@ -25,7 +25,6 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
   return Promise.race([promise, timeout]);
 }
 
-// Función auxiliar para registrar el depósito y actualizar el saldo del usuario
 async function registerDeposit(wallet, amount, currency) {
     const session = await mongoose.startSession();
     try {
@@ -61,17 +60,9 @@ async function registerDeposit(wallet, amount, currency) {
     }
 }
 
-/**
- * @desc    Obtiene todas las wallets de depósito que tienen saldo.
- *          PRIMERO, escanea la blockchain en tiempo real para detectar y registrar nuevos depósitos.
- *          SEGUNDO, devuelve la lista actualizada de la base de datos.
- * @route   GET /api/treasury/sweepable-wallets
- * @access  Admin
- */
 const getSweepableWallets = asyncHandler(async (req, res) => {
-    // --- PASO 1: ESCANEAR BLOCKCHAIN EN TIEMPO REAL ---
     console.log('Iniciando escaneo de wallets en tiempo real...');
-    const allWallets = await CryptoWallet.find().lean();
+    const allWallets = await CryptoWallet.find().populate('user', '_id').lean();
     const usdtTronContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
     
     const scanPromises = allWallets.map(async (wallet) => {
@@ -80,14 +71,14 @@ const getSweepableWallets = asyncHandler(async (req, res) => {
             if (wallet.chain === 'BSC') {
                 const usdtBalanceRaw = await promiseWithTimeout(usdtBscContract.balanceOf(wallet.address), 10000);
                 if (usdtBalanceRaw.gt(0)) {
-                    const usdtAmount = ethers.utils.formatUnits(usdtBalanceRaw, 18); // CORRECCIÓN: 18 decimales
+                    const usdtAmount = ethers.utils.formatUnits(usdtBalanceRaw, 18);
                     detectedBalances.push({ currency: 'USDT_BSC', amount: usdtAmount });
                     await registerDeposit(wallet, usdtAmount, 'USDT_BSC');
                 }
             } else if (wallet.chain === 'TRON') {
                 const usdtBalanceRaw = await promiseWithTimeout(usdtTronContract.balanceOf(wallet.address).call(), 10000);
                 if (parseInt(usdtBalanceRaw.toString()) > 0) {
-                    const usdtAmount = ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6); // CORRECCIÓN: 6 decimales
+                    const usdtAmount = ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6);
                     detectedBalances.push({ currency: 'USDT_TRON', amount: usdtAmount });
                     await registerDeposit(wallet, usdtAmount, 'USDT_TRON');
                 }
@@ -95,18 +86,14 @@ const getSweepableWallets = asyncHandler(async (req, res) => {
         } catch(e) {
             console.error(`Error escaneando wallet ${wallet.address}: ${e.message}`);
         }
-        // Actualizar el campo 'balances' en la DB para reflejar el estado real
         await CryptoWallet.updateOne({ _id: wallet._id }, { $set: { balances: detectedBalances } });
     });
 
     await Promise.all(scanPromises);
     console.log('Escaneo de wallets completado.');
 
-    // --- PASO 2: OBTENER Y DEVOLVER LA LISTA ACTUALIZADA ---
     const limit = parseInt(req.query.limit) || 20;
     const page = parseInt(req.query.page) || 1;
-    
-    // Filtro para buscar solo wallets que ahora tienen saldo registrado
     const filter = { 'balances.0': { '$exists': true } };
 
     const totalWalletsWithBalance = await CryptoWallet.countDocuments(filter);
@@ -123,9 +110,6 @@ const getSweepableWallets = asyncHandler(async (req, res) => {
         total: totalWalletsWithBalance 
     });
 });
-
-
-// --- OTRAS FUNCIONES (getHotWalletBalances, sweepWallet) ---
 
 const getHotWalletBalances = asyncHandler(async (req, res) => {
     const hotWallet = transactionService.initializeHotWallet();
@@ -161,17 +145,29 @@ const sweepWallet = asyncHandler(async (req, res) => {
     let txHash;
     if (currency === 'USDT_TRON') {
         txHash = await transactionService.sweepUsdtOnTronFromDerivedWallet(walletToSweep.derivationIndex, destinationAddress);
+    } else if (currency === 'USDT_BSC') {
+        txHash = await transactionService.sweepUsdtOnBscFromDerivedWallet(walletToSweep.derivationIndex, destinationAddress);
     } else {
-        // Aquí iría la lógica para barrer USDT_BSC
-        return res.status(400).json({ message: `El barrido para ${currency} aún no está implementado.` });
+        return res.status(400).json({ message: `El barrido para ${currency} no está implementado.` });
     }
     
-    // Después de un barrido exitoso, limpiar el saldo de la wallet en la DB
     await CryptoWallet.updateOne({ _id: walletToSweep._id }, { $set: { balances: [] } });
 
-    await Transaction.create({ user: adminUser._id, type: 'sweep', amount: 0, currency, status: 'completed', description: `Barrido de ${currency} desde ${fromAddress} a ${destinationAddress}`, metadata: { transactionHash: txHash, fromAddress, destinationAddress, sweptWalletId: walletToSweep._id } });
+    await Transaction.create({ 
+        user: adminUser._id, 
+        type: 'sweep', 
+        amount: 0, // El monto se puede obtener del evento de la tx si se quiere
+        currency: currency, 
+        status: 'completed', 
+        description: `Barrido de ${currency} desde ${fromAddress} a ${destinationAddress}`, 
+        metadata: { 
+            transactionHash: txHash, 
+            fromAddress, 
+            destinationAddress, 
+            sweptWalletId: walletToSweep._id.toString() 
+        } 
+    });
     res.json({ message: `Barrido de ${currency} desde ${fromAddress} iniciado.`, transactionHash: txHash });
 });
-
 
 module.exports = { getHotWalletBalances, sweepWallet, getSweepableWallets };

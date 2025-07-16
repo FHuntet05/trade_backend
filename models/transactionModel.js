@@ -1,5 +1,4 @@
-// backend/models/transactionModel.js (COMPLETO CON ESTADO DE TRANSACCIÓN)
-
+// backend/models/transactionModel.js (VERSIÓN v18.0 - CURRENCIES AMPLIADAS)
 const mongoose = require('mongoose');
 
 const transactionSchema = new mongoose.Schema({
@@ -14,7 +13,7 @@ const transactionSchema = new mongoose.Schema({
     enum: [
       'deposit', 'withdrawal', 'purchase', 'swap_ntx_to_usdt', 
       'mining_claim', 'referral_commission', 'task_reward', 
-      'admin_credit', 'admin_debit',
+      'admin_credit', 'admin_debit', 'sweep'
     ],
   },
   amount: {
@@ -24,21 +23,20 @@ const transactionSchema = new mongoose.Schema({
   currency: {
     type: String,
     required: true,
-    enum: ['NTX', 'USDT'],
+    // --- CAMPO CORREGIDO ---
+    enum: ['NTX', 'USDT', 'USDT_BSC', 'USDT_TRON'], 
   },
-  status: { // <-- NUEVO CAMPO
+  status: {
     type: String,
     required: true,
     enum: ['pending', 'completed', 'rejected'],
-    // La mayoría de transacciones se completan al instante. 
-    // Los retiros se deben crear explícitamente como 'pending'.
     default: 'completed', 
   },
   description: {
     type: String,
     required: true,
   },
-  adminNotes: { // <-- NUEVO CAMPO PARA AUDITORÍA
+  adminNotes: {
     type: String,
     trim: true,
   },
