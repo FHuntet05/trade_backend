@@ -1,6 +1,6 @@
-// backend/models/userModel.js (VERSIÓN v15.1 - REVERSIÓN A BCRYPT)
+// backend/models/userModel.js (VERSIÓN v16.5 - HOOKS UNIFICADOS)
 const mongoose = require('mongoose');
-const bcrypt = require('bcrypt'); // <-- CORRECCIÓN: Revertido a 'bcrypt' para una solución inmediata.
+const bcrypt = require('bcrypt');
 
 const userSchema = new mongoose.Schema({
   telegramId: { type: String, required: true, unique: true, index: true },
@@ -47,12 +47,24 @@ const userSchema = new mongoose.Schema({
   timestamps: true,
 });
 
+/**
+ * CORRECCIÓN v16.5: Se unificaron los dos hooks 'pre-save' en uno solo.
+ * Esto evita condiciones de carrera y comportamiento impredecible al guardar un usuario.
+ * Ahora la lógica de generación de código de referido y el hash de contraseña
+ * se ejecutan en secuencia dentro del mismo hook asíncrono.
+ */
 userSchema.pre('save', async function (next) {
-  if (!this.isModified('password') || !this.password) {
-    return next();
+  // 1. Lógica de generación de código de referido
+  if (this.isNew && !this.referralCode) {
+      this.referralCode = `ref_${Date.now().toString(36)}${Math.random().toString(36).substr(2, 5)}`;
   }
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
+
+  // 2. Lógica de hasheo de contraseña
+  if (this.isModified('password') && this.password) {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+  }
+  
   next();
 });
 
@@ -60,12 +72,5 @@ userSchema.methods.matchPassword = async function(enteredPassword) {
   if (!this.password || !enteredPassword) return false;
   return await bcrypt.compare(enteredPassword, this.password);
 };
-
-userSchema.pre('save', function(next) {
-    if (this.isNew && !this.referralCode) {
-        this.referralCode = `ref_${Date.now().toString(36)}${Math.random().toString(36).substr(2, 5)}`;
-    }
-    next();
-});
 
 module.exports = mongoose.model('User', userSchema);
