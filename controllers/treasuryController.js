@@ -1,6 +1,6 @@
-// backend/controllers/treasuryController.js (VERSIÓN CORREGIDA Y OPTIMIZADA v15.0)
+// backend/controllers/treasuryController.js (VERSIÓN v15.0.1 - CORRECCIÓN DE IMPORTACIÓN)
 const { ethers } = require('ethers');
-const TronWeb = require('tronweb').default;
+const TronWeb = require('tronweb'); // <-- CORRECCIÓN: Esta es la forma de importación estándar y correcta.
 const User = require('../models/userModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
 const asyncHandler = require('express-async-handler');
@@ -50,7 +50,7 @@ const getHotWalletBalances = asyncHandler(async (req, res) => {
 
     res.json({
         BNB: ethers.utils.formatEther(bnbBalance),
-        USDT_BSC: ethers.utils.formatUnits(usdtBscBalance, 6), // USDT suele tener 6 decimales
+        USDT_BSC: ethers.utils.formatUnits(usdtBscBalance, 6),
         TRX: tronWeb.fromSun(trxBalance),
         USDT_TRON: tronWeb.fromSun(usdtTronBalance)
     });
@@ -66,7 +66,6 @@ const getSweepableWallets = asyncHandler(async (req, res) => {
         .limit(limit)
         .skip(limit * (page - 1));
 
-    // Instanciar el contrato TRON una sola vez fuera del bucle
     const usdtTronContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
 
     const balancePromises = walletsOnPage.map(async (wallet) => {
@@ -84,11 +83,9 @@ const getSweepableWallets = asyncHandler(async (req, res) => {
                     balances.push({ currency: 'USDT_BSC', amount: ethers.utils.formatUnits(usdtBalance, 6) });
                 }
             } else if (wallet.chain === 'TRON') {
-                // CORRECCIÓN: Se eliminó tronWeb.setAddress() y se pasa la dirección directamente en cada llamada.
-                // Esto evita la condición de carrera y el estado compartido.
                 const [trxBalance, usdtBalance] = await Promise.all([
-                    tronWeb.trx.getBalance(wallet.address), // Llamada sin estado
-                    usdtTronContract.balanceOf(wallet.address).call() // Llamada sin estado
+                    tronWeb.trx.getBalance(wallet.address),
+                    usdtTronContract.balanceOf(wallet.address).call()
                 ]);
                 if (trxBalance > 0) {
                     balances.push({ currency: 'TRX', amount: tronWeb.fromSun(trxBalance) });
@@ -100,7 +97,6 @@ const getSweepableWallets = asyncHandler(async (req, res) => {
             }
         } catch (e) {
             console.error(`Error al consultar saldo para wallet ${wallet.address}: ${e.message}`);
-            // No se retorna nada para esta wallet, pero se registra el error.
         }
         
         if (balances.length > 0) {
@@ -115,7 +111,6 @@ const getSweepableWallets = asyncHandler(async (req, res) => {
         return null;
     });
 
-    // Promise.allSettled es más seguro para evitar que un solo error detenga todo
     const results = await Promise.allSettled(balancePromises);
     const walletsWithBalance = results
         .filter(result => result.status === 'fulfilled' && result.value !== null)
@@ -129,9 +124,6 @@ const getSweepableWallets = asyncHandler(async (req, res) => {
     });
 });
 
-
-// NOTA: La lógica de sweepWallet sigue siendo un placeholder. 
-// Su implementación requerirá un manejo muy cuidadoso de las claves privadas y los nonces.
 const sweepWallet = asyncHandler(async (req, res) => {
     const { currency, destinationAddress, adminPassword } = req.body;
     if (!currency || !destinationAddress || !adminPassword) {
@@ -148,12 +140,9 @@ const sweepWallet = asyncHandler(async (req, res) => {
     const wallets = getHotWallets();
     let txHash = 'No implementado aún';
     
-    // Aquí iría la lógica compleja de barrido, que debe ser implementada con extrema precaución.
     if (currency === 'BNB' || currency === 'USDT_BSC') {
-        // Lógica de barrido BSC...
         console.warn(`Intento de barrido para ${currency} no implementado.`);
     } else if (currency === 'TRX' || currency === 'USDT_TRON') {
-        // Lógica de barrido TRON...
         console.warn(`Intento de barrido para ${currency} no implementado.`);
     } else {
         return res.status(400).json({ message: 'Moneda no soportada para barrido.' });
