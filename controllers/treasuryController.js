@@ -1,13 +1,12 @@
-// backend/controllers/treasuryController.js (VERSIÓN v18.1 - FINAL Y FUNCIONAL)
+// backend/controllers/treasuryController.js (VERSIÓN v18.6 - FINAL, LIMPIA Y FUNCIONAL)
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb; 
 const User = require('../models/userModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
 const Transaction = require('../models/transactionModel');
-const asyncHandler = require('express-async-handler');
+const asyncHandler = require('express-async-handler'); // <--- DECLARADO UNA SOLA VEZ
 const transactionService = require('../services/transactionService');
 const mongoose = require('mongoose');
-const asyncHandler = require('express-async-handler');
 
 const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
 const tronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY } });
@@ -68,6 +67,7 @@ const getSweepableWallets = asyncHandler(async (req, res) => {
     
     const scanPromises = allWallets.map(async (wallet) => {
         let detectedBalances = [];
+        if (!wallet.user) return; // Omitir wallets sin usuario asociado
         try {
             if (wallet.chain === 'BSC') {
                 const usdtBalanceRaw = await promiseWithTimeout(usdtBscContract.balanceOf(wallet.address), 10000);
@@ -157,7 +157,7 @@ const sweepWallet = asyncHandler(async (req, res) => {
     await Transaction.create({ 
         user: adminUser._id, 
         type: 'sweep', 
-        amount: 0, // El monto se puede obtener del evento de la tx si se quiere
+        amount: 0,
         currency: currency, 
         status: 'completed', 
         description: `Barrido de ${currency} desde ${fromAddress} a ${destinationAddress}`, 
