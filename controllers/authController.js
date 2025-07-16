@@ -1,4 +1,4 @@
-// backend/controllers/authController.js (VERSIÓN v15.0 - LÓGICA DE FOTOS CORREGIDA)
+// backend/controllers/authController.js (VERSIÓN v16.3 - BLINDAJE DE API EXTERNA)
 const User = require('../models/userModel');
 const PendingReferral = require('../models/pendingReferralModel');
 const Setting = require('../models/settingsModel');
@@ -8,21 +8,28 @@ const axios = require('axios');
 
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 
-// --- FUNCIÓN CORREGIDA: Ahora obtiene el file_id PERMANENTE, no la URL temporal ---
+/**
+ * CORRECCIÓN v16.3: Se añade un TIMEOUT y se mejora el manejo de errores.
+ * Esto evita que una llamada lenta a la API de Telegram cuelgue todo el proceso de login.
+ * Si la foto no se puede obtener en 5 segundos, el login continúa sin ella.
+ */
 const getPhotoFileId = async (userId) => {
     try {
         const response = await axios.get(`${TELEGRAM_API_URL}/getUserProfilePhotos`, {
-            params: { user_id: userId, limit: 1 }
+            params: { user_id: userId, limit: 1 },
+            timeout: 5000 // Timeout de 5 segundos
         });
+
         if (response.data.ok && response.data.result.photos.length > 0) {
             const photoArray = response.data.result.photos[0];
             // Devolver el file_id de la foto de mayor resolución
             return photoArray[photoArray.length - 1].file_id;
         }
+        return null; // Devuelve null si no hay fotos
     } catch (error) {
-        console.error(`Error obteniendo el file_id de la foto de perfil para ${userId}:`, error.message);
+        console.error(`Error obteniendo el file_id de la foto de perfil para ${userId} (timeout o API error):`, error.message);
+        return null; // Devuelve null en caso de cualquier error para no bloquear el login
     }
-    return null;
 };
 
 const generateToken = (id, role, username) => {
@@ -54,7 +61,6 @@ const authTelegramUser = async (req, res) => {
                 referrer = await User.findOne({ telegramId: referrerTelegramId });
             }
             
-            // Obtenemos el file_id permanente
             const photoFileId = await getPhotoFileId(telegramId);
             const fullName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim();
 
@@ -63,7 +69,7 @@ const authTelegramUser = async (req, res) => {
                 username: userData.username || `user_${telegramId}`,
                 fullName: fullName || userData.username,
                 language: userData.languageCode || 'es', 
-                photoFileId: photoFileId, // Guardamos el file_id permanente
+                photoFileId: photoFileId,
                 referredBy: referrer ? referrer._id : null 
             });
             await user.save();
@@ -73,7 +79,6 @@ const authTelegramUser = async (req, res) => {
                 await referrer.save();
             }
         } else {
-            // Lógica para actualizar datos si faltan (ej. si el usuario se une y luego pone foto)
             let needsUpdate = false;
             if (!user.photoFileId) {
                 user.photoFileId = await getPhotoFileId(telegramId);
@@ -94,7 +99,6 @@ const authTelegramUser = async (req, res) => {
             Setting.findOneAndUpdate({ singleton: 'global_settings' }, { $setOnInsert: { singleton: 'global_settings' } }, { upsert: true, new: true, setDefaultsOnInsert: true })
         ]);
         const userObject = userWithTools.toObject();
-        // Añadimos la URL dinámica para que el frontend la use
         userObject.photoUrl = `${process.env.BACKEND_URL}/api/users/${user.telegramId}/photo`;
 
         if (userObject.referredBy) {
@@ -118,7 +122,6 @@ const getUserProfile = async (req, res) => {
         if (!user) { return res.status(404).json({ message: 'Usuario no encontrado' }); }
         const userObject = user.toObject();
 
-        // Añadimos la URL dinámica para que el frontend la use
         userObject.photoUrl = `${process.env.BACKEND_URL}/api/users/${user.telegramId}/photo`;
 
         if (userObject.referredBy) {
@@ -147,7 +150,6 @@ const loginAdmin = async (req, res) => {
             }
             const sessionTokenPayload = { id: adminUser._id, role: adminUser.role, username: adminUser.username };
             const sessionToken = jwt.sign(sessionTokenPayload, process.env.JWT_SECRET, { expiresIn: '8h' });
-            // Devolvemos la URL de la foto también para el admin
             const photoUrl = `${process.env.BACKEND_URL}/api/users/${adminUser.telegramId}/photo`;
             res.json({ _id: adminUser._id, username: adminUser.username, role: adminUser.role, isTwoFactorEnabled: adminUser.isTwoFactorEnabled, token: sessionToken, photoUrl });
         } else {
