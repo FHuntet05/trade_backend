@@ -1,14 +1,16 @@
-// backend/index.js (VERSIÓN v15.0 - INTEGRACIÓN DE FOTOS COMPLETADA)
+// backend/index.js (VERSIÓN v16.2 - CONEXIÓN ROBUSTA)
 
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
-const morgan = require('morgan');
+const morgan = 'morgan'; // Corregido: morgan es un string para el require, no una variable
 const crypto = require('crypto');
 
 console.log('[SISTEMA] Cargando variables de entorno...');
 require('dotenv').config();
+
+// Módulo de conexión a la BD
+const connectDB = require('./config/db');
 
 function checkEnvVariables() {
     console.log('[SISTEMA] Verificando variables de entorno críticas...');
@@ -22,8 +24,10 @@ function checkEnvVariables() {
 }
 checkEnvVariables();
 
+// Conectar a la base de datos ANTES de definir nada más
+connectDB();
+
 console.log('[SISTEMA] Cargando módulos internos...');
-// NOTA: No es necesario importar User o PendingReferral aquí si no se usan directamente.
 const authRoutes = require('./routes/authRoutes');
 const toolRoutes = require('./routes/toolRoutes');
 const rankingRoutes = require('./routes/rankingRoutes');
@@ -33,7 +37,7 @@ const taskRoutes = require('./routes/taskRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const treasuryRoutes = require('./routes/treasuryRoutes');
-const userRoutes = require('./routes/userRoutes'); // <-- PASO 1: IMPORTAR LA NUEVA RUTA
+const userRoutes = require('./routes/userRoutes');
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 console.log('[SISTEMA] Módulos internos cargados.');
 
@@ -58,7 +62,7 @@ const corsOptions = {
 app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
 app.use(express.json());
-app.use(morgan('dev'));
+app.use(require('morgan')('dev')); // Corregido: require morgan directamente
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
@@ -72,11 +76,10 @@ app.use('/api/tasks', taskRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
-app.use('/api/users', userRoutes); // <-- PASO 2: REGISTRAR LA NUEVA RUTA
+app.use('/api/users', userRoutes);
 app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
 console.log('[SISTEMA] Rutas de API registradas.');
 
-// --- Lógica del Bot de Telegram ---
 const WELCOME_MESSAGE = `*Bienvenido a NEURO LINK* 🚀\n\n¡Estás a punto de entrar a un nuevo ecosistema de minería digital!\n\nHaz clic en el botón de abajo para lanzar la aplicación.`;
 const escapeMarkdownV2 = (text) => text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
 bot.command('start', async (ctx) => {
@@ -102,34 +105,26 @@ bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicaci
 app.use(notFound);
 app.use(errorHandler);
 
-async function startServer() {
+const PORT = process.env.PORT || 5000;
+const server = app.listen(PORT, async () => {
+    console.log(`[SERVIDOR] 🚀 Corriendo en puerto ${PORT}`);
     try {
-        console.log('[SERVIDOR] Conectando a MongoDB...');
-        await mongoose.connect(process.env.MONGO_URI);
-        console.log('[SERVIDOR] ✅ MongoDB conectado.');
-        
-        const PORT = process.env.PORT || 5000;
-        app.listen(PORT, async () => {
-            console.log(`[SERVIDOR] 🚀 Corriendo en puerto ${PORT}`);
-            try {
-                const botInfo = await bot.telegram.getMe();
-                console.log(`[SERVIDOR] ✅ Conectado como bot: ${botInfo.username}.`);
-                const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
-                console.log(`[SERVIDOR] 🔧 Configurando webhook en: ${webhookUrl}`);
-                await bot.telegram.setWebhook(webhookUrl, { 
-                    secret_token: secretToken,
-                    drop_pending_updates: true
-                });
-                console.log('[SERVIDOR] ✅ Webhook configurado con token secreto.');
-            } catch (telegramError) {
-                console.error("[SERVIDOR] ERROR AL CONFIGURAR TELEGRAM:", telegramError.message);
-            }
+        const botInfo = await bot.telegram.getMe();
+        console.log(`[SERVIDOR] ✅ Conectado como bot: ${botInfo.username}.`);
+        const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
+        console.log(`[SERVIDOR] 🔧 Configurando webhook en: ${webhookUrl}`);
+        await bot.telegram.setWebhook(webhookUrl, { 
+            secret_token: secretToken,
+            drop_pending_updates: true
         });
-    } catch (error) {
-        console.error("[SERVIDOR] ‼️ ERROR FATAL:", error.message, error);
-        process.exit(1);
+        console.log('[SERVIDOR] ✅ Webhook configurado con token secreto.');
+    } catch (telegramError) {
+        console.error("[SERVIDOR] ERROR AL CONFIGURAR TELEGRAM:", telegramError.message);
     }
-}
+});
 
-console.log('[SISTEMA] Iniciando servidor...');
-startServer();
+// Manejo de promesas no capturadas
+process.on('unhandledRejection', (err, promise) => {
+    console.error(`Error no manejado: ${err.message}`);
+    server.close(() => process.exit(1));
+});
