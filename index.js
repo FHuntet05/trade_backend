@@ -1,10 +1,10 @@
-// backend/index.js (VERSIÓN FINALÍSIMA Y A PRUEBA DE FALLOS v14.0)
+// backend/index.js (VERSIÓN CORREGIDA v15.0)
 
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const { Telegraf } = require('telegraf');
-const morgan =require('morgan');
+const { Telegraf, Markup } = require('telegraf'); // <-- CORRECCIÓN: Se añade 'Markup' a la importación.
+const morgan = require('morgan');
 const crypto = require('crypto');
 
 console.log('[SISTEMA] Cargando variables de entorno...');
@@ -23,7 +23,8 @@ function checkEnvVariables() {
 checkEnvVariables();
 
 console.log('[SISTEMA] Cargando módulos internos...');
-require('./models/userModel');
+// NOTA: Se asume que PendingReferral está en userModel. Si no, habría que importarlo.
+const User = require('./models/userModel'); 
 const authRoutes = require('./routes/authRoutes');
 const toolRoutes = require('./routes/toolRoutes');
 const rankingRoutes = require('./routes/rankingRoutes');
@@ -77,13 +78,27 @@ const WELCOME_MESSAGE = `*Bienvenido a NEURO LINK* 🚀\n\n¡Estás a punto de e
 const escapeMarkdownV2 = (text) => text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
 bot.command('start', async (ctx) => {
     try {
-        const newUserId = ctx.from.id.toString();
+        const telegramId = ctx.from.id.toString();
         const startPayload = ctx.startPayload ? ctx.startPayload.trim() : null;
-        if (startPayload && startPayload !== newUserId) {
-            await PendingReferral.updateOne({ newUserId }, { $set: { referrerId: startPayload, createdAt: new Date() } }, { upsert: true });
+        
+        if (startPayload) {
+            // Lógica para manejar el referenciador. 
+            // Se asume que se registrará el usuario cuando abra la Web App.
+            // Aquí podríamos guardar una relación temporal si fuera necesario, 
+            // pero la lógica de registro de usuario se maneja en el backend de la app.
+            console.log(`[Bot] Usuario ${telegramId} ha llegado con el payload de referido: ${startPayload}`);
         }
-        await ctx.replyWithMarkdownV2(escapeMarkdownV2(WELCOME_MESSAGE), Markup.inlineKeyboard([Markup.button.webApp('🚀 Abrir App', process.env.FRONTEND_URL)]));
-    } catch (error) { console.error('[Bot] Error en /start:', error.message); }
+
+        // Ahora 'Markup' está definido y la llamada funcionará correctamente.
+        await ctx.replyWithMarkdownV2(escapeMarkdownV2(WELCOME_MESSAGE), Markup.inlineKeyboard([
+            Markup.button.webApp('🚀 Abrir App', `${process.env.FRONTEND_URL}?ref=${startPayload || ''}`)
+        ]));
+
+    } catch (error) { 
+        console.error('[Bot] Error en /start:', error.message, error); 
+        // Enviar un mensaje de fallback al usuario si es posible
+        await ctx.reply('Ocurrió un error al procesar tu solicitud. Por favor, intenta de nuevo más tarde.').catch(e => console.error('[Bot] Error al enviar mensaje de fallback:', e.message));
+    }
 });
 bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
 
@@ -95,8 +110,7 @@ async function startServer() {
         console.log('[SERVIDOR] Conectando a MongoDB...');
         await mongoose.connect(process.env.MONGO_URI);
         console.log('[SERVIDOR] ✅ MongoDB conectado.');
-        // startPriceService(); // Descomentar cuando sea necesario
-        // startMonitoring();   // Descomentar cuando sea necesario
+        
         const PORT = process.env.PORT || 5000;
         app.listen(PORT, async () => {
             console.log(`[SERVIDOR] 🚀 Corriendo en puerto ${PORT}`);
