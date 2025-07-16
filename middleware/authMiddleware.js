@@ -1,8 +1,8 @@
-// backend/middleware/authMiddleware.js (VERSIÓN REFORZADA Y CON MEJORES LOGS)
+// backend/middleware/authMiddleware.js (VERSIÓN v16.0 - ESTABLE)
 
 const jwt = require('jsonwebtoken');
 const User = require('../models/userModel');
-const asyncHandler = require('express-async-handler'); // Usaremos esto para un mejor manejo de errores
+const asyncHandler = require('express-async-handler');
 
 const protect = asyncHandler(async (req, res, next) => {
   let token;
@@ -16,7 +16,6 @@ const protect = asyncHandler(async (req, res, next) => {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
       // 3. Obtener el usuario del token y adjuntarlo a `req`
-      // El id puede venir en 'id' o 'user.id' dependiendo de cómo se generó el token
       const userId = decoded.id; 
       if (!userId) {
         res.status(401);
@@ -36,7 +35,6 @@ const protect = asyncHandler(async (req, res, next) => {
     } catch (error) {
       console.error('ERROR DE AUTENTICACIÓN:', error.message);
       res.status(401);
-      // Lanzamos un nuevo error con un mensaje claro que será capturado por el manejador de errores de Express
       throw new Error('No autorizado, token fallido.');
     }
   }
@@ -47,12 +45,17 @@ const protect = asyncHandler(async (req, res, next) => {
   }
 });
 
+/**
+ * CORRECCIÓN v16.0: Se reemplazó 'throw new Error' con 'res.json'
+ * para asegurar que se envía una respuesta al cliente en caso de no ser administrador,
+ * evitando así que la solicitud se quede colgada indefinidamente.
+ */
 const isAdmin = (req, res, next) => {
     if (req.user && req.user.role === 'admin') {
         next();
     } else {
-        res.status(403);
-        throw new Error('Acceso denegado. Se requieren permisos de administrador.');
+        // CORRECCIÓN: Enviar una respuesta JSON en lugar de lanzar un error.
+        res.status(403).json({ message: 'Acceso denegado. Se requieren permisos de administrador.' });
     }
 };
 
