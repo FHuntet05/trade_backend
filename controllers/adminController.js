@@ -369,21 +369,42 @@ const deleteTool = async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Error al eliminar la herramienta.' }); }
 };
 
-const getUserDetails = async (req, res) => {
-  if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ message: 'ID de usuario no válido.' });
-  try {
-    const user = await User.findById(req.params.id).lean();
-    if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
-    const page = Number(req.query.page) || 1;
-    const pageSize = 10;
-    const transactionsCount = await Transaction.countDocuments({ user: user._id });
-    const transactions = await Transaction.find({ user: user._id }).sort({ createdAt: -1 }).limit(pageSize).skip(pageSize * (page - 1)).lean();
-    res.json({ user, transactions: { items: transactions, page, pages: Math.ceil(transactionsCount / pageSize) } });
-  } catch (error) {
-    console.error("Error en getUserDetails:", error);
-    res.status(500).json({ message: 'Error del servidor.' });
-  }
-};
+const getUserDetails = asyncHandler(async (req, res) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ message: 'ID de usuario no válido.' });
+    }
+
+    // Usamos Promise.all para ejecutar todas las consultas en paralelo para máxima eficiencia.
+    const [user, transactions, referrals] = await Promise.all([
+        User.findById(req.params.id).lean(),
+        Transaction.find({ user: req.params.id }).sort({ createdAt: -1 }).limit(10).lean(),
+        User.find({ referredBy: req.params.id }).select('username fullName telegramId createdAt').lean()
+    ]);
+
+    if (!user) {
+        return res.status(404).json({ message: 'Usuario no encontrado.' });
+    }
+
+    // Enriquecer los referidos con su URL de foto
+    const referralsWithPhoto = await Promise.all(
+        referrals.map(async (ref) => ({
+            ...ref,
+            photoUrl: await getTemporaryPhotoUrl(ref.photoFileId) || PLACEHOLDER_AVATAR_URL
+        }))
+    );
+    
+    // Enriquecer el usuario principal con su URL de foto
+    const userWithPhoto = {
+        ...user,
+        photoUrl: await getTemporaryPhotoUrl(user.photoFileId) || PLACEHOLDER_AVATAR_URL
+    };
+
+    res.json({
+        user: userWithPhoto,
+        transactions, // Devolvemos un array simple de transacciones
+        referrals: referralsWithPhoto // Devolvemos el array de referidos enriquecido
+    });
+});
 
 const getSettings = async (req, res) => {
   try {
@@ -435,5 +456,5 @@ module.exports = {
   getAdminTestData, getAllUsers, updateUser, setUserStatus, getDashboardStats,
   getAllTransactions, createManualTransaction, getAllTools, createTool, updateTool, deleteTool,
   getUserDetails, getSettings, updateSettings, generateTwoFactorSecret, verifyAndEnableTwoFactor,
-  getPendingWithdrawals, processWithdrawal, getUserReferrals
+  getPendingWithdrawals, processWithdrawal
 };
