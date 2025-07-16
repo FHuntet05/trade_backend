@@ -1,4 +1,4 @@
-// backend/controllers/adminController.js (VERSIÓN v16.7 - OPTIMIZADA)
+// backend/controllers/adminController.js (VERSIÓN v17.1 - IMPORTACIÓN CORREGIDA)
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const Tool = require('../models/toolModel');
@@ -6,12 +6,13 @@ const Setting = require('../models/settingsModel');
 const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
-const util = require('util');
 const transactionService = require('../services/transactionService');
+// CORRECCIÓN v17.1: Se añade la importación que faltaba.
+const { getTemporaryPhotoUrl } = require('./userController'); 
 
-const qrCodeToDataURLPromise = util.promisify(QRCode.toDataURL);
+const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
+const PLACEHOLDER_AVATAR_URL = `${process.env.FRONTEND_URL}/assets/images/user-avatar-placeholder.png`;
 
-// OPTIMIZADO: Consulta directa y paginada.
 const getPendingWithdrawals = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -20,14 +21,29 @@ const getPendingWithdrawals = async (req, res) => {
 
     const totalWithdrawals = await Transaction.countDocuments(filter);
     const pendingWithdrawals = await Transaction.find(filter)
-      .populate('user', 'username telegramId') // No necesitamos photoFileId aquí.
+      .populate('user', 'username telegramId')
       .sort({ createdAt: 'desc' })
       .limit(limit)
       .skip(limit * (page - 1))
-      .lean(); // .lean() para un rendimiento mucho más rápido en lecturas.
+      .lean();
+      
+    // Enriquecer con la foto
+    const withdrawalsWithPhoto = await Promise.all(
+        pendingWithdrawals.map(async (withdrawal) => {
+            const user = await User.findById(withdrawal.user._id).select('photoFileId').lean();
+            const photoUrl = await getTemporaryPhotoUrl(user?.photoFileId);
+            return {
+                ...withdrawal,
+                user: {
+                    ...withdrawal.user,
+                    photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL
+                }
+            };
+        })
+    );
 
     res.json({
-      withdrawals: pendingWithdrawals,
+      withdrawals: withdrawalsWithPhoto,
       page,
       pages: Math.ceil(totalWithdrawals / limit),
       total: totalWithdrawals
@@ -63,15 +79,14 @@ const processWithdrawal = async (req, res) => {
     if (status === 'completed') {
       const recipientAddress = withdrawal.metadata.get('walletAddress');
       const amount = withdrawal.amount;
-      const currency = withdrawal.metadata.get('currency'); // Obtener de metadata
+      const currency = withdrawal.metadata.get('currency');
 
       if (!recipientAddress || !amount || !currency) {
         throw new Error('Datos de retiro incompletos (dirección, monto o moneda faltante) en la transacción.');
       }
       
       let txHash;
-      if (currency.startsWith('USDT')) { // Más flexible
-        console.log(`[ProcessWithdrawal] Iniciando envío de ${amount} ${currency} a ${recipientAddress}`);
+      if (currency.startsWith('USDT')) {
         txHash = await transactionService.sendUsdtOnTron(recipientAddress, amount);
       } else {
         throw new Error(`La moneda de retiro '${currency}' no está soportada para envíos automáticos.`);
@@ -84,7 +99,7 @@ const processWithdrawal = async (req, res) => {
       withdrawal.metadata.set('transactionHash', txHash);
       withdrawal.description = `Retiro completado. Hash: ${txHash.substring(0,15)}...`;
 
-    } else { // status === 'rejected'
+    } else {
       const user = await User.findById(withdrawal.user).session(session);
       if (!user) throw new Error('Usuario del retiro no encontrado.');
       
@@ -109,14 +124,6 @@ const processWithdrawal = async (req, res) => {
   }
 };
 
-
-/**
- * CORRECCIÓN v16.7: Reescribimos completamente la función.
- * En lugar de usar .populate() que es extremadamente ineficiente para listas grandes,
- * hacemos una consulta directa y paginada sobre la colección de usuarios, buscando
- * aquellos cuyo 'referredBy' sea el ID del usuario actual.
- * Esto es órdenes de magnitud más rápido y escalable.
- */
 const getUserReferrals = async (req, res) => {
     try {
         const userId = req.params.id;
@@ -131,22 +138,21 @@ const getUserReferrals = async (req, res) => {
 
         const totalReferrals = await User.countDocuments(filter);
         const referrals = await User.find(filter)
-            .select('username fullName telegramId createdAt balance.usdt')
+            .select('username fullName telegramId createdAt balance.usdt photoFileId')
             .sort({ createdAt: -1 })
             .limit(limit)
             .skip(limit * (page - 1))
-            .lean(); // .lean() para un rendimiento óptimo
+            .lean();
         
-        const referralsData = referrals.map(ref => ({
+        const referralsData = await Promise.all(referrals.map(async ref => ({
             _id: ref._id,
             username: ref.username,
             fullName: ref.fullName,
-            // Construimos la URL de la foto en el backend para que el frontend no tenga que hacerlo
-            photoUrl: `${process.env.BACKEND_URL}/api/users/${ref.telegramId}/photo`,
+            photoUrl: await getTemporaryPhotoUrl(ref.photoFileId) || PLACEHOLDER_AVATAR_URL,
             joinDate: ref.createdAt,
-            totalDeposit: ref.balance.usdt, // Asumimos que el depósito es en usdt
-            level: 1 // Simplificado a nivel 1, se puede expandir si es necesario
-        }));
+            totalDeposit: ref.balance.usdt,
+            level: 1
+        })));
         
         res.json({ 
             totalReferrals, 
@@ -160,7 +166,6 @@ const getUserReferrals = async (req, res) => {
         res.status(500).json({ message: "Error del servidor al obtener los referidos." });
     }
 };
-
 
 const getAdminTestData = async (req, res) => {
   try {
@@ -188,13 +193,12 @@ const getAllUsers = async (req, res) => {
     }
     const count = await User.countDocuments(filter);
     const users = await User.find(filter)
-      .select('username telegramId role status createdAt balance photoFileId') // Necesitamos photoFileId
+      .select('username telegramId role status createdAt balance photoFileId')
       .sort({ createdAt: -1 })
       .limit(pageSize)
       .skip(pageSize * (page - 1))
       .lean();
 
-    // CORRECCIÓN: Enriquecer cada usuario con su URL de foto temporal
     const usersWithPhotoUrl = await Promise.all(
         users.map(async (user) => {
             const photoUrl = await getTemporaryPhotoUrl(user.photoFileId);
@@ -368,7 +372,7 @@ const deleteTool = async (req, res) => {
 const getUserDetails = async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ message: 'ID de usuario no válido.' });
   try {
-    const user = await User.findById(req.params.id).lean(); // .lean() para un rendimiento óptimo
+    const user = await User.findById(req.params.id).lean();
     if (!user) return res.status(404).json({ message: 'Usuario no encontrado.' });
     const page = Number(req.query.page) || 1;
     const pageSize = 10;
@@ -399,10 +403,8 @@ const generateTwoFactorSecret = async (req, res) => {
   try {
     const secret = speakeasy.generateSecret({ name: `NeuroLink Admin (${req.user.username})` });
     await User.findByIdAndUpdate(req.user.id, { twoFactorSecret: secret.base32 });
-    
     const data_url = await qrCodeToDataURLPromise(secret.otpauth_url);
     res.json({ secret: secret.base32, qrCodeUrl: data_url });
-
   } catch (error) {
     console.error("Error en generateTwoFactorSecret:", error);
     res.status(500).json({ message: 'Error al generar el secreto 2FA.' });
