@@ -1,4 +1,4 @@
-// backend/config/db.js (NUEVO v18.6 - BLINDADO CONTRA FALLOS SILENCIOSOS)
+// backend/config/db.js (VERSIÓN v18.6 - BLINDADO CONTRA FALLOS SILENCIOSOS)
 const mongoose = require('mongoose');
 const colors = require('colors');
 
@@ -11,10 +11,10 @@ const connectDB = async () => {
     });
 
     // Si la conexión es exitosa, lo notifica en la consola con texto verde.
-    console.log(`MongoDB Connected: ${conn.connection.host}`.cyan.underline.bold);
+    console.log(`[DB] ✅ MongoDB Conectado: ${conn.connection.host}`.cyan.underline.bold);
   } catch (error) {
     // Si la conexión falla, lo notifica con un error claro en rojo.
-    console.error(`Error: ${error.message}`.red.bold);
+    console.error(`[DB] ❌ ERROR DE CONEXIÓN: ${error.message}`.red.bold);
     // CRÍTICO: Detiene todo el proceso del servidor con un código de error.
     // Esto previene que el servidor corra en un estado "zombi" sin conexión a la BD.
     process.exit(1);

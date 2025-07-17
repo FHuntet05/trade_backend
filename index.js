@@ -1,37 +1,35 @@
-// backend/index.js (VERSIÓN 21.0 - VERIFICACIÓN DE DESPLIEGUE)
-
-// =================================================================================
-console.log('//////////////////////////////////////////////////////////////////');
-console.log('---[ INICIANDO CÓDIGO v21.0 - VERIFICACIÓN DE DESPLIEGUE FORZADO ]---');
-console.log('//////////////////////////////////////////////////////////////////');
-// =================================================================================
-
+// backend/index.js (VERSIÓN v18.6 - CORREGIDO Y ESTABLE)
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
-const morgan = require('morgan');
+const morgan = 'morgan';
 const crypto = require('crypto');
-const connectDB = require('./config/db');
-console.log('[SISTEMA] Cargando variables de entorno...');
-require('dotenv').config();
+const dotenv = require('dotenv');
 
+// --- Carga de Configuración y Variables de Entorno ---
+console.log('[SISTEMA] Iniciando aplicación NEURO LINK...');
+dotenv.config(); // Cargar .env lo antes posible
 const connectDB = require('./config/db');
 
+// --- Verificación de Variables Críticas ---
 function checkEnvVariables() {
     console.log('[SISTEMA] Verificando variables de entorno críticas...');
     const requiredVars = ['MONGO_URI', 'JWT_SECRET', 'TELEGRAM_BOT_TOKEN', 'FRONTEND_URL', 'ADMIN_URL', 'BACKEND_URL', 'BSCSCAN_API_KEY', 'MASTER_SEED_PHRASE'];
     const missingVars = requiredVars.filter(v => !process.env[v]);
     if (missingVars.length > 0) {
-        console.error(`!! ERROR FATAL: FALTAN VARIABLES DE ENTORNO: ${missingVars.join(', ')}`);
+        console.error(`!! ERROR FATAL: FALTAN VARIABLES DE ENTORNO: ${missingVars.join(', ')}`.red.bold);
         process.exit(1);
     }
-    console.log('[SISTEMA] Todas las variables de entorno críticas están presentes.');
+    console.log('[SISTEMA] ✅ Todas las variables de entorno críticas están presentes.');
 }
 checkEnvVariables();
 
+// --- Conexión a la Base de Datos ---
+// Esto se ejecuta ahora. Si falla, el proceso se detendrá.
 connectDB();
 
-console.log('[SISTEMA] Cargando módulos internos...');
+// --- Carga de Módulos de Rutas ---
+console.log('[SISTEMA] Cargando módulos de rutas...');
 const authRoutes = require('./routes/authRoutes');
 const toolRoutes = require('./routes/toolRoutes');
 const rankingRoutes = require('./routes/rankingRoutes');
@@ -43,35 +41,33 @@ const adminRoutes = require('./routes/adminRoutes');
 const treasuryRoutes = require('./routes/treasuryRoutes');
 const userRoutes = require('./routes/userRoutes');
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
-console.log('[SISTEMA] Módulos internos cargados.');
+console.log('[SISTEMA] ✅ Módulos de rutas cargados.');
 
-console.log('[SISTEMA] Inicializando aplicación...');
+// --- Inicialización de Express y Telegram ---
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-app.disable('etag');
-
-const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
-const secretPath = `/api/telegram-webhook/${secretToken}`;
-console.log(`[SISTEMA] Ruta secreta del webhook definida: ${secretPath}`);
+// --- Configuración de Middlewares ---
+app.disable('etag'); // Deshabilitar etag para evitar cache 304
 
 const whitelist = [process.env.FRONTEND_URL, process.env.ADMIN_URL];
 const corsOptions = {
     origin: (origin, callback) => {
-        if (!origin || whitelist.indexOf(origin) !== -1) callback(null, true);
-        else callback(new Error(`Origen no permitido: ${origin}`));
+        if (!origin || whitelist.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error(`Origen no permitido por CORS: ${origin}`));
+        }
     },
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     credentials: true,
-    allowedHeaders: "Origin, X-Requested-With, Content-Type, Accept, Authorization"
 };
-app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
 app.use(express.json());
-app.use(morgan('dev'));
+app.use(require('morgan')('dev'));
 
+// --- Definición de Rutas de la API ---
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
-
 app.use('/api/auth', authRoutes);
 app.use('/api/tools', toolRoutes);
 app.use('/api/ranking', rankingRoutes);
@@ -82,43 +78,47 @@ app.use('/api/payment', paymentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
 app.use('/api/users', userRoutes);
-app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
-console.log('[SISTEMA] Rutas de API registradas.');
 
+const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
+const secretPath = `/api/telegram-webhook/${secretToken}`;
+app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
+console.log('[SISTEMA] ✅ Rutas de API registradas.');
+
+// --- Lógica del Bot de Telegram ---
 const WELCOME_MESSAGE = `*Bienvenido a NEURO LINK* 🚀\n\n¡Estás a punto de entrar a un nuevo ecosistema de minería digital!\n\nHaz clic en el botón de abajo para lanzar la aplicación.`;
 const escapeMarkdownV2 = (text) => text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
 bot.command('start', async (ctx) => {
     try {
         const telegramId = ctx.from.id.toString();
         const startPayload = ctx.startPayload ? ctx.startPayload.trim() : null;
-        if (startPayload) { console.log(`[Bot] Usuario ${telegramId} ha llegado con el payload de referido: ${startPayload}`); }
-        await ctx.replyWithMarkdownV2(escapeMarkdownV2(WELCOME_MESSAGE), Markup.inlineKeyboard([ Markup.button.webApp('🚀 Abrir App', `${process.env.FRONTEND_URL}?ref=${startPayload || ''}`) ]));
+        if (startPayload) console.log(`[Bot] Usuario ${telegramId} ha llegado con referido: ${startPayload}`);
+        await ctx.replyWithMarkdownV2(escapeMarkdownV2(WELCOME_MESSAGE), Markup.inlineKeyboard([Markup.button.webApp('🚀 Abrir App', `${process.env.FRONTEND_URL}?ref=${startPayload || ''}`)]));
     } catch (error) { 
-        console.error('[Bot] Error en /start:', error.message, error); 
-        await ctx.reply('Ocurrió un error al procesar tu solicitud. Por favor, intenta de nuevo más tarde.').catch(e => console.error('[Bot] Error al enviar mensaje de fallback:', e.message));
+        console.error('[Bot] Error en /start:', error); 
     }
 });
 bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
 
+// --- Middlewares de Manejo de Errores (al final) ---
 app.use(notFound);
 app.use(errorHandler);
 
+// --- Arranque del Servidor ---
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, async () => {
-    console.log(`[SERVIDOR] 🚀 Corriendo en puerto ${PORT}`);
+    console.log(`[SERVIDOR] 🚀 Servidor corriendo en puerto ${PORT}`.yellow.bold);
     try {
         const botInfo = await bot.telegram.getMe();
         console.log(`[SERVIDOR] ✅ Conectado como bot: ${botInfo.username}.`);
         const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
-        console.log(`[SERVIDOR] 🔧 Configurando webhook en: ${webhookUrl}`);
         await bot.telegram.setWebhook(webhookUrl, { secret_token: secretToken, drop_pending_updates: true });
-        console.log('[SERVIDOR] ✅ Webhook configurado con token secreto.');
+        console.log(`[SERVIDOR] ✅ Webhook configurado en: ${webhookUrl}`.green.bold);
     } catch (telegramError) {
-        console.error("[SERVIDOR] ERROR AL CONFIGURAR TELEGRAM:", telegramError.message);
+        console.error("[SERVIDOR] ❌ ERROR AL CONFIGURAR TELEGRAM:", telegramError.message);
     }
 });
 
 process.on('unhandledRejection', (err, promise) => {
-    console.error(`Error no manejado: ${err.message}`);
+    console.error(`❌ ERROR NO MANEJADO: ${err.message}`.red.bold);
     server.close(() => process.exit(1));
 });
