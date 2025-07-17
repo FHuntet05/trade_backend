@@ -1,4 +1,4 @@
-// backend/models/cryptoWalletModel.js (VERSIÓN v18.5 - BLINDADO CONTRA CRASHES)
+// backend/models/cryptoWalletModel.js (VERSIÓN v18.7 - CORRECCIÓN DEFINITIVA DE COLECCIÓN)
 const mongoose = require('mongoose');
 
 const balanceSchema = new mongoose.Schema({
@@ -32,10 +32,13 @@ const cryptoWalletSchema = new mongoose.Schema({
     default: 0,
   },
   balances: [balanceSchema]
-}, { timestamps: true });
+}, { 
+  timestamps: true,
+  // CORRECCIÓN DEFINITIVA: Se especifica explícitamente el nombre de la colección en la base de datos.
+  // Esto elimina cualquier ambigüedad de Mongoose y resuelve el problema de la carga infinita.
+  collection: 'cryptowallets' 
+});
 
 cryptoWalletSchema.index({ user: 1, chain: 1 }, { unique: true });
 
-// CORRECCIÓN CRÍTICA: Previene el error 'OverwriteModelError' con nodemon.
-// Esto asegura que el servidor no se caiga en reinicios, solucionando el problema del loader infinito.
 module.exports = mongoose.models.CryptoWallet || mongoose.model('CryptoWallet', cryptoWalletSchema);
