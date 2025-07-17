@@ -1,4 +1,4 @@
-// backend/controllers/adminController.js (VERSIÓN 20.0 - FORENSE ANTI-COLAPSO)
+// backend/controllers/adminController.js (VERSIÓN v17.1 - CON NOTIFICACIONES DE RETIRO)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -11,87 +11,56 @@ const transactionService = require('../services/transactionService');
 const { getTemporaryPhotoUrl } = require('./userController'); 
 const asyncHandler = require('express-async-handler');
 
+// ======================= INICIO DE LA MODIFICACIÓN v17.1 =======================
+// 1. IMPORTAMOS EL SERVICIO DE NOTIFICACIONES
+const { sendTelegramMessage } = require('../services/notificationService');
+// ======================== FIN DE LA MODIFICACIÓN v17.1 =========================
+
 const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const PLACEHOLDER_AVATAR_URL = 'https://i.ibb.co/606BFx4/user-avatar-placeholder.png';
 
-// =========================================================================================
-// OBTENER RETIROS PENDIENTES (REESCRITO PARA SER 100% SECUENCIAL Y CON LOGS DETALLADOS)
-// =========================================================================================
+// --- FUNCIONES EXISTENTES (SIN CAMBIOS) ---
 const getPendingWithdrawals = asyncHandler(async (req, res) => {
-    console.log('[LOG FORENSE] 1. Iniciando getPendingWithdrawals...');
+    // ... (código sin cambios)
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const filter = { type: 'withdrawal', status: 'pending' };
-
-    console.log('[LOG FORENSE] 2. Contando documentos de retiro...');
     const total = await Transaction.countDocuments(filter);
-    console.log(`[LOG FORENSE] 3. Total de retiros encontrados: ${total}`);
-
-    console.log('[LOG FORENSE] 4. Buscando documentos de retiro...');
     const withdrawals = await Transaction.find(filter).sort({ createdAt: 'desc' }).limit(limit).skip(limit * (page - 1)).lean();
-    console.log(`[LOG FORENSE] 5. Documentos de retiro obtenidos: ${withdrawals.length}`);
 
     if (withdrawals.length === 0) {
-        console.log('[LOG FORENSE] 5.1. No hay retiros, devolviendo respuesta vacía.');
         return res.json({ withdrawals: [], page: 1, pages: 0, total: 0 });
     }
 
     const userIds = [...new Set(withdrawals.map(w => w.user.toString()))];
-    console.log(`[LOG FORENSE] 6. IDs de usuario extraídos: ${userIds.length}`);
-
-    console.log('[LOG FORENSE] 7. Buscando información de usuarios...');
     const users = await User.find({ '_id': { $in: userIds } }).select('username telegramId photoFileId').lean();
-    console.log(`[LOG FORENSE] 8. Información de usuarios obtenida: ${users.length}`);
-
     const userMap = users.reduce((acc, user) => { acc[user._id.toString()] = user; return acc; }, {});
 
-    console.log('[LOG FORENSE] 9. Iniciando enriquecimiento de datos (uno por uno)...');
     const withdrawalsWithDetails = [];
     for (const w of withdrawals) {
         const userInfo = userMap[w.user.toString()];
         if (userInfo) {
-            console.log(`[LOG FORENSE]   - Procesando retiro para usuario: ${userInfo.username}`);
             const photoUrl = await getTemporaryPhotoUrl(userInfo.photoFileId);
             withdrawalsWithDetails.push({ ...w, user: { ...userInfo, photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL } });
         }
     }
-
-    console.log('[LOG FORENSE] 10. Enriquecimiento completo. Enviando respuesta final.');
     res.json({ withdrawals: withdrawalsWithDetails, page, pages: Math.ceil(total / limit), total });
 });
 
-// =======================================================================================
-// OBTENER DETALLES DE USUARIO (REESCRITO PARA SER 100% SECUENCIAL Y CON LOGS DETALLADOS)
-// =======================================================================================
 const getUserDetails = asyncHandler(async (req, res) => {
-    console.log('[LOG FORENSE] 1. Iniciando getUserDetails...');
+    // ... (código sin cambios)
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) { res.status(400); throw new Error('ID de usuario no válido.'); }
     const userId = new mongoose.Types.ObjectId(req.params.id);
-
-    console.log('[LOG FORENSE] 2. Obteniendo datos principales del usuario...');
     const user = await User.findById(userId).select('-password').lean();
     if (!user) { res.status(404); throw new Error('Usuario no encontrado.'); }
-    console.log(`[LOG FORENSE] 3. Usuario ${user.username} encontrado.`);
-
-    console.log('[LOG FORENSE] 4. Obteniendo transacciones del usuario...');
     const transactions = await Transaction.find({ user: userId }).sort({ createdAt: -1 }).limit(10).lean();
-    console.log(`[LOG FORENSE] 5. Transacciones encontradas: ${transactions.length}`);
-
-    console.log('[LOG FORENSE] 6. Obteniendo referidos del usuario...');
     const referrals = await User.find({ referredBy: userId }).select('username telegramId photoFileId createdAt').lean();
-    console.log(`[LOG FORENSE] 7. Referidos encontrados: ${referrals.length}`);
-
-    console.log('[LOG FORENSE] 8. Obteniendo foto del usuario principal...');
     const userPhotoUrl = await getTemporaryPhotoUrl(user.photoFileId);
-
-    console.log('[LOG FORENSE] 9. Enriqueciendo referidos (uno por uno)...');
     const referralsWithPhoto = [];
     for (const ref of referrals) {
         const photoUrl = await getTemporaryPhotoUrl(ref.photoFileId);
         referralsWithPhoto.push({ ...ref, photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL });
     }
-
-    console.log('[LOG FORENSE] 10. Enriquecimiento completo. Enviando respuesta final.');
     res.json({
         user: { ...user, photoUrl: userPhotoUrl || PLACEHOLDER_AVATAR_URL },
         transactions: { items: transactions, total: transactions.length },
@@ -99,39 +68,104 @@ const getUserDetails = asyncHandler(async (req, res) => {
     });
 });
 
-// =================================================================
-// CÓDIGO RESTANTE (SIN CAMBIOS, PERO INCLUIDO PARA QUE ESTÉ COMPLETO)
-// =================================================================
+// ======================= INICIO DE LA MODIFICACIÓN v17.1 =======================
+// 2. MODIFICAMOS LA FUNCIÓN processWithdrawal
 const processWithdrawal = asyncHandler(async (req, res) => {
-    const { status, adminNotes } = req.body; const { id } = req.params;
-    if (!['completed', 'rejected'].includes(status)) { res.status(400); throw new Error("El estado debe ser 'completed' o 'rejected'."); }
+    const { status, adminNotes } = req.body;
+    const { id } = req.params;
+
+    if (!['completed', 'rejected'].includes(status)) {
+        res.status(400);
+        throw new Error("El estado debe ser 'completed' o 'rejected'.");
+    }
+
+    // A diferencia de antes, ahora poblamos la información del usuario para obtener su telegramId
+    const withdrawal = await Transaction.findById(id).populate('user', 'telegramId');
+
+    if (!withdrawal || withdrawal.type !== 'withdrawal' || withdrawal.status !== 'pending') {
+        res.status(404);
+        throw new Error('Retiro no encontrado o ya ha sido procesado.');
+    }
+    
+    // Obtenemos el telegramId del usuario para notificarlo después
+    const userToNotify = withdrawal.user;
+    if (!userToNotify || !userToNotify.telegramId) {
+        console.warn(`No se pudo encontrar el telegramId para el usuario ${withdrawal.user._id}. No se enviará notificación.`);
+    }
+
+    // Usamos una sesión para la operación de base de datos
     const session = await mongoose.startSession();
     try {
         session.startTransaction();
-        const withdrawal = await Transaction.findById(id).session(session);
-        if (!withdrawal || withdrawal.type !== 'withdrawal' || withdrawal.status !== 'pending') { await session.abortTransaction(); res.status(404); throw new Error('Retiro no encontrado o ya ha sido procesado.'); }
-        withdrawal.metadata.set('adminNotes', adminNotes || 'N/A'); withdrawal.metadata.set('processedBy', req.user.username);
+
+        withdrawal.metadata.set('adminNotes', adminNotes || 'N/A');
+        withdrawal.metadata.set('processedBy', req.user.username);
+        
+        let notificationMessage = '';
+
         if (status === 'completed') {
-            const recipientAddress = withdrawal.metadata.get('walletAddress'); const amount = withdrawal.amount; const currency = withdrawal.currency;
-            if (!recipientAddress || !amount || !currency) throw new Error('Datos de retiro incompletos.');
-            const txHash = `simulated_tx_${Date.now()}`;
-            if (!txHash) throw new Error('La transacción falló o no se recibió un hash.');
-            withdrawal.status = 'completed'; withdrawal.metadata.set('transactionHash', txHash); withdrawal.description = `Retiro completado. Hash: ${txHash.substring(0, 15)}...`;
-        } else {
-            const user = await User.findById(withdrawal.user).session(session);
-            if (!user) throw new Error('Usuario del retiro no encontrado para el reembolso.');
-            user.balance.usdt += withdrawal.amount; await user.save({ session });
-            withdrawal.status = 'rejected'; withdrawal.description = `Retiro rechazado por admin. Fondos devueltos al saldo.`;
+            const recipientAddress = withdrawal.metadata.get('walletAddress');
+            const amount = withdrawal.amount;
+            const currency = withdrawal.currency;
+
+            if (!recipientAddress || !amount || !currency) {
+                throw new Error('Datos de retiro incompletos.');
+            }
+            
+            // Aquí iría la lógica real de envío a la blockchain.
+            // Por ahora, simulamos como antes.
+            const txHash = `simulated_tx_${Date.now()}`; 
+            
+            withdrawal.status = 'completed';
+            withdrawal.metadata.set('transactionHash', txHash);
+            withdrawal.description = `Retiro completado. Hash: ${txHash.substring(0, 15)}...`;
+
+            // Preparamos el mensaje de éxito
+            notificationMessage = `✅ <b>¡Retiro Aprobado!</b>\n\n` +
+                                `Tu solicitud de retiro por <b>${amount.toFixed(2)} ${currency}</b> ha sido procesada y los fondos han sido enviados.\n\n` +
+                                `<b>Dirección:</b> <code>${recipientAddress}</code>\n` +
+                                `<b>Hash de transacción:</b> <code>${txHash}</code>`;
+
+        } else { // status === 'rejected'
+            // Reembolsamos al usuario
+            const userForRefund = await User.findById(withdrawal.user._id).session(session);
+            if (!userForRefund) throw new Error('Usuario del retiro no encontrado para el reembolso.');
+            
+            userForRefund.balance.usdt += withdrawal.amount;
+            await userForRefund.save({ session });
+            
+            withdrawal.status = 'rejected';
+            withdrawal.description = `Retiro rechazado por admin. Fondos devueltos al saldo.`;
+
+            // Preparamos el mensaje de rechazo
+            notificationMessage = `❌ <b>Retiro Rechazado</b>\n\n` +
+                                `Tu solicitud de retiro por <b>${withdrawal.amount.toFixed(2)} USDT</b> ha sido rechazada.\n\n` +
+                                `<b>Motivo:</b> ${adminNotes || 'Contacta a soporte para más detalles.'}\n\n` +
+                                `Los fondos han sido devueltos a tu saldo.`;
         }
+
         const updatedWithdrawal = await withdrawal.save({ session });
         await session.commitTransaction();
-        res.json({ message: `Retiro marcado como '${status}' exitosamente.`, withdrawal: updatedWithdrawal });
-    } catch (error) {
-        await session.abortTransaction(); console.error("Error en processWithdrawal:", error);
-        res.status(500).json({ message: error.message || "Error del servidor al procesar el retiro." });
-    } finally { session.endSession(); }
-});
 
+        // Tras el éxito de la DB, enviamos la notificación (fuera de la transacción)
+        if (userToNotify && userToNotify.telegramId && notificationMessage) {
+            await sendTelegramMessage(userToNotify.telegramId, notificationMessage);
+        }
+
+        res.json({ message: `Retiro marcado como '${status}' exitosamente.`, withdrawal: updatedWithdrawal });
+
+    } catch (error) {
+        await session.abortTransaction();
+        console.error("Error en processWithdrawal:", error);
+        res.status(500).json({ message: error.message || "Error del servidor al procesar el retiro." });
+    } finally {
+        session.endSession();
+    }
+});
+// ======================== FIN DE LA MODIFICACIÓN v17.1 =========================
+
+
+// --- CÓDIGO RESTANTE (SIN CAMBIOS) ---
 const getAllUsers = asyncHandler(async (req, res) => {
     const pageSize = 10; const page = Number(req.query.page) || 1;
     const filter = req.query.search ? { $or: [{ username: { $regex: req.query.search, $options: 'i' } }, { telegramId: { $regex: req.query.search, $options: 'i' } }] } : {};
