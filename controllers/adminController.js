@@ -15,39 +15,59 @@ const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const PLACEHOLDER_AVATAR_URL = 'https://i.ibb.co/606BFx4/user-avatar-placeholder.png';
 
 // =================================================================
-// FUNCIÓN #3: OBTENER RETIROS PENDIENTES (Página de "Retiros")
+// OBTENER RETIROS PENDIENTES (Estrategia Anti-Bloqueo sin populate)
 // =================================================================
 const getPendingWithdrawals = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
-    
     const filter = { type: 'withdrawal', status: 'pending' };
 
+    // PASO 1: Obtener las transacciones y el conteo total.
     const total = await Transaction.countDocuments(filter);
     const withdrawals = await Transaction.find(filter)
-        .populate('user', 'username telegramId photoFileId') // Populate es aceptable aquí porque la lista es pequeña
         .sort({ createdAt: 'desc' })
         .limit(limit)
         .skip(limit * (page - 1))
         .lean();
 
-    // Enriquecer con fotos
-    const withdrawalsWithPhoto = await Promise.all(withdrawals.map(async w => ({
-        ...w,
-        user: {
-            ...w.user,
-            photoUrl: await getTemporaryPhotoUrl(w.user.photoFileId) || PLACEHOLDER_AVATAR_URL
-        }
-    })));
+    // PASO 2: Extraer los IDs de usuario de los retiros.
+    const userIds = [...new Set(withdrawals.map(w => w.user.toString()))];
 
+    // PASO 3: Obtener la información de esos usuarios en una sola consulta.
+    const users = await User.find({ '_id': { $in: userIds } })
+        .select('username telegramId photoFileId')
+        .lean();
+
+    // Crear un mapa de usuarios para una búsqueda rápida (id -> user info)
+    const userMap = users.reduce((acc, user) => {
+        acc[user._id.toString()] = user;
+        return acc;
+    }, {});
+
+    // PASO 4: Combinar los datos y obtener las fotos de forma controlada.
+    const withdrawalsWithDetails = [];
+    for (const w of withdrawals) {
+        const userInfo = userMap[w.user.toString()];
+        if (userInfo) {
+            const photoUrl = await getTemporaryPhotoUrl(userInfo.photoFileId);
+            withdrawalsWithDetails.push({
+                ...w,
+                user: { // Inyectamos la información del usuario
+                    ...userInfo,
+                    photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL
+                }
+            });
+        }
+    }
+
+    // PASO 5: Enviar la respuesta.
     res.json({
-      withdrawals: withdrawalsWithPhoto,
-      page,
-      pages: Math.ceil(total / limit),
-      total
+        withdrawals: withdrawalsWithDetails,
+        page,
+        pages: Math.ceil(total / limit),
+        total
     });
 });
-
 
 // =================================================================
 // FUNCIÓN #4: PROCESAR UN RETIRO (Aprobar/Rechazar)
@@ -304,7 +324,7 @@ const deleteTool = async (req, res) => {
 };
 
 // =================================================================
-// FUNCIÓN #2: OBTENER DETALLES DE UN USUARIO (Página de "Detalles")
+// OBTENER DETALLES DE UN USUARIO (Estrategia Anti-Bloqueo)
 // =================================================================
 const getUserDetails = asyncHandler(async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
@@ -314,35 +334,35 @@ const getUserDetails = asyncHandler(async (req, res) => {
 
     const userId = new mongoose.Types.ObjectId(req.params.id);
 
-    // Ejecutar todas las consultas en paralelo para máxima eficiencia
-    const [user, transactions, referrals, transactionCount] = await Promise.all([
+    // PASO 1: Obtener todos los datos principales en paralelo. TODO .lean()
+    const [user, transactions, referrals] = await Promise.all([
         User.findById(userId).select('-password').lean(),
         Transaction.find({ user: userId }).sort({ createdAt: -1 }).limit(10).lean(),
-        User.find({ referredBy: userId }).select('username telegramId photoFileId createdAt').lean(),
-        Transaction.countDocuments({ user: userId })
+        User.find({ referredBy: userId }).select('username telegramId photoFileId createdAt').lean()
     ]);
 
     if (!user) {
         res.status(404);
         throw new Error('Usuario no encontrado.');
     }
-    
-    // Enriquecer todos los datos con fotos en un solo bloque
-    const [userPhotoUrl, referralsWithPhoto] = await Promise.all([
-        getTemporaryPhotoUrl(user.photoFileId),
-        Promise.all(referrals.map(async (ref) => ({
-            ...ref,
-            photoUrl: await getTemporaryPhotoUrl(ref.photoFileId) || PLACEHOLDER_AVATAR_URL
-        })))
-    ]);
 
+    // PASO 2: Enriquecer los datos con las fotos de forma secuencial y controlada.
+    const userPhotoUrl = await getTemporaryPhotoUrl(user.photoFileId);
+
+    // Usamos un bucle for...of que es más lento pero 100% predecible y no cuelga el event loop.
+    const referralsWithPhoto = [];
+    for (const ref of referrals) {
+        const photoUrl = await getTemporaryPhotoUrl(ref.photoFileId);
+        referralsWithPhoto.push({
+            ...ref,
+            photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL
+        });
+    }
+
+    // PASO 3: Enviar la respuesta.
     res.json({
         user: { ...user, photoUrl: userPhotoUrl || PLACEHOLDER_AVATAR_URL },
-        transactions: {
-            items: transactions,
-            total: transactionCount,
-            pages: Math.ceil(transactionCount / 10)
-        },
+        transactions: { items: transactions, total: transactions.length },
         referrals: referralsWithPhoto
     });
 });
