@@ -1,5 +1,4 @@
-// backend/controllers/adminController.js (VERSIÓN v18.4 - OPTIMIZACIÓN DE CONSULTA)
-
+// backend/controllers/adminController.js (VERSIÓN v18.5 - CONSULTA RESTAURADA Y ESTABLE)
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const Tool = require('../models/toolModel');
@@ -227,14 +226,13 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
 });
 
 // =======================================================================================
-// ==================== INICIO DE LA FUNCIONALIDAD DE TESORERÍA v18.4 =====================
+// ==================== INICIO DE LA FUNCIONALIDAD DE TESORERÍA v18.5 =====================
 // =======================================================================================
 
 const getTreasuryWalletsList = asyncHandler(async (req, res) => {
-    // CORRECCIÓN CRÍTICA: Eliminamos .populate() para que la consulta sea instantánea.
-    // Solo traemos los campos estrictamente necesarios para el escaneo.
     const wallets = await CryptoWallet.find({})
         .select('address chain user')
+        .populate('user', 'username')
         .lean();
     res.json(wallets);
 });
@@ -339,7 +337,7 @@ const sweepFunds = asyncHandler(async (req, res) => {
 });
 
 // =======================================================================================
-// ===================== FIN DE LA FUNCIONALIDAD DE TESORERÍA v18.4 ======================
+// ===================== FIN DE LA FUNCIONALIDAD DE TESORERÍA v18.5 ======================
 // =======================================================================================
 
 module.exports = {

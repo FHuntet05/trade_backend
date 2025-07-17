@@ -1,7 +1,6 @@
-// backend/models/cryptoWalletModel.js (VERSIÓN v18.0 - CON CAMPO DE BALANCES)
+// backend/models/cryptoWalletModel.js (VERSIÓN v18.5 - BLINDADO CONTRA CRASHES)
 const mongoose = require('mongoose');
 
-// Sub-esquema para almacenar múltiples balances si es necesario (ej. BNB y USDT)
 const balanceSchema = new mongoose.Schema({
     currency: { type: String, required: true },
     amount: { type: String, required: true }
@@ -32,13 +31,11 @@ const cryptoWalletSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
-  // --- CAMPO AÑADIDO ---
-  // Almacena el último saldo detectado en la blockchain por el escáner.
   balances: [balanceSchema]
 }, { timestamps: true });
 
 cryptoWalletSchema.index({ user: 1, chain: 1 }, { unique: true });
 
-const CryptoWallet = mongoose.model('CryptoWallet', cryptoWalletSchema);
-
-module.exports = CryptoWallet;
+// CORRECCIÓN CRÍTICA: Previene el error 'OverwriteModelError' con nodemon.
+// Esto asegura que el servidor no se caiga en reinicios, solucionando el problema del loader infinito.
+module.exports = mongoose.models.CryptoWallet || mongoose.model('CryptoWallet', cryptoWalletSchema);
