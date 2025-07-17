@@ -1,15 +1,20 @@
-// backend/index.js (VERSIÓN v17.4 - ANTI-CACHÉ)
+// backend/index.js (VERSIÓN 21.0 - VERIFICACIÓN DE DESPLIEGUE)
+
+// =================================================================================
+console.log('//////////////////////////////////////////////////////////////////');
+console.log('---[ INICIANDO CÓDIGO v21.0 - VERIFICACIÓN DE DESPLIEGUE FORZADO ]---');
+console.log('//////////////////////////////////////////////////////////////////');
+// =================================================================================
 
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
-const morgan = require('morgan'); // Corregido el require
+const morgan = require('morgan');
 const crypto = require('crypto');
 
 console.log('[SISTEMA] Cargando variables de entorno...');
 require('dotenv').config();
 
-// Módulo de conexión a la BD
 const connectDB = require('./config/db');
 
 function checkEnvVariables() {
@@ -24,7 +29,6 @@ function checkEnvVariables() {
 }
 checkEnvVariables();
 
-// Conectar a la base de datos ANTES de definir nada más
 connectDB();
 
 console.log('[SISTEMA] Cargando módulos internos...');
@@ -45,12 +49,7 @@ console.log('[SISTEMA] Inicializando aplicación...');
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// =================================================================
-// CORRECCIÓN v17.4: Deshabilitar el caché ETag para evitar respuestas 304
-// Esto obliga al servidor a enviar siempre una respuesta 200 OK con datos frescos,
-// solucionando el problema del falso "cuelgue" en el frontend.
 app.disable('etag');
-// =================================================================
 
 const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
 const secretPath = `/api/telegram-webhook/${secretToken}`;
@@ -73,7 +72,6 @@ app.use(morgan('dev'));
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
-// Registro de Rutas de la API
 app.use('/api/auth', authRoutes);
 app.use('/api/tools', toolRoutes);
 app.use('/api/ranking', rankingRoutes);
@@ -93,15 +91,8 @@ bot.command('start', async (ctx) => {
     try {
         const telegramId = ctx.from.id.toString();
         const startPayload = ctx.startPayload ? ctx.startPayload.trim() : null;
-        
-        if (startPayload) {
-            console.log(`[Bot] Usuario ${telegramId} ha llegado con el payload de referido: ${startPayload}`);
-        }
-        
-        await ctx.replyWithMarkdownV2(escapeMarkdownV2(WELCOME_MESSAGE), Markup.inlineKeyboard([
-            Markup.button.webApp('🚀 Abrir App', `${process.env.FRONTEND_URL}?ref=${startPayload || ''}`)
-        ]));
-
+        if (startPayload) { console.log(`[Bot] Usuario ${telegramId} ha llegado con el payload de referido: ${startPayload}`); }
+        await ctx.replyWithMarkdownV2(escapeMarkdownV2(WELCOME_MESSAGE), Markup.inlineKeyboard([ Markup.button.webApp('🚀 Abrir App', `${process.env.FRONTEND_URL}?ref=${startPayload || ''}`) ]));
     } catch (error) { 
         console.error('[Bot] Error en /start:', error.message, error); 
         await ctx.reply('Ocurrió un error al procesar tu solicitud. Por favor, intenta de nuevo más tarde.').catch(e => console.error('[Bot] Error al enviar mensaje de fallback:', e.message));
@@ -120,17 +111,13 @@ const server = app.listen(PORT, async () => {
         console.log(`[SERVIDOR] ✅ Conectado como bot: ${botInfo.username}.`);
         const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
         console.log(`[SERVIDOR] 🔧 Configurando webhook en: ${webhookUrl}`);
-        await bot.telegram.setWebhook(webhookUrl, { 
-            secret_token: secretToken,
-            drop_pending_updates: true
-        });
+        await bot.telegram.setWebhook(webhookUrl, { secret_token: secretToken, drop_pending_updates: true });
         console.log('[SERVIDOR] ✅ Webhook configurado con token secreto.');
     } catch (telegramError) {
         console.error("[SERVIDOR] ERROR AL CONFIGURAR TELEGRAM:", telegramError.message);
     }
 });
 
-// Manejo de promesas no capturadas
 process.on('unhandledRejection', (err, promise) => {
     console.error(`Error no manejado: ${err.message}`);
     server.close(() => process.exit(1));
