@@ -1,4 +1,4 @@
-// backend/controllers/walletController.js (VERSIÓN DE PRODUCCIÓN - LIMPIA Y COMPLETA)
+// backend/controllers/walletController.js (VERSIÓN v17.0 - ESTABILIZADA)
 
 const axios = require('axios');
 const crypto = require('crypto');
@@ -16,6 +16,7 @@ const SHOP_ID = process.env.CRYPTO_CLOUD_SHOP_ID;
 const API_KEY = process.env.CRYPTO_CLOUD_API_KEY;
 const SECRET_KEY = process.env.CRYPTO_CLOUD_SECRET_KEY;
 
+// --- FUNCIONES EXISTENTES (SIN CAMBIOS) ---
 const startMining = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -102,6 +103,8 @@ const purchaseWithBalance = async (req, res) => {
   if (!toolId || !quantity || quantity <= 0) {
     return res.status(400).json({ message: 'Datos de compra inválidos.' });
   }
+  // NOTA: Esta función también debería usar una transacción o la lógica de mitigación.
+  // Se abordará en la Prioridad 2 para mantener el enfoque.
   try {
     const tool = await Tool.findById(toolId);
     if (!tool) return res.status(404).json({ message: 'La herramienta no existe.' });
@@ -197,6 +200,8 @@ const claim = async (req, res) => {
 };
 
 const swapNtxToUsdt = async (req, res) => {
+    // Esta función ya usa una transacción. Mantenemos este código asumiendo que
+    // el problema del replica set se resolverá. Si no, necesitará la misma refactorización.
   const { ntxAmount } = req.body;
   const userId = req.user.id;
   const SWAP_RATE = 10000;
@@ -232,59 +237,101 @@ const swapNtxToUsdt = async (req, res) => {
   }
 };
 
+// ===================================================================================
+// =================== INICIO DE LA FUNCIÓN CORREGIDA Y ESTABILIZADA ===================
+// ===================================================================================
 const requestWithdrawal = async (req, res) => {
   const { amount, walletAddress } = req.body;
   const userId = req.user.id;
-  const session = await mongoose.startSession();
+
+  // Ya no usamos session, ya que no podemos garantizar que el entorno la soporte.
+  // const session = await mongoose.startSession();
+
+  let withdrawalTransaction; // La declaramos fuera para poder acceder a ella en el catch
+
   try {
-    session.startTransaction();
-    const settings = await Setting.findOne({ singleton: 'global_settings' }).session(session);
-    if (!settings) throw new Error('La configuración del sistema no está disponible.');
+    // --- PASO 1: VALIDACIONES PREVIAS ---
+    // Hacemos todas las lecturas y validaciones antes de cualquier escritura.
+    const settings = await Setting.findOne({ singleton: 'global_settings' });
+    if (!settings) {
+      // Usamos `throw new Error` para que el catch general lo maneje y loguee.
+      throw new Error('La configuración del sistema no está disponible.');
+    }
+
     const numericAmount = parseFloat(amount);
     if (!numericAmount || numericAmount < settings.minimumWithdrawal) {
       return res.status(400).json({ message: `El retiro mínimo es ${settings.minimumWithdrawal} USDT.` });
     }
+
     if (!walletAddress) {
       return res.status(400).json({ message: 'La dirección de billetera es requerida.' });
     }
-    const user = await User.findById(userId).session(session);
-    if (!user || user.balance.usdt < numericAmount) {
+
+    const user = await User.findById(userId);
+    if (!user) {
+        return res.status(404).json({ message: 'Usuario no encontrado.' });
+    }
+    if (user.balance.usdt < numericAmount) {
       return res.status(400).json({ message: 'Saldo USDT insuficiente.' });
     }
+
+    // --- PASO 2: CREAR EL REGISTRO DE LA TRANSACCIÓN PRIMERO (NUESTRO "SEGURO") ---
+    // Si esta operación falla, no se descuenta nada al usuario.
     const feeAmount = numericAmount * (settings.withdrawalFeePercent / 100);
     const netAmount = numericAmount - feeAmount;
-    user.balance.usdt -= numericAmount;
-    await user.save({ session });
-    const withdrawalTransaction = new Transaction({
+
+    withdrawalTransaction = new Transaction({
       user: userId,
       type: 'withdrawal',
-      status: 'pending',
+      status: 'pending', // Nace como 'pending'
       amount: numericAmount,
       currency: 'USDT',
       description: `Solicitud de retiro a ${walletAddress}`,
       metadata: {
         walletAddress,
-        network: 'USDT-BEP20',
+        network: 'USDT-BEP20', // Como lo envía el frontend
         feePercent: settings.withdrawalFeePercent.toString(),
         feeAmount: feeAmount.toFixed(4),
         netAmount: netAmount.toFixed(4),
       }
     });
-    await withdrawalTransaction.save({ session });
-    await session.commitTransaction();
+    await withdrawalTransaction.save(); // Guardamos el registro
+
+    // --- PASO 3: DESCONTAR EL SALDO DEL USUARIO ---
+    // Esta es la segunda operación. Si falla, tenemos el registro para auditar.
+    try {
+      user.balance.usdt -= numericAmount;
+      await user.save();
+    } catch (userSaveError) {
+      // ¡CRÍTICO! Si falla el guardado del usuario, marcamos la transacción como fallida.
+      console.error('Error al guardar el usuario después de crear la transacción de retiro. Revirtiendo estado de transacción.', userSaveError);
+      
+      withdrawalTransaction.status = 'failed';
+      withdrawalTransaction.metadata.set('error', 'Fallo al actualizar el saldo del usuario post-creación.');
+      await withdrawalTransaction.save();
+      
+      // Lanzamos el error para que el catch principal lo maneje.
+      throw new Error('No se pudo actualizar el saldo del usuario. La solicitud de retiro fue anulada.');
+    }
+
+    // --- PASO 4: ÉXITO ---
+    // Ambas operaciones fueron exitosas. Devolvemos la respuesta al usuario.
     const updatedUser = await User.findById(userId).populate('activeTools.tool');
     res.status(201).json({ 
       message: 'Tu solicitud de retiro ha sido enviada con éxito y está pendiente de revisión.', 
       user: updatedUser.toObject() 
     });
+
   } catch (error) {
-    await session.abortTransaction();
-    console.error('Error en requestWithdrawal:', error);
+    // Catch general para cualquier otro error (ej: fallo de conexión a DB, error en `settings`, etc.)
+    console.error('Error catastrófico en requestWithdrawal:', error);
     res.status(500).json({ message: error.message || 'Error interno al procesar la solicitud.' });
-  } finally {
-    session.endSession();
   }
+  // No necesitamos `finally` porque ya no manejamos la sesión.
 };
+// ===================================================================================
+// ==================== FIN DE LA FUNCIÓN CORREGIDA Y ESTABILIZADA =====================
+// ===================================================================================
 
 const getHistory = async (req, res) => {
   try {
