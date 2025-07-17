@@ -1,4 +1,4 @@
-// backend/models/transactionModel.js (VERSIÓN v18.0 - CORREGIDA)
+// backend/models/transactionModel.js (VERSIÓN v18.10 - CORRECCIÓN CRÍTICA DE COLECCIÓN)
 const mongoose = require('mongoose');
 
 const transactionSchema = new mongoose.Schema({
@@ -12,15 +12,9 @@ const transactionSchema = new mongoose.Schema({
     type: String,
     required: true,
     enum: [
-      'deposit', 
-      'withdrawal', 
-      'purchase', 
-      'mining_claim', 
-      'swap_ntx_to_usdt', 
-      'admin_credit', 
-      'admin_debit',
-      'commission',
-      'sweep' // <-- AÑADIDO: Tipo para transacciones de barrido de tesorería
+      'deposit', 'withdrawal', 'purchase', 'mining_claim', 
+      'swap_ntx_to_usdt', 'admin_credit', 'admin_debit',
+      'commission', 'sweep'
     ],
     index: true,
   },
@@ -38,9 +32,7 @@ const transactionSchema = new mongoose.Schema({
   currency: {
     type: String,
     required: true,
-    // Nota: Dejé USDT y NTX, pero la lógica de tesorería usa variantes como USDT_TRON.
-    // Esto podría requerir una refactorización futura, pero por ahora no causa conflicto.
-    enum: ['USDT', 'NTX', 'USDT_TRON', 'USDT_BSC', 'BNB', 'TRX'], 
+    enum: ['USDT', 'NTX', 'USDT_TRON', 'USDT_BSC', 'BNB', 'TRX'],
   },
   description: {
     type: String,
@@ -52,7 +44,10 @@ const transactionSchema = new mongoose.Schema({
   },
 }, {
   timestamps: true,
+  // CORRECCIÓN DEFINITIVA: Se fuerza a Mongoose a usar la colección con el nombre exacto de la base de datos.
+  // Esto resuelve el bloqueo infinito en todas las rutas que usan este modelo.
+  collection: 'transactions' 
 });
 
-// Para evitar errores de sobreescritura en HMR (Hot Module Replacement)
+// BLINDAJE ANTI-CRASH: Previene errores de sobreescritura con nodemon.
 module.exports = mongoose.models.Transaction || mongoose.model('Transaction', transactionSchema);
