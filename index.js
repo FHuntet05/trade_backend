@@ -1,14 +1,15 @@
-// backend/index.js (VERSIÓN v18.6 - CORREGIDO Y ESTABLE)
+// backend/index.js (VERSIÓN v18.9 - DIAGNÓSTICO DE CORS)
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
-const morgan = 'morgan';
+const morgan = require('morgan');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
+const colors = require('colors');
 
 // --- Carga de Configuración y Variables de Entorno ---
 console.log('[SISTEMA] Iniciando aplicación NEURO LINK...');
-dotenv.config(); // Cargar .env lo antes posible
+dotenv.config();
 const connectDB = require('./config/db');
 
 // --- Verificación de Variables Críticas ---
@@ -25,7 +26,6 @@ function checkEnvVariables() {
 checkEnvVariables();
 
 // --- Conexión a la Base de Datos ---
-// Esto se ejecuta ahora. Si falla, el proceso se detendrá.
 connectDB();
 
 // --- Carga de Módulos de Rutas ---
@@ -48,7 +48,7 @@ const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 // --- Configuración de Middlewares ---
-app.disable('etag'); // Deshabilitar etag para evitar cache 304
+app.disable('etag');
 
 const whitelist = [process.env.FRONTEND_URL, process.env.ADMIN_URL];
 const corsOptions = {
@@ -56,6 +56,8 @@ const corsOptions = {
         if (!origin || whitelist.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
+            // CORRECCIÓN DEFINITIVA: Añadimos un log para ver exactamente por qué se rechaza.
+            console.error(`[CORS] ❌ Origen RECHAZADO: '${origin}'. No está en la whitelist: [${whitelist.join(', ')}]`.red.bold);
             callback(new Error(`Origen no permitido por CORS: ${origin}`));
         }
     },
@@ -64,7 +66,7 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(express.json());
-app.use(require('morgan')('dev'));
+app.use(morgan('dev'));
 
 // --- Definición de Rutas de la API ---
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
