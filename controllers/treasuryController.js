@@ -1,10 +1,10 @@
-// backend/controllers/treasuryController.js (VERSIÓN v18.6 - FINAL, LIMPIA Y FUNCIONAL)
+// backend/controllers/treasuryController.js (VERSIÓN v18.7 - FINAL CON LEAN)
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb; 
 const User = require('../models/userModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
 const Transaction = require('../models/transactionModel');
-const asyncHandler = require('express-async-handler'); // <--- DECLARADO UNA SOLA VEZ
+const asyncHandler = require('express-async-handler');
 const transactionService = require('../services/transactionService');
 const mongoose = require('mongoose');
 
@@ -61,23 +61,23 @@ async function registerDeposit(wallet, amount, currency) {
 }
 
 const getSweepableWallets = asyncHandler(async (req, res) => {
-    console.log('Iniciando escaneo de wallets en tiempo real...');
+    console.log('[Treasury] Iniciando escaneo de wallets en tiempo real...');
     const allWallets = await CryptoWallet.find().populate('user', '_id').lean();
     const usdtTronContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
     
     const scanPromises = allWallets.map(async (wallet) => {
         let detectedBalances = [];
-        if (!wallet.user) return; // Omitir wallets sin usuario asociado
+        if (!wallet.user) return;
         try {
             if (wallet.chain === 'BSC') {
-                const usdtBalanceRaw = await promiseWithTimeout(usdtBscContract.balanceOf(wallet.address), 10000);
+                const usdtBalanceRaw = await promiseWithTimeout(usdtBscContract.balanceOf(wallet.address), 15000);
                 if (usdtBalanceRaw.gt(0)) {
                     const usdtAmount = ethers.utils.formatUnits(usdtBalanceRaw, 18);
                     detectedBalances.push({ currency: 'USDT_BSC', amount: usdtAmount });
                     await registerDeposit(wallet, usdtAmount, 'USDT_BSC');
                 }
             } else if (wallet.chain === 'TRON') {
-                const usdtBalanceRaw = await promiseWithTimeout(usdtTronContract.balanceOf(wallet.address).call(), 10000);
+                const usdtBalanceRaw = await promiseWithTimeout(usdtTronContract.balanceOf(wallet.address).call(), 15000);
                 if (parseInt(usdtBalanceRaw.toString()) > 0) {
                     const usdtAmount = ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6);
                     detectedBalances.push({ currency: 'USDT_TRON', amount: usdtAmount });
@@ -85,13 +85,13 @@ const getSweepableWallets = asyncHandler(async (req, res) => {
                 }
             }
         } catch(e) {
-            console.error(`Error escaneando wallet ${wallet.address}: ${e.message}`);
+            console.error(`[Treasury] Error escaneando wallet ${wallet.address}: ${e.message}`);
         }
         await CryptoWallet.updateOne({ _id: wallet._id }, { $set: { balances: detectedBalances } });
     });
 
     await Promise.all(scanPromises);
-    console.log('Escaneo de wallets completado.');
+    console.log('[Treasury] Escaneo de wallets completado.');
 
     const limit = parseInt(req.query.limit) || 20;
     const page = parseInt(req.query.page) || 1;

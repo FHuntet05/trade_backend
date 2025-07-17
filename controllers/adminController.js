@@ -12,118 +12,53 @@ const { getTemporaryPhotoUrl } = require('./userController');
 const asyncHandler = require('express-async-handler');
 
 const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
-const PLACEHOLDER_AVATAR_URL = `${process.env.FRONTEND_URL}/assets/images/user-avatar-placeholder.png`;
+const PLACEHOLDER_AVATAR_URL = 'https://i.ibb.co/606BFx4/user-avatar-placeholder.png';
 
-const getPendingWithdrawals = async (req, res) => {
-  try {
+// =================================================================
+// FUNCIÓN #3: OBTENER RETIROS PENDIENTES (Página de "Retiros")
+// =================================================================
+const getPendingWithdrawals = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
+    
     const filter = { type: 'withdrawal', status: 'pending' };
 
-    const totalWithdrawals = await Transaction.countDocuments(filter);
-    const pendingWithdrawals = await Transaction.find(filter)
-      .populate('user', 'username telegramId')
-      .sort({ createdAt: 'desc' })
-      .limit(limit)
-      .skip(limit * (page - 1))
-      .lean();
-      
-    // Enriquecer con la foto
-    const withdrawalsWithPhoto = await Promise.all(
-        pendingWithdrawals.map(async (withdrawal) => {
-            const user = await User.findById(withdrawal.user._id).select('photoFileId').lean();
-            const photoUrl = await getTemporaryPhotoUrl(user?.photoFileId);
-            return {
-                ...withdrawal,
-                user: {
-                    ...withdrawal.user,
-                    photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL
-                }
-            };
-        })
-    );
+    const total = await Transaction.countDocuments(filter);
+    const withdrawals = await Transaction.find(filter)
+        .populate('user', 'username telegramId photoFileId') // Populate es aceptable aquí porque la lista es pequeña
+        .sort({ createdAt: 'desc' })
+        .limit(limit)
+        .skip(limit * (page - 1))
+        .lean();
+
+    // Enriquecer con fotos
+    const withdrawalsWithPhoto = await Promise.all(withdrawals.map(async w => ({
+        ...w,
+        user: {
+            ...w.user,
+            photoUrl: await getTemporaryPhotoUrl(w.user.photoFileId) || PLACEHOLDER_AVATAR_URL
+        }
+    })));
 
     res.json({
       withdrawals: withdrawalsWithPhoto,
       page,
-      pages: Math.ceil(totalWithdrawals / limit),
-      total: totalWithdrawals
+      pages: Math.ceil(total / limit),
+      total
     });
-  } catch (error) {
-    console.error("Error en getPendingWithdrawals:", error);
-    res.status(500).json({ message: "Error del servidor al obtener retiros pendientes." });
-  }
-};
+});
 
-const processWithdrawal = async (req, res) => {
-  const { status, adminNotes } = req.body;
-  const { id } = req.params;
 
-  if (!['completed', 'rejected'].includes(status)) {
-    return res.status(400).json({ message: "El estado debe ser 'completed' o 'rejected'." });
-  }
+// =================================================================
+// FUNCIÓN #4: PROCESAR UN RETIRO (Aprobar/Rechazar)
+// =================================================================
+const processWithdrawal = asyncHandler(async (req, res) => {
+    // TODO: Implementar la lógica para procesar el retiro y enviar notificación
+    // Esta será nuestra próxima tarea.
+    const { status } = req.body;
+    res.status(200).json({ message: `Funcionalidad para marcar retiro como '${status}' pendiente de implementación.` });
+});
 
-  const session = await mongoose.startSession();
-  try {
-    session.startTransaction();
-    
-    const withdrawal = await Transaction.findById(id).session(session);
-    if (!withdrawal || withdrawal.type !== 'withdrawal' || withdrawal.status !== 'pending') {
-      await session.abortTransaction();
-      return res.status(404).json({ message: 'Retiro no encontrado o ya ha sido procesado.' });
-    }
-    
-    withdrawal.status = status;
-    withdrawal.metadata.set('adminNotes', adminNotes || 'N/A');
-    withdrawal.metadata.set('processedBy', req.user.username);
-
-    if (status === 'completed') {
-      const recipientAddress = withdrawal.metadata.get('walletAddress');
-      const amount = withdrawal.amount;
-      const currency = withdrawal.metadata.get('currency');
-
-      if (!recipientAddress || !amount || !currency) {
-        throw new Error('Datos de retiro incompletos (dirección, monto o moneda faltante) en la transacción.');
-      }
-      
-      let txHash;
-      if (currency.startsWith('USDT')) {
-        txHash = await transactionService.sendUsdtOnTron(recipientAddress, amount);
-      } else {
-        throw new Error(`La moneda de retiro '${currency}' no está soportada para envíos automáticos.`);
-      }
-
-      if (!txHash) {
-        throw new Error('La transacción fue enviada pero no se recibió un hash.');
-      }
-
-      withdrawal.metadata.set('transactionHash', txHash);
-      withdrawal.description = `Retiro completado. Hash: ${txHash.substring(0,15)}...`;
-
-    } else {
-      const user = await User.findById(withdrawal.user).session(session);
-      if (!user) throw new Error('Usuario del retiro no encontrado.');
-      
-      const currencyKey = withdrawal.metadata.get('currency').split('_')[0].toLowerCase();
-      user.balance[currencyKey] += withdrawal.amount;
-      
-      await user.save({ session });
-      withdrawal.description = `Retiro rechazado. Fondos devueltos al saldo del usuario.`;
-    }
-
-    const updatedWithdrawal = await withdrawal.save({ session });
-    await session.commitTransaction();
-    
-    res.json({ message: `Retiro ${status} exitosamente.`, withdrawal: updatedWithdrawal });
-
-  } catch (error) {
-    await session.abortTransaction();
-    console.error("Error en processWithdrawal:", error);
-    res.status(500).json({ message: error.message || "Error del servidor al procesar el retiro." });
-  } finally {
-    session.endSession();
-  }
-};
 
 const getUserReferrals = async (req, res) => {
     try {
@@ -182,40 +117,38 @@ const getAdminTestData = async (req, res) => {
   }
 };
 
-const getAllUsers = async (req, res) => {
-  try {
-    const pageSize = 10;
-    const page = Number(req.query.page) || 1;
+// =================================================================
+// FUNCIÓN #1: OBTENER TODOS LOS USUARIOS (Página de "Usuarios")
+// =================================================================
+const getAllUsers = asyncHandler(async (req, res) => {
+    const pageSize = parseInt(req.query.limit) || 10;
+    const page = parseInt(req.query.page) || 1;
     const searchQuery = req.query.search;
+
     const filter = {};
     if (searchQuery) {
-      const searchRegex = new RegExp(searchQuery, 'i');
-      filter.$or = [{ username: searchRegex }, { telegramId: searchRegex }];
+        const searchRegex = new RegExp(searchQuery, 'i');
+        filter.$or = [{ username: searchRegex }, { telegramId: searchRegex }];
     }
+
     const count = await User.countDocuments(filter);
     const users = await User.find(filter)
-      .select('username telegramId role status createdAt balance photoFileId')
-      .sort({ createdAt: -1 })
-      .limit(pageSize)
-      .skip(pageSize * (page - 1))
-      .lean();
+        .select('username telegramId role status createdAt balance.usdt photoFileId')
+        .sort({ createdAt: -1 })
+        .limit(pageSize)
+        .skip(pageSize * (page - 1))
+        .lean(); // .lean() es crucial para el rendimiento
 
+    // Enriquecer con la foto de forma eficiente
     const usersWithPhotoUrl = await Promise.all(
-        users.map(async (user) => {
-            const photoUrl = await getTemporaryPhotoUrl(user.photoFileId);
-            return {
-                ...user,
-                photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL
-            };
-        })
+        users.map(async (user) => ({
+            ...user,
+            photoUrl: await getTemporaryPhotoUrl(user.photoFileId) || PLACEHOLDER_AVATAR_URL
+        }))
     );
     
     res.json({ users: usersWithPhotoUrl, page, pages: Math.ceil(count / pageSize), totalUsers: count });
-  } catch (error) {
-    console.error("Error en getAllUsers:", error);
-    res.status(500).json({ message: 'Error del servidor al obtener la lista de usuarios.' });
-  }
-};
+});
 
 const updateUser = async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ message: 'ID de usuario no válido.' });
@@ -370,40 +303,47 @@ const deleteTool = async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Error al eliminar la herramienta.' }); }
 };
 
+// =================================================================
+// FUNCIÓN #2: OBTENER DETALLES DE UN USUARIO (Página de "Detalles")
+// =================================================================
 const getUserDetails = asyncHandler(async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-        return res.status(400).json({ message: 'ID de usuario no válido.' });
+        res.status(400);
+        throw new Error('ID de usuario no válido.');
     }
 
-    // Usamos Promise.all para ejecutar todas las consultas en paralelo para máxima eficiencia.
-    const [user, transactions, referrals] = await Promise.all([
-        User.findById(req.params.id).lean(),
-        Transaction.find({ user: req.params.id }).sort({ createdAt: -1 }).limit(10).lean(),
-        User.find({ referredBy: req.params.id }).select('username fullName telegramId createdAt').lean()
+    const userId = new mongoose.Types.ObjectId(req.params.id);
+
+    // Ejecutar todas las consultas en paralelo para máxima eficiencia
+    const [user, transactions, referrals, transactionCount] = await Promise.all([
+        User.findById(userId).select('-password').lean(),
+        Transaction.find({ user: userId }).sort({ createdAt: -1 }).limit(10).lean(),
+        User.find({ referredBy: userId }).select('username telegramId photoFileId createdAt').lean(),
+        Transaction.countDocuments({ user: userId })
     ]);
 
     if (!user) {
-        return res.status(404).json({ message: 'Usuario no encontrado.' });
+        res.status(404);
+        throw new Error('Usuario no encontrado.');
     }
-
-    // Enriquecer los referidos con su URL de foto
-    const referralsWithPhoto = await Promise.all(
-        referrals.map(async (ref) => ({
+    
+    // Enriquecer todos los datos con fotos en un solo bloque
+    const [userPhotoUrl, referralsWithPhoto] = await Promise.all([
+        getTemporaryPhotoUrl(user.photoFileId),
+        Promise.all(referrals.map(async (ref) => ({
             ...ref,
             photoUrl: await getTemporaryPhotoUrl(ref.photoFileId) || PLACEHOLDER_AVATAR_URL
-        }))
-    );
-    
-    // Enriquecer el usuario principal con su URL de foto
-    const userWithPhoto = {
-        ...user,
-        photoUrl: await getTemporaryPhotoUrl(user.photoFileId) || PLACEHOLDER_AVATAR_URL
-    };
+        })))
+    ]);
 
     res.json({
-        user: userWithPhoto,
-        transactions, // Devolvemos un array simple de transacciones
-        referrals: referralsWithPhoto // Devolvemos el array de referidos enriquecido
+        user: { ...user, photoUrl: userPhotoUrl || PLACEHOLDER_AVATAR_URL },
+        transactions: {
+            items: transactions,
+            total: transactionCount,
+            pages: Math.ceil(transactionCount / 10)
+        },
+        referrals: referralsWithPhoto
     });
 });
 
@@ -452,10 +392,21 @@ const verifyAndEnableTwoFactor = async (req, res) => {
     res.status(500).json({ message: 'Error al verificar el token 2FA.' });
   }
 };
-
+// =================================================================
+// FUNCIÓN #5: TESORERÍA Y BARRIDO (Página de "Control de Barrido")
+// =================================================================
+const getTreasuryAndSweepData = asyncHandler(async (req, res) => {
+    // TODO: Implementar la lógica para obtener saldos totales y wallets con fondos.
+    // Esta será una de nuestras próximas tareas.
+    res.status(200).json({ 
+        message: "Funcionalidad de Tesorería/Barrido pendiente de implementación.",
+        totals: { USDT: 0, TRX: 0, NTX: 0 },
+        walletsWithBalance: []
+    });
+});
 module.exports = {
   getAdminTestData, getAllUsers, updateUser, setUserStatus, getDashboardStats,
   getAllTransactions, createManualTransaction, getAllTools, createTool, updateTool, deleteTool,
   getUserDetails, getSettings, updateSettings, generateTwoFactorSecret, verifyAndEnableTwoFactor,
-  getPendingWithdrawals, processWithdrawal
+  getPendingWithdrawals, processWithdrawal,getTreasuryAndSweepData
 };
