@@ -1,4 +1,4 @@
-// backend/routes/adminRoutes.js (VERSIÓN v18.1 - RUTA DE BARRIDO AÑADIDA)
+// backend/routes/adminRoutes.js (VERSIÓN v18.3 - RUTAS DE TESORERÍA DESACOPLADAS)
 const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController.js');
@@ -20,9 +20,13 @@ router.post('/transactions/manual', protect, isAdmin, adminController.createManu
 router.get('/withdrawals/pending', protect, isAdmin, adminController.getPendingWithdrawals);
 router.put('/withdrawals/:id/process', protect, isAdmin, adminController.processWithdrawal);
 
-// Rutas de Tesorería
-router.get('/treasury-data', protect, isAdmin, adminController.getTreasuryData);
-router.post('/sweep-funds', protect, isAdmin, adminController.sweepFunds); // <-- NUEVA RUTA DE BARRIDO
+// --- RUTAS DE TESORERÍA REFACTORIZADAS ---
+// Ruta 1: Obtiene la lista de wallets a escanear (muy rápida).
+router.get('/treasury/wallets-list', protect, isAdmin, adminController.getTreasuryWalletsList);
+// Ruta 2: Obtiene el saldo de UNA SOLA wallet (rápida y específica).
+router.post('/treasury/wallet-balance', protect, isAdmin, adminController.getWalletBalance);
+// Ruta de Barrido (sin cambios).
+router.post('/sweep-funds', protect, isAdmin, adminController.sweepFunds);
 
 // Rutas de Gestión de Herramientas
 router.route('/tools').get(protect, isAdmin, adminController.getAllTools).post(protect, isAdmin, adminController.createTool);

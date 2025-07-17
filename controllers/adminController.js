@@ -1,4 +1,4 @@
-// backend/controllers/adminController.js (VERSIÓN v18.2 - BLINDADO CON TIMEOUTS)
+// backend/controllers/adminController.js (VERSIÓN v18.3 - FUNCIONES DE TESORERÍA DESACOPLADAS)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -29,7 +29,6 @@ const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
 const USDT_ABI = ['function balanceOf(address) view returns (uint256)'];
 const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, bscProvider);
 
-// --- FUNCIÓN DE BLINDAJE CON TIMEOUT (AÑADIDA) ---
 function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió el tiempo de espera.') {
   const timeout = new Promise((_, reject) => {
     const id = setTimeout(() => {
@@ -40,7 +39,6 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
   return Promise.race([promise, timeout]);
 }
 
-// --- TODAS LAS FUNCIONES CONTROLADORAS EXISTENTES ---
 const getPendingWithdrawals = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -230,84 +228,66 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
 });
 
 // =======================================================================================
-// ==================== INICIO DE LA FUNCIONALIDAD DE TESORERÍA v18.2 =====================
+// ==================== INICIO DE LA FUNCIONALIDAD DE TESORERÍA v18.3 =====================
 // =======================================================================================
 
-const getTreasuryData = asyncHandler(async (req, res) => {
-    const usdtTronContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
-    const wallets = await CryptoWallet.find({}).populate('user', 'username telegramId').lean();
-    
-    // CORRECCIÓN: Hemos añadido TIMEOUTS a todas las llamadas externas a la blockchain.
-    const TIMEOUT_MS = 15000; // 15 segundos de tiempo de espera
+const getTreasuryWalletsList = asyncHandler(async (req, res) => {
+    const wallets = await CryptoWallet.find({})
+        .select('address chain user')
+        .populate('user', 'username telegramId')
+        .lean();
+    res.json(wallets);
+});
 
-    const balancePromises = wallets.map(async (wallet) => {
-        try {
-            if (wallet.chain === 'BSC') {
-                const [usdtBalanceRaw, bnbBalanceRaw] = await Promise.all([
-                    promiseWithTimeout(usdtBscContract.balanceOf(wallet.address), TIMEOUT_MS),
-                    promiseWithTimeout(bscProvider.getBalance(wallet.address), TIMEOUT_MS)
-                ]);
-                return {
-                    ...wallet,
-                    balances: {
-                        usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw, 18)),
-                        bnb: parseFloat(ethers.utils.formatEther(bnbBalanceRaw)),
-                        trx: 0,
-                    }
-                };
-            } else if (wallet.chain === 'TRON') {
-                const [usdtBalanceRaw, trxBalanceRaw] = await Promise.all([
-                    promiseWithTimeout(usdtTronContract.balanceOf(wallet.address).call(), TIMEOUT_MS),
-                    promiseWithTimeout(tronWeb.trx.getBalance(wallet.address), TIMEOUT_MS)
-                ]);
-                return {
-                    ...wallet,
-                    balances: {
-                        usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6)),
-                        trx: parseFloat(tronWeb.fromSun(trxBalanceRaw)),
-                        bnb: 0
-                    }
-                };
-            }
-        } catch (error) {
-            console.error(`Error (posible timeout) al consultar saldo para ${wallet.address}:`, error.message);
-            return { ...wallet, balances: { usdt: 0, bnb: 0, trx: 0 }, error: true, errorMessage: error.message };
-        }
-        return null;
-    });
+const getWalletBalance = asyncHandler(async (req, res) => {
+    const { address, chain } = req.body;
+    if (!address || !chain) {
+        res.status(400);
+        throw new Error('Se requiere address y chain');
+    }
 
-    const settledWallets = await Promise.allSettled(balancePromises);
-    const summary = { totalUsdt: 0, totalBnb: 0, totalTrx: 0 };
-    const walletsWithBalance = [];
-    settledWallets.forEach(result => {
-        if (result.status === 'fulfilled' && result.value) {
-            const wallet = result.value;
-            const { usdt, bnb, trx } = wallet.balances;
-            if (usdt > 0 || bnb > 0 || trx > 0) {
-                summary.totalUsdt += usdt;
-                summary.totalBnb += bnb;
-                summary.totalTrx += trx;
-                walletsWithBalance.push({
-                    address: wallet.address, chain: wallet.chain,
-                    balances: { usdt: usdt.toFixed(6), bnb: bnb.toFixed(6), trx: trx.toFixed(6), },
-                    user: wallet.user ? { username: wallet.user.username, telegramId: wallet.user.telegramId } : { username: 'Usuario no asignado', telegramId: 'N/A' }
-                });
-            }
+    const TIMEOUT_MS = 15000;
+    let balances = { usdt: 0, bnb: 0, trx: 0 };
+
+    try {
+        if (chain === 'BSC') {
+            const [usdtBalanceRaw, bnbBalanceRaw] = await Promise.all([
+                promiseWithTimeout(usdtBscContract.balanceOf(address), TIMEOUT_MS, `Timeout en balanceOf para ${address}`),
+                promiseWithTimeout(bscProvider.getBalance(address), TIMEOUT_MS, `Timeout en getBalance para ${address}`)
+            ]);
+            balances = {
+                usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw, 18)),
+                bnb: parseFloat(ethers.utils.formatEther(bnbBalanceRaw)),
+                trx: 0,
+            };
+        } else if (chain === 'TRON') {
+            const usdtTronContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
+            const [usdtBalanceRaw, trxBalanceRaw] = await Promise.all([
+                promiseWithTimeout(usdtTronContract.balanceOf(address).call(), TIMEOUT_MS, `Timeout en balanceOf para ${address}`),
+                promiseWithTimeout(tronWeb.trx.getBalance(address), TIMEOUT_MS, `Timeout en getBalance para ${address}`)
+            ]);
+            balances = {
+                usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6)),
+                trx: parseFloat(tronWeb.fromSun(trxBalanceRaw)),
+                bnb: 0
+            };
         }
-    });
-    res.json({
-        summary: { usdt: summary.totalUsdt.toFixed(6), bnb: summary.totalBnb.toFixed(6), trx: summary.totalTrx.toFixed(6), },
-        wallets: walletsWithBalance
-    });
+        res.json({ success: true, balances });
+    } catch (error) {
+        console.error(`Error al obtener saldo para ${address}: ${error.message}`);
+        res.status(500).json({ success: false, message: error.message });
+    }
 });
 
 const sweepFunds = asyncHandler(async (req, res) => {
     const { chain, token, recipientAddress } = req.body;
     if (!chain || !token || !recipientAddress) {
-        res.status(400); throw new Error("Se requieren 'chain', 'token' y 'recipientAddress'.");
+        res.status(400);
+        throw new Error("Se requieren 'chain', 'token' y 'recipientAddress'.");
     }
     if (token.toUpperCase() !== 'USDT') {
-        res.status(400); throw new Error("Actualmente, solo se puede barrer USDT.");
+        res.status(400);
+        throw new Error("Actualmente, solo se puede barrer USDT.");
     }
     const wallets = await CryptoWallet.find({ chain }).lean();
     if (wallets.length === 0) {
@@ -330,7 +310,7 @@ const sweepFunds = asyncHandler(async (req, res) => {
             } else {
                 const [tokenBalanceRaw, gasBalanceRaw] = await Promise.all([ usdtTronContract.balanceOf(wallet.address).call(), tronWeb.trx.getBalance(wallet.address) ]);
                 tokenBalance = parseFloat(ethers.utils.formatUnits(tokenBalanceRaw.toString(), 6));
-                gasBalance = parseFloat(tronWeb.fromSun(gasBalanceRaw));
+                gasBalance = parseFloat(tronWeb.fromSun(trxBalanceRaw));
                 gasThreshold = 25;
                 sweepFunction = transactionService.sweepUsdtOnTronFromDerivedWallet;
             }
@@ -359,7 +339,7 @@ const sweepFunds = asyncHandler(async (req, res) => {
 });
 
 // =======================================================================================
-// ===================== FIN DE LA FUNCIONALIDAD DE TESORERÍA v18.2 ======================
+// ===================== FIN DE LA FUNCIONALIDAD DE TESORERÍA v18.3 ======================
 // =======================================================================================
 
 module.exports = {
@@ -380,6 +360,7 @@ module.exports = {
   updateSettings,
   generateTwoFactorSecret,
   verifyAndEnableTwoFactor,
-  getTreasuryData,
+  getTreasuryWalletsList,
+  getWalletBalance,
   sweepFunds,
 };
