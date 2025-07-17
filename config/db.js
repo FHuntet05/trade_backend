@@ -1,25 +1,24 @@
-// backend/config/db.js
-
+// backend/config/db.js (NUEVO v18.6 - BLINDADO CONTRA FALLOS SILENCIOSOS)
 const mongoose = require('mongoose');
+const colors = require('colors');
 
 const connectDB = async () => {
   try {
-    // Añadimos un timeout para evitar que se quede colgado indefinidamente
+    // Intenta conectar a la base de datos usando la variable de entorno
     const conn = await mongoose.connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 5000 // Falla después de 5 segundos si no puede conectar
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
     });
-    
-    console.log(`[SERVIDOR] ✅ MongoDB conectado: ${conn.connection.host}`);
+
+    // Si la conexión es exitosa, lo notifica en la consola con texto verde.
+    console.log(`MongoDB Connected: ${conn.connection.host}`.cyan.underline.bold);
   } catch (error) {
-    console.error(`[SERVIDOR] ‼️ ERROR DE CONEXIÓN A MONGODB: ${error.message}`);
-    // Salimos del proceso con un código de error. Esto es crucial.
-    process.exit(1); 
+    // Si la conexión falla, lo notifica con un error claro en rojo.
+    console.error(`Error: ${error.message}`.red.bold);
+    // CRÍTICO: Detiene todo el proceso del servidor con un código de error.
+    // Esto previene que el servidor corra en un estado "zombi" sin conexión a la BD.
+    process.exit(1);
   }
 };
-
-// Listener para errores después de la conexión inicial
-mongoose.connection.on('error', err => {
-  console.error(`[SERVIDOR] ‼️ MongoDB perdió la conexión: ${err}`);
-});
 
 module.exports = connectDB;

@@ -11,7 +11,7 @@ const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
 const morgan = require('morgan');
 const crypto = require('crypto');
-
+const connectDB = require('./config/db');
 console.log('[SISTEMA] Cargando variables de entorno...');
 require('dotenv').config();
 
