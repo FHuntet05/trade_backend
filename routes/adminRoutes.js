@@ -1,4 +1,4 @@
-// backend/routes/adminRoutes.js (VERSIÓN 19.1 - CORREGIDA Y COMPLETA)
+// backend/routes/adminRoutes.js (VERSIÓN 24.0 - RUTAS CORREGIDAS Y EXPLÍCITAS)
 const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController.js');
@@ -13,13 +13,12 @@ router.get('/users', protect, isAdmin, adminController.getAllUsers);
 router.get('/users/:id/details', protect, isAdmin, adminController.getUserDetails);
 router.put('/users/:id', protect, isAdmin, adminController.updateUser);
 router.put('/users/:id/status', protect, isAdmin, adminController.setUserStatus);
-// RUTA AÑADIDA: Ruta explícita para obtener referidos de un usuario
-router.get('/users/:id/referrals', protect, isAdmin, adminController.getUserReferrals);
 
 // Rutas de Gestión de Transacciones y Retiros
 router.get('/transactions', protect, isAdmin, adminController.getAllTransactions);
 router.post('/transactions/manual', protect, isAdmin, adminController.createManualTransaction);
-// RUTA CORREGIDA: Más específica para evitar conflictos
+
+// RUTA CORREGIDA: Ahora es explícita para evitar errores 404.
 router.get('/withdrawals/pending', protect, isAdmin, adminController.getPendingWithdrawals);
 router.put('/withdrawals/:id/process', protect, isAdmin, adminController.processWithdrawal);
 
@@ -30,11 +29,5 @@ router.route('/tools/:id').put(protect, isAdmin, adminController.updateTool).del
 // Rutas de 2FA
 router.post('/2fa/generate', protect, isAdmin, adminController.generateTwoFactorSecret);
 router.post('/2fa/verify', protect, isAdmin, adminController.verifyAndEnableTwoFactor);
-
-// Rutas de Tesorería (Placeholder)
-router.get('/treasury', protect, isAdmin, adminController.getTreasuryAndSweepData);
-
-// Ruta de Test (Opcional)
-router.get('/test', protect, isAdmin, adminController.getAdminTestData);
 
 module.exports = router;
