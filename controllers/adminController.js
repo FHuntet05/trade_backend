@@ -229,12 +229,36 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
 // ==================== INICIO DE LA FUNCIONALIDAD DE TESORERÍA v18.5 =====================
 // =======================================================================================
 
+// =======================================================================================
+// ==================== INICIO DE LA FUNCIONALIDAD DE TESORERÍA v18.8 =====================
+// =======================================================================================
+
 const getTreasuryWalletsList = asyncHandler(async (req, res) => {
-    const wallets = await CryptoWallet.find({})
-        .select('address chain user')
-        .populate('user', 'username')
-        .lean();
-    res.json(wallets);
+    console.log('================= INICIO DEL DEBUG DE TESORERÍA =================');
+    console.log('[LOG 1/4] ==> Entrando en la función getTreasuryWalletsList.');
+    
+    try {
+        console.log('[LOG 2/4] ==> Ejecutando consulta: CryptoWallet.find().populate("user")...');
+        
+        const wallets = await CryptoWallet.find({})
+            .select('address chain user')
+            .populate('user', 'username')
+            .lean();
+
+        // Si el código llega aquí, la consulta fue exitosa.
+        console.log(`[LOG 3/4] ==> Consulta FINALIZADA. Se encontraron ${wallets.length} documentos.`);
+        
+        console.log('[LOG 4/4] ==> Enviando respuesta JSON al frontend.');
+        res.json(wallets);
+
+        console.log('================= FIN DEL DEBUG DE TESORERÍA (ÉXITO) =================');
+
+    } catch (error) {
+        // Si hay cualquier error durante el proceso, lo veremos aquí.
+        console.error('[¡ERROR FATAL!] ==> Ocurrió un error dentro de getTreasuryWalletsList:', error);
+        res.status(500).json({ message: 'Error interno del servidor durante la consulta de wallets.', error: error.message });
+        console.log('================= FIN DEL DEBUG DE TESORERÍA (FALLO) =================');
+    }
 });
 
 const getWalletBalance = asyncHandler(async (req, res) => {
