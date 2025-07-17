@@ -313,14 +313,21 @@ const requestWithdrawal = async (req, res) => {
       // Lanzamos el error para que el catch principal lo maneje.
       throw new Error('No se pudo actualizar el saldo del usuario. La solicitud de retiro fue anulada.');
     }
+// ===================================================================================
+    // =================== INICIO DEL BLOQUE CORREGIDO (v17.0.1) =========================
+    // ===================================================================================
+    
+    // En lugar de re-fetch, poblamos el objeto 'user' que ya tenemos en memoria.
+    // Es la fuente de verdad más fiable en este punto.
+    await user.populate('activeTools.tool');
 
-    // --- PASO 4: ÉXITO ---
-    // Ambas operaciones fueron exitosas. Devolvemos la respuesta al usuario.
-    const updatedUser = await User.findById(userId).populate('activeTools.tool');
     res.status(201).json({ 
       message: 'Tu solicitud de retiro ha sido enviada con éxito y está pendiente de revisión.', 
-      user: updatedUser.toObject() 
+      user: user.toObject() // Enviamos el objeto 'user' actualizado y poblado.
     });
+    // ===================================================================================
+    // ==================== FIN DEL BLOQUE CORREGIDO (v17.0.1) ===========================
+    // ===================================================================================
 
   } catch (error) {
     // Catch general para cualquier otro error (ej: fallo de conexión a DB, error en `settings`, etc.)
