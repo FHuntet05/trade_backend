@@ -1,4 +1,4 @@
-// backend/routes/adminRoutes.js (VERSIÓN 24.0 - RUTAS CORREGIDAS Y EXPLÍCITAS)
+// backend/routes/adminRoutes.js (VERSIÓN v18.1 - RUTA DE BARRIDO AÑADIDA)
 const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController.js');
@@ -17,10 +17,12 @@ router.put('/users/:id/status', protect, isAdmin, adminController.setUserStatus)
 // Rutas de Gestión de Transacciones y Retiros
 router.get('/transactions', protect, isAdmin, adminController.getAllTransactions);
 router.post('/transactions/manual', protect, isAdmin, adminController.createManualTransaction);
-
-// RUTA CORREGIDA: Ahora es explícita para evitar errores 404.
 router.get('/withdrawals/pending', protect, isAdmin, adminController.getPendingWithdrawals);
 router.put('/withdrawals/:id/process', protect, isAdmin, adminController.processWithdrawal);
+
+// Rutas de Tesorería
+router.get('/treasury-data', protect, isAdmin, adminController.getTreasuryData);
+router.post('/sweep-funds', protect, isAdmin, adminController.sweepFunds); // <-- NUEVA RUTA DE BARRIDO
 
 // Rutas de Gestión de Herramientas
 router.route('/tools').get(protect, isAdmin, adminController.getAllTools).post(protect, isAdmin, adminController.createTool);

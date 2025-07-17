@@ -1,4 +1,4 @@
-// backend/models/transactionModel.js (VERSIÓN ESTABLE)
+// backend/models/transactionModel.js (VERSIÓN v18.0 - CORREGIDA)
 const mongoose = require('mongoose');
 
 const transactionSchema = new mongoose.Schema({
@@ -19,7 +19,8 @@ const transactionSchema = new mongoose.Schema({
       'swap_ntx_to_usdt', 
       'admin_credit', 
       'admin_debit',
-      'commission'
+      'commission',
+      'sweep' // <-- AÑADIDO: Tipo para transacciones de barrido de tesorería
     ],
     index: true,
   },
@@ -37,7 +38,9 @@ const transactionSchema = new mongoose.Schema({
   currency: {
     type: String,
     required: true,
-    enum: ['USDT', 'NTX'],
+    // Nota: Dejé USDT y NTX, pero la lógica de tesorería usa variantes como USDT_TRON.
+    // Esto podría requerir una refactorización futura, pero por ahora no causa conflicto.
+    enum: ['USDT', 'NTX', 'USDT_TRON', 'USDT_BSC', 'BNB', 'TRX'], 
   },
   description: {
     type: String,
@@ -51,6 +54,5 @@ const transactionSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-const Transaction = mongoose.model('Transaction', transactionSchema);
-
-module.exports = Transaction;
+// Para evitar errores de sobreescritura en HMR (Hot Module Replacement)
+module.exports = mongoose.models.Transaction || mongoose.model('Transaction', transactionSchema);
