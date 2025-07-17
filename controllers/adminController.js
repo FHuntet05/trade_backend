@@ -1,4 +1,4 @@
-// backend/controllers/adminController.js (VERSIÓN v18.3 - FUNCIONES DE TESORERÍA DESACOPLADAS)
+// backend/controllers/adminController.js (VERSIÓN v18.4 - OPTIMIZACIÓN DE CONSULTA)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -18,7 +18,6 @@ const TronWeb = require('tronweb').default.TronWeb;
 const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const PLACEHOLDER_AVATAR_URL = 'https://i.ibb.co/606BFx4/user-avatar-placeholder.png';
 
-// --- CONSTANTES DE BLOCKCHAIN ---
 const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
 const tronWeb = new TronWeb({
     fullHost: 'https://api.trongrid.io',
@@ -228,13 +227,14 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
 });
 
 // =======================================================================================
-// ==================== INICIO DE LA FUNCIONALIDAD DE TESORERÍA v18.3 =====================
+// ==================== INICIO DE LA FUNCIONALIDAD DE TESORERÍA v18.4 =====================
 // =======================================================================================
 
 const getTreasuryWalletsList = asyncHandler(async (req, res) => {
+    // CORRECCIÓN CRÍTICA: Eliminamos .populate() para que la consulta sea instantánea.
+    // Solo traemos los campos estrictamente necesarios para el escaneo.
     const wallets = await CryptoWallet.find({})
         .select('address chain user')
-        .populate('user', 'username telegramId')
         .lean();
     res.json(wallets);
 });
@@ -339,7 +339,7 @@ const sweepFunds = asyncHandler(async (req, res) => {
 });
 
 // =======================================================================================
-// ===================== FIN DE LA FUNCIONALIDAD DE TESORERÍA v18.3 ======================
+// ===================== FIN DE LA FUNCIONALIDAD DE TESORERÍA v18.4 ======================
 // =======================================================================================
 
 module.exports = {
