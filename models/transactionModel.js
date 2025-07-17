@@ -1,20 +1,34 @@
-// backend/models/transactionModel.js (VERSIÓN v18.0 - CURRENCIES AMPLIADAS)
+// backend/models/transactionModel.js (VERSIÓN ESTABLE)
 const mongoose = require('mongoose');
 
 const transactionSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
     required: true,
+    ref: 'User',
+    index: true,
   },
   type: {
     type: String,
     required: true,
     enum: [
-      'deposit', 'withdrawal', 'purchase', 'swap_ntx_to_usdt', 
-      'mining_claim', 'referral_commission', 'task_reward', 
-      'admin_credit', 'admin_debit', 'sweep'
+      'deposit', 
+      'withdrawal', 
+      'purchase', 
+      'mining_claim', 
+      'swap_ntx_to_usdt', 
+      'admin_credit', 
+      'admin_debit',
+      'commission'
     ],
+    index: true,
+  },
+  status: {
+    type: String,
+    required: true,
+    enum: ['pending', 'completed', 'rejected', 'failed'],
+    default: 'completed',
+    index: true,
   },
   amount: {
     type: Number,
@@ -23,22 +37,11 @@ const transactionSchema = new mongoose.Schema({
   currency: {
     type: String,
     required: true,
-    // --- CAMPO CORREGIDO ---
-    enum: ['NTX', 'USDT', 'USDT_BSC', 'USDT_TRON'], 
-  },
-  status: {
-    type: String,
-    required: true,
-    enum: ['pending', 'completed', 'rejected'],
-    default: 'completed', 
+    enum: ['USDT', 'NTX'],
   },
   description: {
     type: String,
     required: true,
-  },
-  adminNotes: {
-    type: String,
-    trim: true,
   },
   metadata: {
     type: Map,
@@ -48,4 +51,6 @@ const transactionSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-module.exports = mongoose.model('Transaction', transactionSchema);
+const Transaction = mongoose.model('Transaction', transactionSchema);
+
+module.exports = Transaction;

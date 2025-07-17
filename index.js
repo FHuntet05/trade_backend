@@ -1,9 +1,9 @@
-// backend/index.js (VERSIÓN v16.2 - CONEXIÓN ROBUSTA)
+// backend/index.js (VERSIÓN v17.4 - ANTI-CACHÉ)
 
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
-const morgan = 'morgan'; // Corregido: morgan es un string para el require, no una variable
+const morgan = require('morgan'); // Corregido el require
 const crypto = require('crypto');
 
 console.log('[SISTEMA] Cargando variables de entorno...');
@@ -45,6 +45,13 @@ console.log('[SISTEMA] Inicializando aplicación...');
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
+// =================================================================
+// CORRECCIÓN v17.4: Deshabilitar el caché ETag para evitar respuestas 304
+// Esto obliga al servidor a enviar siempre una respuesta 200 OK con datos frescos,
+// solucionando el problema del falso "cuelgue" en el frontend.
+app.disable('etag');
+// =================================================================
+
 const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
 const secretPath = `/api/telegram-webhook/${secretToken}`;
 console.log(`[SISTEMA] Ruta secreta del webhook definida: ${secretPath}`);
@@ -62,7 +69,7 @@ const corsOptions = {
 app.options('*', cors(corsOptions));
 app.use(cors(corsOptions));
 app.use(express.json());
-app.use(require('morgan')('dev')); // Corregido: require morgan directamente
+app.use(morgan('dev'));
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
