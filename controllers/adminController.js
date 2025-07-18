@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN DEFINITIVA Y COMPLETA v20.0 - PRODUCCIÓN)
+// RUTA: backend/controllers/adminController.js (VERSIÓN DEFINITIVA Y COMPLETA v20.1 - PRODUCCIÓN VERIFICADA)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
