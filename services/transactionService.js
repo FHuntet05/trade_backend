@@ -21,7 +21,30 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
   });
   return Promise.race([promise, timeout]);
 }
+// ================== NUEVA FUNCIÓN CENTRALIZADA Y ROBUSTA ==================
+const getCentralWallets = () => {
+    if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
+        throw new Error("CRITICAL: MASTER_SEED_PHRASE no está definida o es inválida.");
+    }
+    const masterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
 
+    // 1. Generar la billetera BSC (sabemos que esto funciona)
+    const bscWalletNode = masterNode.derivePath(`m/44'/60'/0'/0/0`);
+    const bscWallet = new ethers.Wallet(bscWalletNode.privateKey, bscProvider);
+
+    // 2. Generar la billetera TRON usando ethers.js para la clave y TronWeb para la dirección
+    const tronWalletNode = masterNode.derivePath(`m/44'/195'/0'/0/0`); // Ruta de derivación de TRON
+    const tronPrivateKey = tronWalletNode.privateKey;
+    const tronAddress = TronWeb.address.fromPrivateKey(tronPrivateKey.substring(2)); // TronWeb necesita la clave sin el '0x'
+
+    return {
+        bscWallet,
+        tronWallet: {
+            privateKey: tronPrivateKey,
+            address: tronAddress
+        }
+    };
+};
 // =========================================================================
 // =================== FUNCIÓN MODIFICADA TEMPORALMENTE ====================
 // =========================================================================
@@ -77,14 +100,12 @@ const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddre
 // ================ NUEVAS FUNCIONES PARA DISPENSADOR DE GAS ===============
 // =========================================================================
 const sendBscGas = async (toAddress, amountInBnb) => {
-    initializeHotWallet(); // Valida que la semilla exista.
-    const bscMasterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
-    const hotWalletSigner = new ethers.Wallet(bscMasterNode.derivePath(`m/44'/60'/0'/0/0`).privateKey, bscProvider);
+    const { bscWallet } = getCentralWallets(); // Obtiene la billetera recién generada
 
-    console.log(`[GasDispenser] Enviando ${amountInBnb} BNB desde ${hotWalletSigner.address} a ${toAddress}`);
+    console.log(`[GasDispenser] Enviando ${amountInBnb} BNB desde ${bscWallet.address} a ${toAddress}`);
     try {
         const tx = { to: toAddress, value: ethers.utils.parseEther(amountInBnb.toString()) };
-        const txResponse = await hotWalletSigner.sendTransaction(tx);
+        const txResponse = await bscWallet.sendTransaction(tx);
         await txResponse.wait();
         return txResponse.hash;
     } catch (error) {
@@ -94,22 +115,19 @@ const sendBscGas = async (toAddress, amountInBnb) => {
 };
 
 const sendTronTrx = async (toAddress, amountInTrx) => {
-    initializeHotWallet(); // Valida que la semilla exista.
-    const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE);
-    const hotWalletAddress = tronMnemonicWallet.address;
-    
-    // Instancia local y aislada de tronWeb para firmar y enviar.
+    const { tronWallet } = getCentralWallets(); // Obtiene la billetera recién generada
+
     const localTronWeb = new TronWeb({
         fullHost: 'https://api.trongrid.io',
         headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
-        privateKey: tronMnemonicWallet.privateKey
+        privateKey: tronWallet.privateKey
     });
 
-    console.log(`[GasDispenser] Enviando ${amountInTrx} TRX desde ${hotWalletAddress} a ${toAddress}`);
+    console.log(`[GasDispenser] Enviando ${amountInTrx} TRX desde ${tronWallet.address} a ${toAddress}`);
     try {
         const amountInSun = localTronWeb.toSun(amountInTrx);
         const signedTx = await localTronWeb.trx.sign(
-            await localTronWeb.transactionBuilder.sendTrx(toAddress, amountInSun, hotWalletAddress)
+            await localTronWeb.transactionBuilder.sendTrx(toAddress, amountInSun, tronWallet.address)
         );
         const receipt = await localTronWeb.trx.sendRawTransaction(signedTx);
         if (!receipt.result) {
@@ -129,5 +147,6 @@ module.exports = {
   initializeHotWallet,
   // Nuevas funciones exportadas
   sendBscGas,
-  sendTronTrx
+  sendTronTrx,
+  getCentralWallets
 };

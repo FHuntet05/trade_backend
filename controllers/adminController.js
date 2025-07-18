@@ -291,29 +291,15 @@ const getDashboardStats = asyncHandler(async (req, res) => {
 
     let centralWalletBalances = { usdt: 0, bnb: 0, trx: 0 };
     try {
-        // Validación de la semilla primero
-        if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
-            throw new Error("La variable MASTER_SEED_PHRASE es inválida.");
-        }
+        const { bscWallet, tronWallet } = transactionService.getCentralWallets();
 
-        const bscMasterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
-        const bscWallet = new ethers.Wallet(bscMasterNode.derivePath(`m/44'/60'/0'/0/0`).privateKey, bscProvider);
-        const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+        const localTronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }});
         
-        // --- INICIO DE LA CORRECCIÓN CLAVE ---
-        // Se crea una instancia local y aislada de TronWeb para garantizar la estabilidad de la consulta.
-        const localTronWeb = new TronWeb({
-            fullHost: 'https://api.trongrid.io',
-            headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
-            privateKey: tronMnemonicWallet.privateKey
-        });
-        // --- FIN DE LA CORRECCIÓN CLAVE ---
-
         const [bnbBalance, trxBalance, usdtBscBalance, usdtTronBalance] = await Promise.all([
             bscProvider.getBalance(bscWallet.address),
-            localTronWeb.trx.getBalance(tronMnemonicWallet.address), // Se usa la instancia local
+            localTronWeb.trx.getBalance(tronWallet.address),
             usdtBscContract.balanceOf(bscWallet.address),
-            (await localTronWeb.contract().at(USDT_TRON_ADDRESS)).balanceOf(tronMnemonicWallet.address).call() // Se usa la instancia local
+            (await localTronWeb.contract().at(USDT_TRON_ADDRESS)).balanceOf(tronWallet.address).call()
         ]);
 
         centralWalletBalances = {
@@ -323,8 +309,6 @@ const getDashboardStats = asyncHandler(async (req, res) => {
         };
     } catch (error) {
         console.error("No se pudo obtener el balance de la billetera central:", error.message);
-        // Devolvemos los balances en 0 pero el resto de las estadísticas sí funcionarán.
-        // Esto evita que todo el dashboard falle por un problema de conexión con la blockchain.
     }
     
     res.json({ 
@@ -460,6 +444,7 @@ const sweepFunds = asyncHandler(async (req, res) => {
     res.json(report);
 });
 
+// ================== FUNCIÓN CRÍTICA CORREGIDA ==================
 const analyzeGasNeeds = asyncHandler(async (req, res) => {
     const { chain } = req.body;
     if (!['BSC', 'TRON'].includes(chain)) { res.status(400); throw new Error("Cadena no válida."); }
@@ -467,17 +452,13 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
     let centralWalletBalance = 0;
     
     try {
-        if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
-            throw new Error("La variable MASTER_SEED_PHRASE no está definida o es inválida.");
-        }
+        const { bscWallet, tronWallet } = transactionService.getCentralWallets();
         
         if (chain === 'BSC') {
-            const bscMasterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
-            const centralWallet = new ethers.Wallet(bscMasterNode.derivePath(`m/44'/60'/0'/0/0`).privateKey, bscProvider);
-            centralWalletBalance = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(centralWallet.address)));
+            centralWalletBalance = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(bscWallet.address)));
         } else { // TRON
-            const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE);
-            centralWalletBalance = parseFloat(tronWeb.fromSun(await tronWeb.trx.getBalance(tronMnemonicWallet.address)));
+            const localTronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }});
+            centralWalletBalance = parseFloat(localTronWeb.fromSun(await localTronWeb.trx.getBalance(tronWallet.address)));
         }
 
     } catch (error) {
