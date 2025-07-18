@@ -25,35 +25,12 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
 // =========================================================================
 // =================== FUNCIÓN MODIFICADA TEMPORALMENTE ====================
 // =========================================================================
+// --- FUNCIÓN SIMPLIFICADA ---
 const initializeHotWallet = () => {
-  if (hotWallet) return hotWallet;
-  if (!process.env.MASTER_SEED_PHRASE) {
-    throw new Error("CRITICAL: MASTER_SEED_PHRASE no está definida en el entorno.");
-  }
-  const bscMasterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
-  const bscWallet = new ethers.Wallet(bscMasterNode.derivePath(`m/44'/60'/0'/0/0`).privateKey, bscProvider);
-  const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE);
-  hotWallet = {
-    bsc: bscWallet,
-    tron: {
-      privateKey: tronMnemonicWallet.privateKey,
-      address: tronMnemonicWallet.address
+    if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
+        throw new Error("CRITICAL: MASTER_SEED_PHRASE no está definida o es inválida.");
     }
-  };
-  tronWeb.setPrivateKey(hotWallet.tron.privateKey);
-
-  // --- INICIO DEL CÓDIGO TEMPORAL ---
-  console.log("\n=======================================================================");
-  console.log("========== DIRECCIONES DE LA BILLETERA CENTRAL (HOT WALLET) ==========");
-  console.log("=======================================================================");
-  console.log(`\nDirección BSC (para enviar BNB): ${hotWallet.bsc.address}`);
-  console.log(`\nDirección TRON (para enviar TRX): ${hotWallet.tron.address}`);
-  console.log("\n=======================================================================");
-  console.log("=======> ¡COPIE ESTAS DIRECCIONES Y LUEGO RETIRE ESTE CÓDIGO! <=======");
-  console.log("=======================================================================\n");
-  // --- FIN DEL CÓDIGO TEMPORAL ---
-  
-  return hotWallet;
+    // Ya no mantenemos un estado global. Solo validamos.
 };
 // ... [Funciones existentes como sweepUsdtOnTronFromDerivedWallet, etc. permanecen igual] ...
 const sweepUsdtOnTronFromDerivedWallet = async (derivationIndex, destinationAddress) => {
@@ -101,15 +78,15 @@ const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddre
 // ================ NUEVAS FUNCIONES PARA DISPENSADOR DE GAS ===============
 // =========================================================================
 const sendBscGas = async (toAddress, amountInBnb) => {
-    initializeHotWallet();
-    console.log(`[GasDispenser] Enviando ${amountInBnb} BNB desde la wallet central a ${toAddress}`);
+    initializeHotWallet(); // Valida que la semilla exista.
+    const bscMasterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+    const hotWalletSigner = new ethers.Wallet(bscMasterNode.derivePath(`m/44'/60'/0'/0/0`).privateKey, bscProvider);
+
+    console.log(`[GasDispenser] Enviando ${amountInBnb} BNB desde ${hotWalletSigner.address} a ${toAddress}`);
     try {
-        const tx = {
-            to: toAddress,
-            value: ethers.utils.parseEther(amountInBnb.toString())
-        };
-        const txResponse = await hotWallet.bsc.sendTransaction(tx);
-        await txResponse.wait(); // Esperar a que la transacción se mine
+        const tx = { to: toAddress, value: ethers.utils.parseEther(amountInBnb.toString()) };
+        const txResponse = await hotWalletSigner.sendTransaction(tx);
+        await txResponse.wait();
         return txResponse.hash;
     } catch (error) {
         console.error(`[GasDispenser] ERROR enviando BNB a ${toAddress}:`, error);
@@ -118,16 +95,26 @@ const sendBscGas = async (toAddress, amountInBnb) => {
 };
 
 const sendTronTrx = async (toAddress, amountInTrx) => {
-    initializeHotWallet();
-    console.log(`[GasDispenser] Enviando ${amountInTrx} TRX desde la wallet central a ${toAddress}`);
+    initializeHotWallet(); // Valida que la semilla exista.
+    const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+    const hotWalletAddress = tronMnemonicWallet.address;
+    
+    // Instancia local y aislada de tronWeb para firmar y enviar.
+    const localTronWeb = new TronWeb({
+        fullHost: 'https://api.trongrid.io',
+        headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
+        privateKey: tronMnemonicWallet.privateKey
+    });
+
+    console.log(`[GasDispenser] Enviando ${amountInTrx} TRX desde ${hotWalletAddress} a ${toAddress}`);
     try {
-        const amountInSun = tronWeb.toSun(amountInTrx);
-        const signedTx = await tronWeb.trx.sign(
-            await tronWeb.transactionBuilder.sendTrx(toAddress, amountInSun, hotWallet.tron.address)
+        const amountInSun = localTronWeb.toSun(amountInTrx);
+        const signedTx = await localTronWeb.trx.sign(
+            await localTronWeb.transactionBuilder.sendTrx(toAddress, amountInSun, hotWalletAddress)
         );
-        const receipt = await tronWeb.trx.sendRawTransaction(signedTx);
+        const receipt = await localTronWeb.trx.sendRawTransaction(signedTx);
         if (!receipt.result) {
-           throw new Error(`La transacción TRX falló con el mensaje: ${receipt.resMessage ? tronWeb.toUtf8(receipt.resMessage) : 'Error desconocido'}`);
+           throw new Error(`La transacción TRX falló con el mensaje: ${receipt.resMessage ? localTronWeb.toUtf8(receipt.resMessage) : 'Error desconocido'}`);
         }
         return receipt.txid;
     } catch (error) {

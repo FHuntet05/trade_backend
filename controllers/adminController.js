@@ -305,30 +305,32 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
     const { chain } = req.body;
     if (!['BSC', 'TRON'].includes(chain)) { res.status(400); throw new Error("Cadena no válida."); }
     
-    let hotWallet;
     let centralWalletBalance = 0;
-
-    // ================== INICIO DEL CAMBIO CRÍTICO ==================
+    
     try {
-        // Intentamos inicializar la billetera. Si MASTER_SEED_PHRASE es inválida, esto fallará.
-        hotWallet = transactionService.initializeHotWallet();
-
-        // Procedemos a obtener el balance SOLO si la inicialización fue exitosa.
-        if (chain === 'BSC') {
-            centralWalletBalance = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(hotWallet.bsc.address)));
-        } else { // TRON
-            // Usamos una instancia local y aislada de tronWeb para la máxima estabilidad.
-            const tempTronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }, privateKey: hotWallet.tron.privateKey });
-            centralWalletBalance = parseFloat(tronWeb.fromSun(await tempTronWeb.trx.getBalance(hotWallet.tron.address)));
+        // Valida que la semilla sea válida antes de continuar.
+        if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
+            throw new Error("La variable MASTER_SEED_PHRASE no está definida o es inválida.");
         }
-    } catch (error) {
-        console.error("CRITICAL ERROR: Fallo al inicializar la billetera central.", error.message);
-        // Devolvemos un error claro al frontend.
-        res.status(500);
-        throw new Error("Fallo al inicializar la billetera. Verifique la variable MASTER_SEED_PHRASE en su hosting. Debe ser una frase válida sin comillas.");
-    }
-    // ================== FIN DEL CAMBIO CRÍTICO ==================
+        
+        // --- INICIO DE LA CORRECCIÓN FUNDAMENTAL ---
+        // Se generan las billeteras de forma local y explícita para cada análisis.
+        if (chain === 'BSC') {
+            const bscMasterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+            const centralWallet = new ethers.Wallet(bscMasterNode.derivePath(`m/44'/60'/0'/0/0`).privateKey, bscProvider);
+            centralWalletBalance = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(centralWallet.address)));
+        } else { // TRON
+            const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+            centralWalletBalance = parseFloat(tronWeb.fromSun(await tronWeb.trx.getBalance(tronMnemonicWallet.address)));
+        }
+        // --- FIN DE LA CORRECCIÓN FUNDAMENTAL ---
 
+    } catch (error) {
+        console.error("CRITICAL ERROR: Fallo al procesar la billetera central.", error.message);
+        res.status(500);
+        throw new Error("Fallo al procesar la billetera central. Verifique MASTER_SEED_PHRASE.");
+    }
+    
     const walletsInChain = await CryptoWallet.find({ chain }).lean();
     const walletsNeedingGas = [];
     const gasThreshold = chain === 'BSC' ? 0.0015 : 25;
