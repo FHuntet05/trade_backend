@@ -89,7 +89,6 @@ console.log('[SISTEMA] ✅ Rutas de API registradas.');
 // === INICIO DE LA RECONSTRUCCIÓN DEL COMANDO /START (BIENVENIDA VISUAL) ===
 // =======================================================================
 
-// --- Lógica del Bot de Telegram ---
 const WELCOME_MESSAGE = `
 👋 ¡Bienvenido a NEURO LINK!\n\n
 🔐 Tu acceso privilegiado al universo de la minería digital avanzada. Aquí, cada acción te acerca a recompensas exclusivas en NTX.\n\n
@@ -101,43 +100,50 @@ const WELCOME_MESSAGE = `
 ✨ Estás listo para comenzar tu travesía. Pulsa el botón inferior y desata el poder de la minería inteligente 🚀
 `;
 
-const escapeMarkdownV2 = (text) => text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
-
 bot.command('start', async (ctx) => {
     try {
         const telegramId = ctx.from.id.toString();
         const startPayload = ctx.startPayload ? ctx.startPayload.trim() : '';
+        const webAppUrl = process.env.FRONTEND_URL;
+        const WELCOME_IMAGE_URL = 'https://i.postimg.cc/pVFs2JYx/NEURO-LINK.jpg'; // <-- URL DE SU IMAGEN
 
-        // LOG DE DIAGNÓSTICO
         if (startPayload) {
             console.log(`[Bot Start] Usuario ${telegramId} ha llegado con startPayload: '${startPayload}'`.cyan);
         }
 
-        // URL DE LA WEB APP (MÉTODO FÉNIX: ROBUSTO Y DIRECTO)
-        // La lógica de referidos se mantiene intacta y a prueba de fallos.
-        const webAppUrl = process.env.FRONTEND_URL;
-        
-        // **NUEVO**: URL de la imagen de bienvenida.
-        // ¡IMPORTANTE! Reemplace esta URL de ejemplo por la URL de su propia imagen.
-        // La imagen debe estar alojada en un servidor público (ej. Imgur, S3, etc.).
-        const WELCOME_IMAGE_URL = 'https://i.postimg.cc/pVFs2JYx/NEURO-LINK.jpg'; // <--- ¡REEMPLACE ESTA URL!
-
-        // **NUEVO**: Se utiliza ctx.replyWithPhoto para enviar la imagen con el mensaje como pie de foto.
-        await ctx.replyWithPhoto(
-            WELCOME_IMAGE_URL,
-            {
-                // El mensaje de bienvenida ahora es el 'caption' (pie de foto).
-                caption: WELCOME_MESSAGE,
-                // El botón de la Web App se añade a la foto.
-                reply_markup: Markup.inlineKeyboard([
+        // =======================================================================
+        // === INICIO DE LA CORRECCIÓN CRÍTICA DE TECLADO (OPERACIÓN FÉNIX) ===
+        //
+        // JUSTIFICACIÓN DEL FRACASO: El bot tenía un teclado persistente ('Gana Ahora')
+        // que entraba en conflicto con el botón inline que queríamos mostrar.
+        //
+        // SOLUCIÓN DEFINITIVA: Se construye manualmente el objeto `reply_markup`.
+        // 1. `inline_keyboard`: Define nuestro botón "Abrir App".
+        // 2. `remove_keyboard: true`: Envía una orden explícita al cliente de Telegram
+        //    para que ELIMINE cualquier teclado persistente anterior.
+        // Esto garantiza que nuestro botón siempre se muestre y la UI esté limpia.
+        //
+        await ctx.replyWithPhoto(WELCOME_IMAGE_URL, {
+            caption: WELCOME_MESSAGE,
+            reply_markup: {
+                inline_keyboard: [[
                     Markup.button.webApp('🚀 Abrir App', webAppUrl)
-                ])
+                ]],
             }
-        );
+        });
+        
+        // Se envía un mensaje posterior y vacío con la orden de eliminar el teclado
+        // por si la configuración anterior no funcionara en todos los clientes.
+        // Esto es un seguro adicional de robustez.
+        await ctx.reply("...", {
+             reply_markup: {
+                remove_keyboard: true
+             }
+        }).then(result => ctx.deleteMessage(result.message_id));
 
-    } catch (error) { 
-        console.error('[Bot Start] Error en el comando /start:', error); 
-        // Fallback a mensaje de texto si la foto falla
+
+    } catch (error) {
+        console.error('[Bot Start] Error en el comando /start:', error);
         await ctx.reply('Hubo un error al iniciar. Por favor, intenta de nuevo.').catch(e => console.error("Error en fallback de /start", e));
     }
 });
