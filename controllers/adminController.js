@@ -251,6 +251,25 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
     res.json(wallets);
 });
 
+// --- NUEVA FUNCIÓN HELPER PARA ESTIMAR TARIFAS DE BARRIDO ---
+async function _getEstimatedSweepFee(chain) {
+    const GAS_BUFFER_PERCENTAGE = 1.01; // 1% de margen de seguridad
+
+    if (chain === 'BSC') {
+        const USDT_SWEEP_GAS_LIMIT = 80000; // Un límite de gas seguro para una transferencia de token BEP20
+        const gasPrice = await bscProvider.getGasPrice();
+        const estimatedFee = gasPrice.mul(USDT_SWEEP_GAS_LIMIT);
+        const feeWithBuffer = estimatedFee.mul(125).div(100); // Aplicar buffer
+        return parseFloat(ethers.utils.formatEther(feeWithBuffer));
+    } else if (chain === 'TRON') {
+        // Una transferencia de TRC20 consume energía, que se paga quemando TRX.
+        // 30 TRX es un valor conservador y seguro para cubrir la mayoría de las transferencias.
+        const TRX_SWEEP_FEE = 30; 
+        return TRX_SWEEP_FEE * GAS_BUFFER_PERCENTAGE;
+    }
+    return 0;
+}
+
 const getWalletBalance = asyncHandler(async (req, res) => {
     const { address, chain } = req.body;
     if (!address || !chain) { res.status(400); throw new Error('Se requiere address y chain'); }
@@ -308,13 +327,10 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
     let centralWalletBalance = 0;
     
     try {
-        // Valida que la semilla sea válida antes de continuar.
         if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
             throw new Error("La variable MASTER_SEED_PHRASE no está definida o es inválida.");
         }
         
-        // --- INICIO DE LA CORRECCIÓN FUNDAMENTAL ---
-        // Se generan las billeteras de forma local y explícita para cada análisis.
         if (chain === 'BSC') {
             const bscMasterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
             const centralWallet = new ethers.Wallet(bscMasterNode.derivePath(`m/44'/60'/0'/0/0`).privateKey, bscProvider);
@@ -323,7 +339,6 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
             const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE);
             centralWalletBalance = parseFloat(tronWeb.fromSun(await tronWeb.trx.getBalance(tronMnemonicWallet.address)));
         }
-        // --- FIN DE LA CORRECCIÓN FUNDAMENTAL ---
 
     } catch (error) {
         console.error("CRITICAL ERROR: Fallo al procesar la billetera central.", error.message);
@@ -331,15 +346,26 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
         throw new Error("Fallo al procesar la billetera central. Verifique MASTER_SEED_PHRASE.");
     }
     
+    // --- INICIO DE LA LÓGICA DE GAS PRECISO ---
+    const requiredGasForSweep = await _getEstimatedSweepFee(chain);
+    // --- FIN DE LA LÓGICA DE GAS PRECISO ---
+
     const walletsInChain = await CryptoWallet.find({ chain }).lean();
     const walletsNeedingGas = [];
-    const gasThreshold = chain === 'BSC' ? 0.0015 : 25;
 
     for (const wallet of walletsInChain) {
         try {
             const balances = await _getBalancesForAddress(wallet.address, chain);
-            if (balances.usdt > 0.1 && (chain === 'BSC' ? balances.bnb : balances.trx) < gasThreshold) {
-                walletsNeedingGas.push({ address: wallet.address, usdtBalance: balances.usdt, gasBalance: chain === 'BSC' ? balances.bnb : balances.trx });
+            const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
+            
+            // La condición ahora es: tiene USDT y su gas actual es MENOR que el requerido para el barrido.
+            if (balances.usdt > 0.1 && gasBalance < requiredGasForSweep) {
+                walletsNeedingGas.push({ 
+                    address: wallet.address, 
+                    usdtBalance: balances.usdt, 
+                    gasBalance: gasBalance,
+                    requiredGas: requiredGasForSweep // Añadimos la cantidad precisa que necesita
+                });
             }
         } catch (error) {
             console.error(`No se pudo analizar la wallet ${wallet.address}: ${error.message}`);
