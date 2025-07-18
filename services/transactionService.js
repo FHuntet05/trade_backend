@@ -30,23 +30,6 @@ const initializeHotWallet = () => {
     if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
         throw new Error("CRITICAL: MASTER_SEED_PHRASE no está definida o es inválida.");
     }
-    
-    // --- INICIO DEL CÓDIGO TEMPORAL PARA MOSTRAR DIRECCIONES ---
-    const bscMasterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
-    const bscWallet = new ethers.Wallet(bscMasterNode.derivePath(`m/44'/60'/0'/0/0`).privateKey, bscProvider);
-    const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE);
-
-    console.log("\n\n\n=======================================================================");
-    console.log("========== DIRECCIONES DE LA BILLETERA CENTRAL (HOT WALLET) ==========");
-    console.log("=======================================================================");
-    console.log(`\n[IMPORTANTE] Deposite BNB (red BSC) en esta dirección:`);
-    console.log(`---> ${bscWallet.address} <---\n`);
-    console.log(`\n[IMPORTANTE] Deposite TRX (red TRON) en esta dirección:`);
-    console.log(`---> ${tronMnemonicWallet.address} <---\n`);
-    console.log("=======================================================================");
-    console.log("=======> ¡COPIE ESTAS DIRECCIONES Y LUEGO RESTAURE ESTE ARCHIVO! <=======");
-    console.log("=======================================================================\n\n\n");
-    // --- FIN DEL CÓDIGO TEMPORAL ---
 };
 // ... [Funciones existentes como sweepUsdtOnTronFromDerivedWallet, etc. permanecen igual] ...
 const sweepUsdtOnTronFromDerivedWallet = async (derivationIndex, destinationAddress) => {

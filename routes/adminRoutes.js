@@ -4,6 +4,32 @@ const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController.js');
 const { protect, isAdmin } = require('../middleware/authMiddleware');
+const { ethers } = require('ethers'); // <--- AÑADIR ESTA LÍNEA
+const TronWeb = require('tronweb').default.TronWeb; // <--- AÑADIR ESTA LÍNEA
+
+// =======================================================================
+// =================== RUTA DE DEPURACIÓN TEMPORAL =====================
+// =======================================================================
+router.get('/debug/get-central-wallets', protect, isAdmin, (req, res) => {
+    try {
+        if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
+            return res.status(500).json({ error: "MASTER_SEED_PHRASE no está definida o es inválida en su entorno." });
+        }
+        const bscMasterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+        const bscWallet = new ethers.Wallet(bscMasterNode.derivePath(`m/44'/60'/0'/0/0`).privateKey);
+        const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+
+        res.json({
+            message: "¡Copie estas direcciones y luego elimine esta ruta del código!",
+            bsc_central_wallet_address: bscWallet.address,
+            tron_central_wallet_address: tronMnemonicWallet.address,
+        });
+
+    } catch (error) {
+        res.status(500).json({ error: "Fallo al generar las billeteras.", details: error.message });
+    }
+});
+// =======================================================================
 
 // rutas 
 router.get('/stats', protect, isAdmin, adminController.getDashboardStats);
