@@ -1,11 +1,11 @@
-// RUTA: backend/services/blockchainWatcherService.js (NUEVO ARCHIVO)
+// RUTA: backend/services/blockchainWatcherService.js (CORRECCIÓN PREVENTIVA)
 
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
 const PendingTx = require('../models/pendingTxModel');
 
 const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
-const tronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY } });
+// Se elimina la instancia global de tronWeb para evitar problemas de estado.
 
 const checkPendingTransactions = async () => {
   console.log('[Watcher] Verificando transacciones pendientes...');
@@ -21,7 +21,11 @@ const checkPendingTransactions = async () => {
           console.log(`[Watcher] BSC Tx ${tx.txHash} actualizada a ${tx.status}`);
         }
       } else if (tx.chain === 'TRON') {
-        const txInfo = await tronWeb.trx.getTransactionInfo(tx.txHash);
+        // --- INICIO DE LA CORRECCIÓN CLAVE ---
+        // Se crea una instancia local y sin estado para la consulta.
+        const localTronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY } });
+        const txInfo = await localTronWeb.trx.getTransactionInfo(tx.txHash);
+        // --- FIN DE LA CORRECCIÓN CLAVE ---
         if (txInfo && txInfo.receipt) {
             tx.status = txInfo.receipt.result === 'SUCCESS' ? 'CONFIRMED' : 'FAILED';
             console.log(`[Watcher] TRON Tx ${tx.txHash} actualizada a ${tx.status}`);
@@ -36,10 +40,8 @@ const checkPendingTransactions = async () => {
 
 const startWatcher = () => {
   console.log('[Watcher] ✅ Servicio de vigilancia de blockchain iniciado. Verificando cada 30 segundos.');
-  // Ejecutar una vez al inicio
   checkPendingTransactions();
-  // Y luego periódicamente
-  setInterval(checkPendingTransactions, 30000); // 30 segundos
+  setInterval(checkPendingTransactions, 30000);
 };
 
 module.exports = { startWatcher };
