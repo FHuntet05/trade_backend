@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN DEFINITIVA Y COMPLETA v19.4)
+// RUTA: backend/controllers/adminController.js (VERSIÓN DEFINITIVA Y COMPLETA v20.0 - PRODUCCIÓN)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -219,17 +219,10 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
 });
 
 // =======================================================================================
-// ========================== INICIO DE TESORERÍA Y DISPENSADOR ==========================
+// ========================== INICIO DE TESORERÍA Y DISPENSADOR (PRODUCCIÓN) ===============
 // =======================================================================================
 
-// --- FUNCIÓN HELPER INTERNA PARA OBTENER BALANCES (CORREGIDA) ---
 async function _getBalancesForAddress(address, chain) {
-    if (process.env.SIMULATION_MODE === 'true') {
-        const mockUsdt = Math.random() > 0.3 ? Math.random() * 100 : 0;
-        const mockGas = Math.random() > 0.5 ? Math.random() * (chain === 'BSC' ? 0.01 : 50) : 0;
-        return { usdt: mockUsdt, bnb: chain === 'BSC' ? mockGas : 0, trx: chain === 'TRON' ? mockGas : 0 };
-    }
-
     const TIMEOUT_MS = 15000;
     try {
         if (chain === 'BSC') {
@@ -270,16 +263,6 @@ const getWalletBalance = asyncHandler(async (req, res) => {
 });
 
 const sweepFunds = asyncHandler(async (req, res) => {
-    if (process.env.SIMULATION_MODE === 'true') {
-        const { walletsToSweep } = req.body;
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        const report = {
-            summary: { walletsScanned: walletsToSweep.length, successfulSweeps: walletsToSweep.length, failedTxs: 0, totalSwept: Math.random() * 1000 },
-            details: walletsToSweep.map(address => ({ address, status: 'SUCCESS', txHash: `sim_tx_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`, amount: Math.random() * 100 })),
-        };
-        return res.json(report);
-    }
-
     const { chain, token, recipientAddress, walletsToSweep } = req.body;
     if (!chain || !token || !recipientAddress || !walletsToSweep || !Array.isArray(walletsToSweep)) {
         res.status(400); throw new Error("Parámetros de barrido inválidos.");
@@ -322,15 +305,10 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
     const { chain } = req.body;
     if (!['BSC', 'TRON'].includes(chain)) { res.status(400); throw new Error("Cadena no válida."); }
     
-    let centralWalletBalance = 0;
-    if (process.env.SIMULATION_MODE === 'true') {
-        centralWalletBalance = chain === 'BSC' ? 1.5 : 2500;
-    } else {
-        const hotWallet = transactionService.initializeHotWallet();
-        centralWalletBalance = chain === 'BSC' 
-            ? parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(hotWallet.bsc.address)))
-            : parseFloat(tronWeb.fromSun(await tronWeb.trx.getBalance(hotWallet.tron.address)));
-    }
+    const hotWallet = transactionService.initializeHotWallet();
+    const centralWalletBalance = chain === 'BSC' 
+        ? parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(hotWallet.bsc.address)))
+        : parseFloat(tronWeb.fromSun(await tronWeb.trx.getBalance(hotWallet.tron.address)));
 
     const walletsInChain = await CryptoWallet.find({ chain }).lean();
     const walletsNeedingGas = [];
@@ -353,15 +331,6 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
 const dispatchGas = asyncHandler(async (req, res) => {
     const { chain, targets } = req.body;
     if (!chain || !Array.isArray(targets) || targets.length === 0) { res.status(400); throw new Error("Petición inválida."); }
-
-    if (process.env.SIMULATION_MODE === 'true') {
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        const report = {
-            summary: { success: targets.length, failed: 0, totalDispatched: targets.reduce((sum, t) => sum + parseFloat(t.amount), 0) },
-            details: targets.map(target => ({ address: target.address, status: 'SUCCESS', txHash: `sim_tx_gas_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`, amount: target.amount })),
-        };
-        return res.json(report);
-    }
 
     const report = { summary: { success: 0, failed: 0, totalDispatched: 0 }, details: [] };
     const sendFunction = chain === 'BSC' ? transactionService.sendBscGas : transactionService.sendTronTrx;

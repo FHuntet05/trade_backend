@@ -22,6 +22,9 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
   return Promise.race([promise, timeout]);
 }
 
+// =========================================================================
+// =================== FUNCIÓN MODIFICADA TEMPORALMENTE ====================
+// =========================================================================
 const initializeHotWallet = () => {
   if (hotWallet) return hotWallet;
   if (!process.env.MASTER_SEED_PHRASE) {
@@ -38,10 +41,20 @@ const initializeHotWallet = () => {
     }
   };
   tronWeb.setPrivateKey(hotWallet.tron.privateKey);
-  console.log(`[TransactionService] Hot Wallets inicializadas. BSC: ${hotWallet.bsc.address}, TRON: ${hotWallet.tron.address}`);
+
+  // --- INICIO DEL CÓDIGO TEMPORAL ---
+  console.log("\n=======================================================================");
+  console.log("========== DIRECCIONES DE LA BILLETERA CENTRAL (HOT WALLET) ==========");
+  console.log("=======================================================================");
+  console.log(`\nDirección BSC (para enviar BNB): ${hotWallet.bsc.address}`);
+  console.log(`\nDirección TRON (para enviar TRX): ${hotWallet.tron.address}`);
+  console.log("\n=======================================================================");
+  console.log("=======> ¡COPIE ESTAS DIRECCIONES Y LUEGO RETIRE ESTE CÓDIGO! <=======");
+  console.log("=======================================================================\n");
+  // --- FIN DEL CÓDIGO TEMPORAL ---
+  
   return hotWallet;
 };
-
 // ... [Funciones existentes como sweepUsdtOnTronFromDerivedWallet, etc. permanecen igual] ...
 const sweepUsdtOnTronFromDerivedWallet = async (derivationIndex, destinationAddress) => {
   if (derivationIndex === undefined || !destinationAddress) throw new Error("Índice de derivación y dirección de destino son requeridos.");
