@@ -87,7 +87,19 @@ app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
 console.log('[SISTEMA] ✅ Rutas de API registradas.');
 
 // --- Lógica del Bot de Telegram ---
-const WELCOME_MESSAGE = `*Bienvenido a NEURO LINK* 🚀\n\n¡Estás a punto de entrar a un nuevo ecosistema de minería digital!\n\nHaz clic en el botón de abajo para lanzar la aplicación.`;
+const WELCOME_MESSAGE = `
+👋 ¡Bienvenido a NEURO LINK!\n\n
+
+Tu puerta de entrada al futuro de la minería digital. Aquí, tu participación es la clave para desbloquear recompensas.\n\n
+
+¿Cómo funciona?\n\n
+1️⃣ Inicia la Minería: Activa tu sesión de minería cada 24 horas para empezar a generar NTX, nuestro token interno.\n
+2️⃣ Adquiere Herramientas: Visita nuestra tienda y usa USDT, TRX o BNB para comprar herramientas que aumentan tu velocidad de minería y maximizan tus ganancias.\n
+3️⃣ Construye tu Equipo: Invita a tus amigos con tu enlace personal. Ganarás un porcentaje de su minería, creando un flujo de ingresos pasivo.\n
+4️⃣ Reclama y Crece: Reclama tus NTX minados para añadirlos a tu saldo.\n\n
+
+¡Estás listo para empezar! Haz clic en el botón de abajo y que comience la minería. 🚀
+`;
 const escapeMarkdownV2 = (text) => text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
 bot.command('start', async (ctx) => {
     try {

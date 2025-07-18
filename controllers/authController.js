@@ -46,9 +46,16 @@ const authTelegramUser = async (req, res) => {
 
         if (!user) {
             let referrer = null;
-            if (startParam) {
+            // --- INICIO DE LA CORRECCIÓN DE REFERIDOS ---
+            // 1. Verificamos que el startParam exista y no sea el propio ID del usuario.
+            if (startParam && startParam !== telegramId) {
+                // 2. Buscamos al referente por su telegramId, que es lo que llega.
                 referrer = await User.findOne({ telegramId: startParam });
+                if (!referrer) {
+                    console.warn(`[Referral] Se intentó referir con un telegramId inválido o no existente: ${startParam}`);
+                }
             }
+            // --- FIN DE LA CORRECCIÓN DE REFERIDOS ---
             
             const photoFileId = await getPhotoFileId(telegramId);
             const fullName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim();
@@ -64,8 +71,10 @@ const authTelegramUser = async (req, res) => {
             await user.save();
             
             if (referrer) {
+                // 3. Añadimos el nuevo usuario a la lista de referidos del referente.
                 referrer.referrals.push({ level: 1, user: user._id });
                 await referrer.save();
+                console.log(`[Referral] Usuario ${user.username} ha sido referido por ${referrer.username}.`);
             }
         } else {
             if (!user.photoFileId) {
