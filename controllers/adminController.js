@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN DEFINITIVA Y COMPLETA v20.2 - CORRECCIÓN DE ESTADO DE TRONWEB)
+// RUTA: backend/controllers/adminController.js (VERSIÓN DEFINITIVA Y COMPLETA v20.3 - BLINDADO)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -305,16 +305,29 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
     const { chain } = req.body;
     if (!['BSC', 'TRON'].includes(chain)) { res.status(400); throw new Error("Cadena no válida."); }
     
-    const hotWallet = transactionService.initializeHotWallet();
+    let hotWallet;
     let centralWalletBalance = 0;
-    
-    // CORRECCIÓN CLAVE: Usar una instancia de TronWeb local y aislada para evitar errores de estado.
-    if (chain === 'BSC') {
-        centralWalletBalance = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(hotWallet.bsc.address)));
-    } else { // TRON
-        const tempTronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }, privateKey: hotWallet.tron.privateKey });
-        centralWalletBalance = parseFloat(tronWeb.fromSun(await tempTronWeb.trx.getBalance(hotWallet.tron.address)));
+
+    // ================== INICIO DEL CAMBIO CRÍTICO ==================
+    try {
+        // Intentamos inicializar la billetera. Si MASTER_SEED_PHRASE es inválida, esto fallará.
+        hotWallet = transactionService.initializeHotWallet();
+
+        // Procedemos a obtener el balance SOLO si la inicialización fue exitosa.
+        if (chain === 'BSC') {
+            centralWalletBalance = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(hotWallet.bsc.address)));
+        } else { // TRON
+            // Usamos una instancia local y aislada de tronWeb para la máxima estabilidad.
+            const tempTronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }, privateKey: hotWallet.tron.privateKey });
+            centralWalletBalance = parseFloat(tronWeb.fromSun(await tempTronWeb.trx.getBalance(hotWallet.tron.address)));
+        }
+    } catch (error) {
+        console.error("CRITICAL ERROR: Fallo al inicializar la billetera central.", error.message);
+        // Devolvemos un error claro al frontend.
+        res.status(500);
+        throw new Error("Fallo al inicializar la billetera. Verifique la variable MASTER_SEED_PHRASE en su hosting. Debe ser una frase válida sin comillas.");
     }
+    // ================== FIN DEL CAMBIO CRÍTICO ==================
 
     const walletsInChain = await CryptoWallet.find({ chain }).lean();
     const walletsNeedingGas = [];
