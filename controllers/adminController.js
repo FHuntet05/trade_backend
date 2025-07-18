@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN DEFINITIVA Y COMPLETA v20.1 - PRODUCCIÓN VERIFICADA)
+// RUTA: backend/controllers/adminController.js (VERSIÓN DEFINITIVA Y COMPLETA v20.2 - CORRECCIÓN DE ESTADO DE TRONWEB)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -306,9 +306,15 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
     if (!['BSC', 'TRON'].includes(chain)) { res.status(400); throw new Error("Cadena no válida."); }
     
     const hotWallet = transactionService.initializeHotWallet();
-    const centralWalletBalance = chain === 'BSC' 
-        ? parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(hotWallet.bsc.address)))
-        : parseFloat(tronWeb.fromSun(await tronWeb.trx.getBalance(hotWallet.tron.address)));
+    let centralWalletBalance = 0;
+    
+    // CORRECCIÓN CLAVE: Usar una instancia de TronWeb local y aislada para evitar errores de estado.
+    if (chain === 'BSC') {
+        centralWalletBalance = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(hotWallet.bsc.address)));
+    } else { // TRON
+        const tempTronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }, privateKey: hotWallet.tron.privateKey });
+        centralWalletBalance = parseFloat(tronWeb.fromSun(await tempTronWeb.trx.getBalance(hotWallet.tron.address)));
+    }
 
     const walletsInChain = await CryptoWallet.find({ chain }).lean();
     const walletsNeedingGas = [];
