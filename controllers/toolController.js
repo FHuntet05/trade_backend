@@ -51,7 +51,10 @@ const purchaseWithBalance = async (req, res) => {
             expiryDate: expiryDate,
         });
     }
-    
+     // --- INICIO DE LA CORRECCIÓN CLAVE ---
+    // Al comprar una herramienta, se resetea el ciclo de minería.
+    user.lastMiningClaim = new Date();
+    // --- FIN DE LA CORRECCIÓN CLAVE ---
     await user.save();
     
     const updatedUser = await User.findById(userId).populate('activeTools.tool');
