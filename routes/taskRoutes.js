@@ -1,7 +1,7 @@
 // backend/routes/taskRoutes.js
-import express from 'express';
-import { protect } from '../middleware/authMiddleware.js';
-import { getTaskStatus, claimTaskReward, markTaskAsVisited } from '../controllers/taskController.js';
+const express = require('express');
+const { protect } = require('../middleware/authMiddleware.js');
+const { getTaskStatus, claimTaskReward, markTaskAsVisited } = require('../controllers/taskController.js');
 
 const router = express.Router();
 
@@ -9,9 +9,7 @@ const router = express.Router();
 router.get('/status', protect, getTaskStatus);
 router.post('/claim', protect, claimTaskReward);
 
-// === NUEVA RUTA CRÍTICA ===
-// Esta ruta permite al frontend notificar al backend que el usuario ha
-// interactuado con una tarea externa, como visitar un enlace.
+// === NUEVA RUTA CRÍTICA (SINTAXIS COMMONJS) ===
 router.post('/mark-as-visited', protect, markTaskAsVisited);
 
-export default router;
+module.exports = router;
