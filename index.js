@@ -89,7 +89,7 @@ console.log('[SISTEMA] ✅ Rutas de API registradas.');
 // --- Lógica del Bot de Telegram ---
 const WELCOME_MESSAGE = `
 👋 ¡Bienvenido a NEURO LINK!\n\n
-🔐 Tu acceso privilegiado al universo de la minería digital avanzada. Aquí, cada acción te acerca a recompensas exclusivas en *NTX*.\n\n
+🔐 Tu acceso privilegiado al universo de la minería digital avanzada. Aquí, cada acción te acerca a recompensas exclusivas en NTX.\n\n
 📘 ¿Cómo funciona?\n
 1️⃣ Activa tu Minería: ⛏️ Inicia tu sesión cada 24 horas para comenzar a generar NTX, el token neural del ecosistema.\n
 2️⃣ Optimiza tu Potencia: ⚙️ Accede a la tienda y adquiere herramientas con USDT, TRX o BNB. Aumenta tu velocidad de minería y maximiza tus beneficios.\n
