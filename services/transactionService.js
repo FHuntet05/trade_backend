@@ -21,27 +21,26 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
   });
   return Promise.race([promise, timeout]);
 }
-// ================== NUEVA FUNCIÓN CENTRALIZADA Y ROBUSTA ==================
+// ================== FUNCIÓN CENTRALIZADA Y DEFINITIVA ==================
+// Esta función replica la lógica exacta que funcionó en la ruta de depuración.
 const getCentralWallets = () => {
     if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
         throw new Error("CRITICAL: MASTER_SEED_PHRASE no está definida o es inválida.");
     }
-    const masterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+    
+    // Generar billetera BSC (sabemos que esto funciona)
+    const bscMasterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+    const bscWallet = new ethers.Wallet(bscMasterNode.derivePath(`m/44'/60'/0'/0/0`).privateKey, bscProvider);
 
-    // 1. Generar la billetera BSC (sabemos que esto funciona)
-    const bscWalletNode = masterNode.derivePath(`m/44'/60'/0'/0/0`);
-    const bscWallet = new ethers.Wallet(bscWalletNode.privateKey, bscProvider);
-
-    // 2. Generar la billetera TRON usando ethers.js para la clave y TronWeb para la dirección
-    const tronWalletNode = masterNode.derivePath(`m/44'/195'/0'/0/0`); // Ruta de derivación de TRON
-    const tronPrivateKey = tronWalletNode.privateKey;
-    const tronAddress = TronWeb.address.fromPrivateKey(tronPrivateKey.substring(2)); // TronWeb necesita la clave sin el '0x'
+    // Generar billetera TRON usando el método que funcionó (fromMnemonic)
+    // Se crea una instancia local de TronWeb para evitar conflictos de estado.
+    const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE);
 
     return {
         bscWallet,
         tronWallet: {
-            privateKey: tronPrivateKey,
-            address: tronAddress
+            privateKey: tronMnemonicWallet.privateKey,
+            address: tronMnemonicWallet.address
         }
     };
 };
@@ -167,7 +166,7 @@ const sendTronTrx = async (toAddress, amountInTrx) => {
         metadata: new Map([['to', toAddress], ['amount', amountInTrx.toString()]])
     });
     // =================== FIN DEL CAMBIO ====================
-    
+
         if (!receipt.result) {
            throw new Error(`La transacción TRX falló con el mensaje: ${receipt.resMessage ? localTronWeb.toUtf8(receipt.resMessage) : 'Error desconocido'}`);
         }
