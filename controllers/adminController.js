@@ -563,6 +563,24 @@ const sendBroadcastNotification = asyncHandler(async (req, res) => {
         console.log(`[Broadcast] Notificación completada. ${successCount}/${usersToNotify.length} envíos exitosos.`);
     })();
 });
+// ================== NUEVAS FUNCIONES PARA EL RESCATE ==================
+const cancelTransaction = asyncHandler(async (req, res) => {
+    const { txHash } = req.body;
+    if (!txHash) {
+        res.status(400); throw new Error("Se requiere el hash de la transacción.");
+    }
+    const result = await rescueService.cancelBscTransaction(txHash);
+    res.json({ message: 'Solicitud de cancelación enviada.', ...result });
+});
+
+const speedUpTransaction = asyncHandler(async (req, res) => {
+    const { txHash } = req.body;
+    if (!txHash) {
+        res.status(400); throw new Error("Se requiere el hash de la transacción.");
+    }
+    const result = await rescueService.speedUpBscTransaction(txHash);
+    res.json({ message: 'Solicitud de aceleración enviada.', ...result });
+});
 
 // =======================================================================================
 // ================================== EXPORTS FINALES ====================================
@@ -594,5 +612,8 @@ module.exports = {
   adjustUserBalance,
   sendBroadcastNotification,
   checkAndSendGasAlert,
-  getPendingBlockchainTxs
+  getPendingBlockchainTxs,
+  speedUpTransaction,
+  cancelTransaction
+
 };

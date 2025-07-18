@@ -41,4 +41,6 @@ router.post('/notifications/send', protect, isAdmin, adminController.sendBroadca
 
 
 router.get('/blockchain-monitor/pending', protect, isAdmin, adminController.getPendingBlockchainTxs);
+router.post('/blockchain-monitor/cancel-tx', protect, isAdmin, adminController.cancelTransaction);
+router.post('/blockchain-monitor/speedup-tx', protect, isAdmin, adminController.speedUpTransaction);
 module.exports = router;
