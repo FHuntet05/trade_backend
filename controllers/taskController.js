@@ -1,4 +1,4 @@
-// backend/controllers/taskController.js (CÓDIGO COMPLETO Y SIN CAMBIOS)
+// backend/controllers/taskController.js (CÓDIGO COMPLETO Y CORREGIDO)
 const asyncHandler = require('express-async-handler');
 const User = require('../models/userModel.js');
 
@@ -17,6 +17,13 @@ const markTaskAsVisited = asyncHandler(async (req, res) => {
         user.tasks = new Map();
     }
     user.tasks.set('telegramVisited', true);
+
+    // === INICIO DE LA CORRECCIÓN CRÍTICA DE PERSISTENCIA ===
+    // Forzamos a Mongoose a reconocer que el campo 'tasks' ha sido modificado.
+    // Esto garantiza que el cambio se escribirá en la base de datos.
+    user.markModified('tasks');
+    // === FIN DE LA CORRECCIÓN CRÍTICA DE PERSISTENCIA ===
+
     await user.save();
     res.status(200).json({
         success: true,
@@ -69,6 +76,13 @@ const claimTaskReward = asyncHandler(async (req, res) => {
     user.balance.ntx += reward;
     claimedTasks[taskId] = true;
     user.tasks.set('claimedTasks', claimedTasks);
+
+    // === INICIO DE LA CORRECCIÓN CRÍTICA DE PERSISTENCIA ===
+    // Forzamos a Mongoose a reconocer que el campo 'tasks' ha sido modificado.
+    // Esto garantiza que el estado "reclamado" se escribirá en la base de datos.
+    user.markModified('tasks');
+    // === FIN DE LA CORRECCIÓN CRÍTICA DE PERSISTENCIA ===
+
     await user.save();
     const updatedUser = await User.findById(user._id).populate('referrals');
     res.json({ message: `¡+${reward.toLocaleString()} NTX reclamados!`, user: updatedUser });
