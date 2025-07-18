@@ -155,6 +155,7 @@ const cryptoCloudWebhook = async (req, res) => {
             user.activeTools.push({ tool: tool._id, purchaseDate: now, expiryDate: expiryDate });
           }
            user.lastMiningClaim = new Date();
+              user.miningStatus = 'IDLE';
           await user.save();
           await createTransaction(userId, 'purchase', amountPaid, 'USDT', `Compra de ${quantity}x ${tool.name} (Crypto)`);
           await distributeCommissions(user, amountPaid);
