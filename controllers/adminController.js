@@ -20,7 +20,7 @@ const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
 const PendingTx = require('../models/pendingTxModel');
 const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
-const PLACEHOLDER_AVATAR_URL = 'https://i.ibb.co/606BFx4/user-avatar-placeholder.png';
+const PLACEHOLDER_AVATAR_URL = 'https://i.postimg.cc/mD21B6r7/user-avatar-placeholder.png';
 
 const USDT_TRON_ADDRESS = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
@@ -341,6 +341,9 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
     else { res.status(400).json({ message: 'Token inválido.' }); }
 });
 
+// ================== INICIO DE LA CORRECCIÓN #1 ==================
+// Esta función era la causa del error "InvalidParameterException" en la Tesorería.
+// --- CORRECCIÓN #2: ERROR InvalidParameterException EN TESORERÍA ---
 async function _getBalancesForAddress(address, chain) {
     const TIMEOUT_MS = 15000;
     try {
@@ -357,6 +360,8 @@ async function _getBalancesForAddress(address, chain) {
                 fullHost: 'https://api.trongrid.io',
                 headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
             });
+            tempTronWeb.setAddress(address); // ¡Paso clave para blindar la instancia!
+
             const usdtTronContract = await tempTronWeb.contract().at(USDT_TRON_ADDRESS);
             const [usdtBalanceRaw, trxBalanceRaw] = await Promise.all([
                 promiseWithTimeout(usdtTronContract.balanceOf(address).call(), TIMEOUT_MS),
@@ -365,10 +370,11 @@ async function _getBalancesForAddress(address, chain) {
             return { usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6)), trx: parseFloat(tempTronWeb.fromSun(trxBalanceRaw)), bnb: 0 };
         }
     } catch (error) {
-        console.error(`Error al obtener saldo para ${address}: ${error.message}`);
-        throw error;
+        console.error(`Error al obtener saldo para ${address} en ${chain}:`, error);
+        throw new Error(`Fallo al escanear ${address}. Causa: ${error.message}`);
     }
 }
+
 
 const getTreasuryWalletsList = asyncHandler(async (req, res) => {
     const wallets = await CryptoWallet.find({}).select('address chain user').populate('user', 'username').lean();
