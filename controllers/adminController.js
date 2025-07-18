@@ -108,23 +108,84 @@ const processWithdrawal = asyncHandler(async (req, res) => {
     }
 });
 
+// ================== FUNCIÓN MODIFICADA ==================
 const getUserDetails = asyncHandler(async (req, res) => {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) { res.status(400); throw new Error('ID de usuario no válido.'); }
-    const userId = new mongoose.Types.ObjectId(req.params.id);
-    const [user, transactions, referrals] = await Promise.all([
-        User.findById(userId).select('-password').lean(),
-        Transaction.find({ user: userId }).sort({ createdAt: -1 }).limit(10).lean(),
-        User.find({ referredBy: userId }).select('username fullName telegramId photoFileId createdAt').lean()
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) { res.status(400); throw new Error('ID de usuario no válido.'); }
+
+    // Obtenemos transacciones paginadas
+    const page = parseInt(req.query.page) || 1;
+    const limit = 10;
+    const transactionsFilter = { user: id };
+    const totalTransactions = await Transaction.countDocuments(transactionsFilter);
+    
+    const [user, referrals, cryptoWallets, transactions] = await Promise.all([
+        User.findById(id).select('-password').lean(),
+        User.find({ referredBy: id }).select('username fullName telegramId photoFileId createdAt').lean(),
+        CryptoWallet.find({ user: id }).lean(),
+        Transaction.find(transactionsFilter).sort({ createdAt: -1 }).limit(limit).skip(limit * (page - 1)).lean()
     ]);
+    
     if (!user) { res.status(404); throw new Error('Usuario no encontrado.'); }
+
     const [userPhotoUrl, referralsWithPhoto] = await Promise.all([
         getTemporaryPhotoUrl(user.photoFileId),
-        Promise.all(referrals.map(async (ref) => {
-            const photoUrl = await getTemporaryPhotoUrl(ref.photoFileId);
-            return { ...ref, photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL };
-        }))
+        Promise.all(referrals.map(async (ref) => ({ ...ref, photoUrl: await getTemporaryPhotoUrl(ref.photoFileId) || PLACEHOLDER_AVATAR_URL })))
     ]);
-    res.json({ user: { ...user, photoUrl: userPhotoUrl || PLACEHOLDER_AVATAR_URL }, transactions, referrals: referralsWithPhoto });
+
+    res.json({
+        user: { ...user, photoUrl: userPhotoUrl || PLACEHOLDER_AVATAR_URL },
+        referrals: referralsWithPhoto,
+        cryptoWallets,
+        transactions: {
+            items: transactions,
+            page,
+            totalPages: Math.ceil(totalTransactions / limit),
+            totalItems: totalTransactions
+        }
+    });
+});
+
+// ================== NUEVA FUNCIÓN ==================
+const adjustUserBalance = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { type, currency, amount, reason } = req.body;
+
+    if (!['admin_credit', 'admin_debit'].includes(type) || !['USDT', 'NTX'].includes(currency) || !amount || !reason) {
+        res.status(400); throw new Error("Parámetros inválidos.");
+    }
+    
+    const session = await mongoose.startSession();
+    try {
+        session.startTransaction();
+        const user = await User.findById(id).session(session);
+        if (!user) throw new Error('Usuario no encontrado.');
+
+        const currencyKey = currency.toLowerCase();
+        
+        if (type === 'admin_credit') {
+            user.balance[currencyKey] = (user.balance[currencyKey] || 0) + amount;
+        } else { // admin_debit
+            if ((user.balance[currencyKey] || 0) < amount) throw new Error('Saldo insuficiente para realizar el débito.');
+            user.balance[currencyKey] -= amount;
+        }
+
+        const transaction = new Transaction({
+            user: id, type, currency, amount, status: 'completed', description: reason,
+            metadata: { adminUsername: req.user.username }
+        });
+        
+        await user.save({ session });
+        await transaction.save({ session });
+        
+        await session.commitTransaction();
+        res.status(200).json({ message: 'Saldo ajustado exitosamente.', user });
+    } catch (error) {
+        await session.abortTransaction();
+        res.status(500).json({ message: error.message });
+    } finally {
+        session.endSession();
+    }
 });
 
 const getAllUsers = asyncHandler(async (req, res) => {
@@ -190,9 +251,51 @@ const createManualTransaction = asyncHandler(async (req, res) => {
     }
 });
 
+// ================== FUNCIÓN MODIFICADA ==================
 const getDashboardStats = asyncHandler(async (req, res) => {
-    const [totalUsers, totalDepositVolume] = await Promise.all([User.countDocuments(), Transaction.aggregate([{ $match: { type: 'deposit', currency: 'USDT' } }, { $group: { _id: null, totalVolume: { $sum: '$amount' } } }])]);
-    res.json({ totalUsers, totalDepositVolume: totalDepositVolume[0]?.totalVolume || 0 });
+    const [
+        totalUsers, 
+        totalDepositVolume,
+        pendingWithdrawals,
+        // ... (Agregaremos más en el futuro)
+    ] = await Promise.all([
+        User.countDocuments(), 
+        Transaction.aggregate([
+            { $match: { type: 'deposit', currency: 'USDT' } }, 
+            { $group: { _id: null, totalVolume: { $sum: '$amount' } } }
+        ]),
+        Transaction.countDocuments({ type: 'withdrawal', status: 'pending' })
+    ]);
+
+    // Obtener balances de la billetera central
+    let centralWalletBalances = { usdt: 0, bnb: 0, trx: 0 };
+    try {
+        const bscMasterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+        const bscWallet = new ethers.Wallet(bscMasterNode.derivePath(`m/44'/60'/0'/0/0`).privateKey, bscProvider);
+        const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+
+        const [bnbBalance, trxBalance, usdtBscBalance, usdtTronBalance] = await Promise.all([
+            bscProvider.getBalance(bscWallet.address),
+            tronWeb.trx.getBalance(tronMnemonicWallet.address),
+            usdtBscContract.balanceOf(bscWallet.address),
+            (await tronWeb.contract().at(USDT_TRON_ADDRESS)).balanceOf(tronMnemonicWallet.address).call()
+        ]);
+
+        centralWalletBalances = {
+            bnb: parseFloat(ethers.utils.formatEther(bnbBalance)),
+            trx: parseFloat(tronWeb.fromSun(trxBalance)),
+            usdt: parseFloat(ethers.utils.formatUnits(usdtBscBalance, 18)) + parseFloat(ethers.utils.formatUnits(usdtTronBalance.toString(), 6))
+        };
+    } catch (error) {
+        console.error("No se pudo obtener el balance de la billetera central:", error.message);
+    }
+    
+    res.json({ 
+        totalUsers, 
+        totalDepositVolume: totalDepositVolume[0]?.totalVolume || 0,
+        pendingWithdrawals,
+        centralWalletBalances
+    });
 });
 
 const getAllTools = asyncHandler(async (req, res) => { const tools = await Tool.find({}).sort({ vipLevel: 1 }).lean(); res.json(tools); });
@@ -421,5 +524,6 @@ module.exports = {
   getWalletBalance,
   sweepFunds,
   analyzeGasNeeds,
-  dispatchGas
+  dispatchGas,
+  adjustUserBalance
 };
