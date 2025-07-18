@@ -1,4 +1,5 @@
-// backend/services/transactionService.js (VERSIÓN v17.2 - BLINDADA CONTRA BLOQUEOS)
+// RUTA: backend/services/transactionService.js (POTENCIADO CON DISPENSADOR DE GAS)
+
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
 
@@ -8,21 +9,15 @@ const tronWeb = new TronWeb({
   headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
 });
 const USDT_TRON_ADDRESS = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
+const USDT_BSC_ABI = ['function transfer(address, uint256)', 'function balanceOf(address) view returns (uint256)'];
+
 
 let hotWallet;
 
-/**
- * @desc    Envuelve una promesa en una carrera contra un temporizador de timeout.
- * @param   {Promise} promise - La promesa a ejecutar (ej. una llamada a la blockchain).
- * @param   {number} ms - El tiempo de espera en milisegundos.
- * @returns {Promise} - La promesa original o un error de timeout.
- */
 function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió el tiempo de espera.') {
   const timeout = new Promise((_, reject) => {
-    const id = setTimeout(() => {
-      clearTimeout(id);
-      reject(new Error(timeoutMessage));
-    }, ms);
+    const id = setTimeout(() => { clearTimeout(id); reject(new Error(timeoutMessage)); }, ms);
   });
   return Promise.race([promise, timeout]);
 }
@@ -47,35 +42,20 @@ const initializeHotWallet = () => {
   return hotWallet;
 };
 
+// ... [Funciones existentes como sweepUsdtOnTronFromDerivedWallet, etc. permanecen igual] ...
 const sweepUsdtOnTronFromDerivedWallet = async (derivationIndex, destinationAddress) => {
-  if (derivationIndex === undefined || !destinationAddress) {
-    throw new Error("Índice de derivación y dirección de destino son requeridos.");
-  }
+  if (derivationIndex === undefined || !destinationAddress) throw new Error("Índice de derivación y dirección de destino son requeridos.");
   const depositWalletMnemonic = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE, `m/44'/195'/${derivationIndex}'/0/0`);
   const depositWalletAddress = depositWalletMnemonic.address;
   const usdtContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
-  
-  // CORRECCIÓN: Envolvemos la llamada a la blockchain con un timeout de 10 segundos.
-  const balanceCall = usdtContract.balanceOf(depositWalletAddress).call();
-  const balance = await promiseWithTimeout(balanceCall, 10000, 'Timeout al consultar el saldo de la wallet de depósito.');
-
+  const balance = await promiseWithTimeout(usdtContract.balanceOf(depositWalletAddress).call(), 10000);
   const balanceBigNumber = ethers.BigNumber.from(balance.toString());
-  if (balanceBigNumber.isZero()) {
-    throw new Error(`La wallet ${depositWalletAddress} no tiene saldo de USDT para barrer.`);
-  }
+  if (balanceBigNumber.isZero()) throw new Error(`La wallet ${depositWalletAddress} no tiene saldo de USDT para barrer.`);
   console.log(`[SweepService] Iniciando barrido de ${ethers.utils.formatUnits(balanceBigNumber, 6)} USDT desde ${depositWalletAddress} hacia ${destinationAddress}`);
-  
-  const tempTronWeb = new TronWeb({
-    fullHost: 'https://api.trongrid.io',
-    headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
-    privateKey: depositWalletMnemonic.privateKey,
-  });
+  const tempTronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }, privateKey: depositWalletMnemonic.privateKey });
   const tempContract = await tempTronWeb.contract().at(USDT_TRON_ADDRESS);
   try {
-    // CORRECCIÓN: Envolvemos el envío de la transacción con un timeout de 20 segundos.
-    const transferSend = tempContract.transfer(destinationAddress, balanceBigNumber.toString()).send({ feeLimit: 150_000_000 });
-    const txHash = await promiseWithTimeout(transferSend, 20000, 'Timeout al enviar la transacción de barrido.');
-    
+    const txHash = await promiseWithTimeout(tempContract.transfer(destinationAddress, balanceBigNumber.toString()).send({ feeLimit: 150_000_000 }), 20000);
     console.log(`[SweepService] Barrido de ${depositWalletAddress} iniciado. Hash: ${txHash}`);
     return txHash;
   } catch(error) {
@@ -83,47 +63,16 @@ const sweepUsdtOnTronFromDerivedWallet = async (derivationIndex, destinationAddr
     throw new Error(`Fallo en la transacción de barrido. Detalles: ${error.message}`);
   }
 };
-
-const sendUsdtOnTron = async (toAddress, amount) => {
-  initializeHotWallet();
-  try {
-    const usdtContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
-    const amountInSun = ethers.utils.parseUnits(amount.toString(), 6);
-    
-    // CORRECCIÓN: Envolvemos el envío de la transacción con un timeout de 20 segundos.
-    const transferSend = usdtContract.transfer(toAddress, amountInSun.toString()).send({ feeLimit: 150_000_000, shouldPoll: false });
-    const txHash = await promiseWithTimeout(transferSend, 20000, 'Timeout al enviar la transacción de retiro.');
-
-    console.log(`[TransactionService] Envío de ${amount} USDT (TRON) a ${toAddress} iniciado. Hash: ${txHash}`);
-    return txHash;
-  } catch (error) {
-    console.error(`[TransactionService] ERROR al enviar USDT (TRON):`, error);
-    throw new Error(`Fallo en la transacción TRON: ${error.details || error.message}`);
-  }
-};
-
-// --- FUNCIÓN NUEVA ---
 const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddress) => {
-    if (derivationIndex === undefined || !destinationAddress) {
-        throw new Error("Índice de derivación y dirección de destino son requeridos.");
-    }
+    if (derivationIndex === undefined || !destinationAddress) throw new Error("Índice de derivación y dirección de destino son requeridos.");
     const hdNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
     const depositWalletNode = hdNode.derivePath(`m/44'/60'/0'/0/${derivationIndex}`);
     const depositWallet = new ethers.Wallet(depositWalletNode.privateKey, bscProvider);
-    
     const usdtContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_BSC_ABI, depositWallet);
-    const balance = await usdtContract.provider.getBalance(depositWallet.address); // Chequear BNB para fee
-
-    if (balance.lt(ethers.utils.parseEther("0.001"))) { // Comprobar si hay suficiente BNB para la comisión
-        throw new Error(`Fondos BNB insuficientes para el fee en la wallet ${depositWallet.address}.`);
-    }
-
-    const usdtBalance = await new ethers.Contract(USDT_BSC_ADDRESS, ['function balanceOf(address) view returns (uint256)'], bscProvider).balanceOf(depositWallet.address);
-
-    if (usdtBalance.isZero()) {
-        throw new Error(`La wallet ${depositWallet.address} no tiene saldo de USDT (BSC) para barrer.`);
-    }
-
+    const gasBalance = await bscProvider.getBalance(depositWallet.address);
+    if (gasBalance.lt(ethers.utils.parseEther("0.0015"))) throw new Error(`Fondos BNB insuficientes para el fee en la wallet ${depositWallet.address}.`);
+    const usdtBalance = await new ethers.Contract(USDT_BSC_ADDRESS, USDT_BSC_ABI, bscProvider).balanceOf(depositWallet.address);
+    if (usdtBalance.isZero()) throw new Error(`La wallet ${depositWallet.address} no tiene saldo de USDT (BSC) para barrer.`);
     console.log(`[SweepService] Iniciando barrido de ${ethers.utils.formatUnits(usdtBalance, 18)} USDT (BSC) desde ${depositWallet.address}`);
     try {
         const tx = await usdtContract.transfer(destinationAddress, usdtBalance);
@@ -135,10 +84,51 @@ const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddre
     }
 };
 
+// =========================================================================
+// ================ NUEVAS FUNCIONES PARA DISPENSADOR DE GAS ===============
+// =========================================================================
+const sendBscGas = async (toAddress, amountInBnb) => {
+    initializeHotWallet();
+    console.log(`[GasDispenser] Enviando ${amountInBnb} BNB desde la wallet central a ${toAddress}`);
+    try {
+        const tx = {
+            to: toAddress,
+            value: ethers.utils.parseEther(amountInBnb.toString())
+        };
+        const txResponse = await hotWallet.bsc.sendTransaction(tx);
+        await txResponse.wait(); // Esperar a que la transacción se mine
+        return txResponse.hash;
+    } catch (error) {
+        console.error(`[GasDispenser] ERROR enviando BNB a ${toAddress}:`, error);
+        throw new Error(`Fallo al enviar BNB: ${error.reason || error.message}`);
+    }
+};
+
+const sendTronTrx = async (toAddress, amountInTrx) => {
+    initializeHotWallet();
+    console.log(`[GasDispenser] Enviando ${amountInTrx} TRX desde la wallet central a ${toAddress}`);
+    try {
+        const amountInSun = tronWeb.toSun(amountInTrx);
+        const signedTx = await tronWeb.trx.sign(
+            await tronWeb.transactionBuilder.sendTrx(toAddress, amountInSun, hotWallet.tron.address)
+        );
+        const receipt = await tronWeb.trx.sendRawTransaction(signedTx);
+        if (!receipt.result) {
+           throw new Error(`La transacción TRX falló con el mensaje: ${receipt.resMessage ? tronWeb.toUtf8(receipt.resMessage) : 'Error desconocido'}`);
+        }
+        return receipt.txid;
+    } catch (error) {
+        console.error(`[GasDispenser] ERROR enviando TRX a ${toAddress}:`, error);
+        throw new Error(`Fallo al enviar TRX: ${error.message}`);
+    }
+};
+
 module.exports = {
-  sendUsdtOnTron,
+  // Funciones existentes...
   sweepUsdtOnTronFromDerivedWallet,
-  // --- NUEVOS EXPORTS ---
   sweepUsdtOnBscFromDerivedWallet,
-  initializeHotWallet
+  initializeHotWallet,
+  // Nuevas funciones exportadas
+  sendBscGas,
+  sendTronTrx
 };

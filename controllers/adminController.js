@@ -350,11 +350,86 @@ const sweepFunds = asyncHandler(async (req, res) => {
 // =======================================================================================
 // ===================== FIN DE BARRIDO INTELIGENTE (v19.1) ==============================
 // =======================================================================================
+// =======================================================================================
+// ==================== NUEVOS CONTROLADORES PARA DISPENSADOR DE GAS =====================
+// =======================================================================================
 
+const analyzeGasNeeds = asyncHandler(async (req, res) => {
+    const { chain } = req.body;
+    if (!['BSC', 'TRON'].includes(chain)) {
+        res.status(400); throw new Error("Cadena no válida. Debe ser 'BSC' o 'TRON'.");
+    }
+
+    const hotWallet = transactionService.initializeHotWallet();
+    let centralWalletBalance = 0;
+
+    if (chain === 'BSC') {
+        const balanceRaw = await bscProvider.getBalance(hotWallet.bsc.address);
+        centralWalletBalance = parseFloat(ethers.utils.formatEther(balanceRaw));
+    } else { // TRON
+        const balanceRaw = await tronWeb.trx.getBalance(hotWallet.tron.address);
+        centralWalletBalance = parseFloat(tronWeb.fromSun(balanceRaw));
+    }
+
+    const walletsInChain = await CryptoWallet.find({ chain }).lean();
+    const walletsNeedingGas = [];
+
+    const gasThreshold = chain === 'BSC' ? 0.0015 : 25; // BNB y TRX respectivamente
+
+    for (const wallet of walletsInChain) {
+        try {
+            const balances = await getWalletBalance({ body: { address: wallet.address, chain } }, { status: () => ({ json: () => {} }) }); // Mock res object
+            const usdtBalance = balances.balances.usdt;
+            const gasBalance = chain === 'BSC' ? balances.balances.bnb : balances.balances.trx;
+
+            if (usdtBalance > 0.1 && gasBalance < gasThreshold) {
+                walletsNeedingGas.push({
+                    address: wallet.address,
+                    usdtBalance,
+                    gasBalance
+                });
+            }
+        } catch (error) {
+            console.error(`No se pudo analizar la wallet ${wallet.address}: ${error.message}`);
+        }
+    }
+    
+    res.json({ centralWalletBalance, walletsNeedingGas });
+});
+
+const dispatchGas = asyncHandler(async (req, res) => {
+    const { chain, targets } = req.body;
+    if (!chain || !Array.isArray(targets) || targets.length === 0) {
+        res.status(400); throw new Error("Petición inválida. Se requiere 'chain' y un array de 'targets'.");
+    }
+
+    const report = {
+        summary: { success: 0, failed: 0, totalDispatched: 0 },
+        details: []
+    };
+
+    const sendFunction = chain === 'BSC' ? transactionService.sendBscGas : transactionService.sendTronTrx;
+    const currency = chain === 'BSC' ? 'BNB' : 'TRX';
+
+    for (const target of targets) {
+        try {
+            const txHash = await sendFunction(target.address, target.amount);
+            report.summary.success++;
+            report.summary.totalDispatched += parseFloat(target.amount);
+            report.details.push({ address: target.address, status: 'SUCCESS', txHash, amount: target.amount });
+        } catch (error) {
+            report.summary.failed++;
+            report.details.push({ address: target.address, status: 'FAILED', reason: error.message, amount: target.amount });
+        }
+    }
+
+    res.json(report);
+});
 module.exports = {
   getPendingWithdrawals, processWithdrawal, getAllUsers, updateUser, setUserStatus,
   getDashboardStats, getAllTransactions, createManualTransaction, getAllTools, createTool,
   updateTool, deleteTool, getUserDetails, getSettings, updateSettings,
   generateTwoFactorSecret, verifyAndEnableTwoFactor, getTreasuryWalletsList,
-  getWalletBalance, sweepFunds,
+  getWalletBalance, sweepFunds,analyzeGasNeeds,
+  dispatchGas
 };
