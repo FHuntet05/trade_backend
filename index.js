@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN v18.9 - DIAGNÓSTICO DE CORS)
+// backend/index.js (VERSIÓN FÉNIX v23.2 - BIENVENIDA VISUAL)
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
@@ -56,7 +56,6 @@ const corsOptions = {
         if (!origin || whitelist.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
-            // CORRECCIÓN DEFINITIVA: Añadimos un log para ver exactamente por qué se rechaza.
             console.error(`[CORS] ❌ Origen RECHAZADO: '${origin}'. No está en la whitelist: [${whitelist.join(', ')}]`.red.bold);
             callback(new Error(`Origen no permitido por CORS: ${origin}`));
         }
@@ -86,6 +85,10 @@ const secretPath = `/api/telegram-webhook/${secretToken}`;
 app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
 console.log('[SISTEMA] ✅ Rutas de API registradas.');
 
+// =======================================================================
+// === INICIO DE LA RECONSTRUCCIÓN DEL COMANDO /START (BIENVENIDA VISUAL) ===
+// =======================================================================
+
 // --- Lógica del Bot de Telegram ---
 const WELCOME_MESSAGE = `
 👋 ¡Bienvenido a NEURO LINK!\n\n
@@ -99,46 +102,50 @@ const WELCOME_MESSAGE = `
 `;
 
 const escapeMarkdownV2 = (text) => text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
+
 bot.command('start', async (ctx) => {
     try {
         const telegramId = ctx.from.id.toString();
-        const startPayload = ctx.startPayload ? ctx.startPayload.trim() : ''; // Aseguramos que sea string
-        
-        // =======================================================================
-        // === INICIO DE LA CORRECCIÓN CRÍTICA DE REFERIDOS (OPERACIÓN FÉNIX) ===
-        //
-        // JUSTIFICACIÓN DEL FRACASO: La implementación anterior usaba `?ref=...`,
-        // lo que obligaba al frontend a capturar, almacenar y reenviar el código.
-        // Esto es frágil y propenso a errores. Si el frontend falla, toda la
-        // cadena de referidos se rompe.
-        //
-        // SOLUCIÓN DEFINITIVA: Usamos el método nativo de Telegram. Al no añadir
-        // parámetros de consulta a la URL, Telegram automáticamente añade el
-        // startPayload al `initData` bajo el campo `start_param`. Nuestro backend
-        // ya está diseñado para leer este campo. Esto elimina al frontend como
-        // intermediario y crea un canal de datos directo y a prueba de fallos
-        // desde el bot hasta el backend.
-        //
-        const webAppUrl = process.env.FRONTEND_URL;
-        //
-        // === FIN DE LA CORRECCIÓN CRÍTICA DE REFERIDOS ===
-        // =======================================================================
+        const startPayload = ctx.startPayload ? ctx.startPayload.trim() : '';
 
+        // LOG DE DIAGNÓSTICO
         if (startPayload) {
-            console.log(`[Bot] Usuario ${telegramId} ha llegado con referido: ${startPayload}`.cyan);
+            console.log(`[Bot Start] Usuario ${telegramId} ha llegado con startPayload: '${startPayload}'`.cyan);
         }
 
-        await ctx.replyWithMarkdownV2(
-            escapeMarkdownV2(WELCOME_MESSAGE),
-            // La URL que se pasa aquí DEBE ser la URL base de la app, sin parámetros.
-            Markup.inlineKeyboard([Markup.button.webApp('🚀 Abrir App', webAppUrl)])
+        // URL DE LA WEB APP (MÉTODO FÉNIX: ROBUSTO Y DIRECTO)
+        // La lógica de referidos se mantiene intacta y a prueba de fallos.
+        const webAppUrl = process.env.FRONTEND_URL;
+        
+        // **NUEVO**: URL de la imagen de bienvenida.
+        // ¡IMPORTANTE! Reemplace esta URL de ejemplo por la URL de su propia imagen.
+        // La imagen debe estar alojada en un servidor público (ej. Imgur, S3, etc.).
+        const WELCOME_IMAGE_URL = 'https://i.postimg.cc/pVFs2JYx/NEURO-LINK.jpg'; // <--- ¡REEMPLACE ESTA URL!
+
+        // **NUEVO**: Se utiliza ctx.replyWithPhoto para enviar la imagen con el mensaje como pie de foto.
+        await ctx.replyWithPhoto(
+            WELCOME_IMAGE_URL,
+            {
+                // El mensaje de bienvenida ahora es el 'caption' (pie de foto).
+                caption: WELCOME_MESSAGE,
+                // El botón de la Web App se añade a la foto.
+                reply_markup: Markup.inlineKeyboard([
+                    Markup.button.webApp('🚀 Abrir App', webAppUrl)
+                ])
+            }
         );
 
     } catch (error) { 
-        console.error('[Bot] Error en /start:', error); 
+        console.error('[Bot Start] Error en el comando /start:', error); 
+        // Fallback a mensaje de texto si la foto falla
+        await ctx.reply('Hubo un error al iniciar. Por favor, intenta de nuevo.').catch(e => console.error("Error en fallback de /start", e));
     }
 });
 bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
+
+// =======================================================================
+// === FIN DE LA RECONSTRUCCIÓN DEL COMANDO /START ===
+// =======================================================================
 
 // --- Middlewares de Manejo de Errores (al final) ---
 app.use(notFound);
