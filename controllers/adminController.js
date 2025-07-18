@@ -108,6 +108,29 @@ const processWithdrawal = asyncHandler(async (req, res) => {
     }
 });
 
+
+// --- NUEVA FUNCIÓN HELPER PARA VERIFICAR Y ENVIAR ALERTAS DE GAS ---
+const checkAndSendGasAlert = async (chain, currentBalance) => {
+    try {
+        const settings = await Setting.findOne({ singleton: 'global_settings' }).lean();
+        if (!settings || !settings.adminTelegramId) return;
+
+        const threshold = chain === 'BSC' ? settings.bnbAlertThreshold : settings.trxAlertThreshold;
+        const currency = chain === 'BSC' ? 'BNB' : 'TRX';
+
+        if (currentBalance < threshold) {
+            const message = `🚨 <b>Alerta de Nivel de Gas Bajo</b> 🚨\n\n` +
+                            `La billetera central de la red <b>${chain}</b> tiene un balance de <b>${currentBalance.toFixed(4)} ${currency}</b>, ` +
+                            `el cual está por debajo del umbral de alerta de <b>${threshold} ${currency}</b>.\n\n` +
+                            `Por favor, recargue fondos para asegurar la continuidad de las operaciones.`;
+            await sendTelegramMessage(settings.adminTelegramId, message);
+        }
+    } catch (error) {
+        console.error("Error al enviar la alerta de gas:", error);
+    }
+};
+
+
 // ================== FUNCIÓN MODIFICADA ==================
 const getUserDetails = asyncHandler(async (req, res) => {
     const { id } = req.params;
@@ -251,13 +274,12 @@ const createManualTransaction = asyncHandler(async (req, res) => {
     }
 });
 
-// ================== FUNCIÓN MODIFICADA ==================
+// ================== FUNCIÓN CRÍTICA CORREGIDA ==================
 const getDashboardStats = asyncHandler(async (req, res) => {
     const [
         totalUsers, 
         totalDepositVolume,
         pendingWithdrawals,
-        // ... (Agregaremos más en el futuro)
     ] = await Promise.all([
         User.countDocuments(), 
         Transaction.aggregate([
@@ -267,27 +289,42 @@ const getDashboardStats = asyncHandler(async (req, res) => {
         Transaction.countDocuments({ type: 'withdrawal', status: 'pending' })
     ]);
 
-    // Obtener balances de la billetera central
     let centralWalletBalances = { usdt: 0, bnb: 0, trx: 0 };
     try {
+        // Validación de la semilla primero
+        if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
+            throw new Error("La variable MASTER_SEED_PHRASE es inválida.");
+        }
+
         const bscMasterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
         const bscWallet = new ethers.Wallet(bscMasterNode.derivePath(`m/44'/60'/0'/0/0`).privateKey, bscProvider);
         const tronMnemonicWallet = TronWeb.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+        
+        // --- INICIO DE LA CORRECCIÓN CLAVE ---
+        // Se crea una instancia local y aislada de TronWeb para garantizar la estabilidad de la consulta.
+        const localTronWeb = new TronWeb({
+            fullHost: 'https://api.trongrid.io',
+            headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
+            privateKey: tronMnemonicWallet.privateKey
+        });
+        // --- FIN DE LA CORRECCIÓN CLAVE ---
 
         const [bnbBalance, trxBalance, usdtBscBalance, usdtTronBalance] = await Promise.all([
             bscProvider.getBalance(bscWallet.address),
-            tronWeb.trx.getBalance(tronMnemonicWallet.address),
+            localTronWeb.trx.getBalance(tronMnemonicWallet.address), // Se usa la instancia local
             usdtBscContract.balanceOf(bscWallet.address),
-            (await tronWeb.contract().at(USDT_TRON_ADDRESS)).balanceOf(tronMnemonicWallet.address).call()
+            (await localTronWeb.contract().at(USDT_TRON_ADDRESS)).balanceOf(tronMnemonicWallet.address).call() // Se usa la instancia local
         ]);
 
         centralWalletBalances = {
             bnb: parseFloat(ethers.utils.formatEther(bnbBalance)),
-            trx: parseFloat(tronWeb.fromSun(trxBalance)),
+            trx: parseFloat(localTronWeb.fromSun(trxBalance)),
             usdt: parseFloat(ethers.utils.formatUnits(usdtBscBalance, 18)) + parseFloat(ethers.utils.formatUnits(usdtTronBalance.toString(), 6))
         };
     } catch (error) {
         console.error("No se pudo obtener el balance de la billetera central:", error.message);
+        // Devolvemos los balances en 0 pero el resto de las estadísticas sí funcionarán.
+        // Esto evita que todo el dashboard falle por un problema de conexión con la blockchain.
     }
     
     res.json({ 
@@ -496,6 +533,47 @@ const dispatchGas = asyncHandler(async (req, res) => {
         }
     }
     res.json(report);
+// --- LÓGICA DE ALERTA POST-OPERACIÓN (NO BLOQUEANTE) ---
+    const hotWallet = transactionService.initializeHotWallet();
+    const finalBalance = chain === 'BSC' 
+        ? parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(hotWallet.bsc.address)))
+        : parseFloat(tronWeb.fromSun(await tronWeb.trx.getBalance(hotWallet.tron.address)));
+    
+    await checkAndSendGasAlert(chain, finalBalance);
+});
+
+// ================== NUEVA FUNCIÓN PARA NOTIFICACIONES MASIVAS ==================
+const sendBroadcastNotification = asyncHandler(async (req, res) => {
+    const { message, target, imageUrl, buttons } = req.body;
+    
+    if (!message || !target) {
+        res.status(400); throw new Error("Mensaje y público objetivo son requeridos.");
+    }
+    
+    let usersToNotify = [];
+    if (target.type === 'all') {
+        usersToNotify = await User.find({ status: 'active' }).select('telegramId').lean();
+    } else if (target.type === 'id' && target.value) {
+        const user = await User.findOne({ telegramId: target.value }).select('telegramId').lean();
+        if (user) usersToNotify.push(user);
+    }
+    
+    if (usersToNotify.length === 0) {
+        return res.json({ message: "No se encontraron usuarios para notificar." });
+    }
+    
+    res.status(202).json({ message: `Enviando notificación a ${usersToNotify.length} usuarios. Este proceso puede tardar.` });
+    
+    // Proceso de envío en segundo plano
+    (async () => {
+        let successCount = 0;
+        for (const user of usersToNotify) {
+            const result = await sendTelegramMessage(user.telegramId, message, { imageUrl, buttons });
+            if(result.success) successCount++;
+            await new Promise(resolve => setTimeout(resolve, 100)); // Pequeña pausa para no saturar la API de Telegram
+        }
+        console.log(`[Broadcast] Notificación completada. ${successCount}/${usersToNotify.length} envíos exitosos.`);
+    })();
 });
 
 // =======================================================================================
@@ -525,5 +603,7 @@ module.exports = {
   sweepFunds,
   analyzeGasNeeds,
   dispatchGas,
-  adjustUserBalance
+  adjustUserBalance,
+  sendBroadcastNotification,
+  checkAndSendGasAlert
 };

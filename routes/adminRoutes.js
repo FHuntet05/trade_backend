@@ -36,4 +36,7 @@ router.route('/tools/:id').put(protect, isAdmin, adminController.updateTool).del
 router.post('/2fa/generate', protect, isAdmin, adminController.generateTwoFactorSecret);
 router.post('/2fa/verify', protect, isAdmin, adminController.verifyAndEnableTwoFactor);
 
+// Ruta de notificaciones 
+router.post('/notifications/send', protect, isAdmin, adminController.sendBroadcastNotification);
+
 module.exports = router;
