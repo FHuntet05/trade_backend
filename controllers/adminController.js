@@ -525,7 +525,33 @@ const sendBroadcastNotification = asyncHandler(async (req, res) => {
         console.log(`[Broadcast] Notificación completada. ${successCount}/${usersToNotify.length} envíos exitosos.`);
     })();
 });
+// =======================================================================================
+// ================ INICIO DE LA CORRECCIÓN: FUNCIONES DE RESCATE RESTAURADAS ============
+// =======================================================================================
+// Estas funciones se reintroducen como placeholders para evitar el crash del servidor.
+// Su lógica real dependerá del 'rescueService' que se implementará en el futuro.
 
+const cancelTransaction = asyncHandler(async (req, res) => {
+    const { txHash } = req.body;
+    if (!txHash) {
+        res.status(400); throw new Error("Se requiere el hash de la transacción.");
+    }
+    // Lógica placeholder:
+    res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash });
+});
+
+const speedUpTransaction = asyncHandler(async (req, res) => {
+    const { txHash } = req.body;
+    if (!txHash) {
+        res.status(400); throw new Error("Se requiere el hash de la transacción.");
+    }
+    // Lógica placeholder:
+    res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash });
+});
+
+// =======================================================================================
+// ========================== INICIO DE LA CORRECCIÓN: EXPORTS FINALES ===================
+// =======================================================================================
 module.exports = {
   getPendingWithdrawals,
   processWithdrawal,
@@ -552,5 +578,7 @@ module.exports = {
   adjustUserBalance,
   sendBroadcastNotification,
   checkAndSendGasAlert,
-  getPendingBlockchainTxs
+  getPendingBlockchainTxs,
+  cancelTransaction,
+  speedUpTransaction
 };
