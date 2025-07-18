@@ -1,4 +1,4 @@
-// backend/models/userModel.js (VERSIÓN v16.5 - HOOKS UNIFICADOS)
+// backend/models/userModel.js (VERSIÓN FÉNIX v23.1 - RECONSTRUCCIÓN FINAL)
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
@@ -29,6 +29,16 @@ const userSchema = new mongoose.Schema({
     invitedTenFriends: { type: Boolean, default: false }, 
     joinedTelegram: { type: Boolean, default: false } 
   },
+
+  // =======================================================================
+  // === INICIO DE LA CORRECCIÓN CRÍTICA DE PERSISTENCIA (OPERACIÓN FÉNIX) ===
+  // Este campo es el eslabón perdido. Es ESENCIAL para el ciclo "Ir -> Reclamar".
+  // Sin él, el estado "visitado" no puede guardarse y el botón de reclamar
+  // nunca se activará tras hacer clic en "Ir".
+  telegramVisited: { type: Boolean, default: false },
+  // === FIN DE LA CORRECCIÓN CRÍTICA DE PERSISTENCIA ===
+  // =======================================================================
+
   activeTools: [{ 
     tool: { type: mongoose.Schema.Types.ObjectId, ref: 'Tool', required: true }, 
     purchaseDate: { type: Date, default: Date.now }, 
