@@ -1,4 +1,5 @@
-// backend/controllers/adminController.js (VERSIÓN v18.5 - CONSULTA RESTAURADA Y ESTABLE)
+// RUTA: backend/controllers/adminController.js (VERSIÓN CON BARRIDO INTELIGENTE)
+
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const Tool = require('../models/toolModel');
@@ -29,14 +30,13 @@ const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, bscProvi
 
 function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió el tiempo de espera.') {
   const timeout = new Promise((_, reject) => {
-    const id = setTimeout(() => {
-      clearTimeout(id);
-      reject(new Error(timeoutMessage));
-    }, ms);
+    const id = setTimeout(() => { clearTimeout(id); reject(new Error(timeoutMessage)); }, ms);
   });
   return Promise.race([promise, timeout]);
 }
 
+// ... [Otras funciones del controlador sin cambios: getPendingWithdrawals, processWithdrawal, etc.] ...
+// (Se omiten por brevedad, pero deben permanecer en su archivo)
 const getPendingWithdrawals = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -225,74 +225,39 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
     }
 });
 
-// =======================================================================================
-// ==================== INICIO DE LA FUNCIONALIDAD DE TESORERÍA v18.5 =====================
-// =======================================================================================
-
-// =======================================================================================
-// ==================== INICIO DE LA FUNCIONALIDAD DE TESORERÍA v18.8 =====================
-// =======================================================================================
 
 const getTreasuryWalletsList = asyncHandler(async (req, res) => {
-    console.log('================= INICIO DEL DEBUG DE TESORERÍA =================');
-    console.log('[LOG 1/4] ==> Entrando en la función getTreasuryWalletsList.');
-    
     try {
-        console.log('[LOG 2/4] ==> Ejecutando consulta: CryptoWallet.find().populate("user")...');
-        
         const wallets = await CryptoWallet.find({})
             .select('address chain user')
             .populate('user', 'username')
             .lean();
-
-        // Si el código llega aquí, la consulta fue exitosa.
-        console.log(`[LOG 3/4] ==> Consulta FINALIZADA. Se encontraron ${wallets.length} documentos.`);
-        
-        console.log('[LOG 4/4] ==> Enviando respuesta JSON al frontend.');
         res.json(wallets);
-
-        console.log('================= FIN DEL DEBUG DE TESORERÍA (ÉXITO) =================');
-
     } catch (error) {
-        // Si hay cualquier error durante el proceso, lo veremos aquí.
-        console.error('[¡ERROR FATAL!] ==> Ocurrió un error dentro de getTreasuryWalletsList:', error);
-        res.status(500).json({ message: 'Error interno del servidor durante la consulta de wallets.', error: error.message });
-        console.log('================= FIN DEL DEBUG DE TESORERÍA (FALLO) =================');
+        console.error('Error en getTreasuryWalletsList:', error);
+        res.status(500).json({ message: 'Error interno del servidor.', error: error.message });
     }
 });
 
 const getWalletBalance = asyncHandler(async (req, res) => {
     const { address, chain } = req.body;
-    if (!address || !chain) {
-        res.status(400);
-        throw new Error('Se requiere address y chain');
-    }
-
+    if (!address || !chain) { res.status(400); throw new Error('Se requiere address y chain'); }
     const TIMEOUT_MS = 15000;
     let balances = { usdt: 0, bnb: 0, trx: 0 };
-
     try {
         if (chain === 'BSC') {
             const [usdtBalanceRaw, bnbBalanceRaw] = await Promise.all([
-                promiseWithTimeout(usdtBscContract.balanceOf(address), TIMEOUT_MS, `Timeout en balanceOf para ${address}`),
-                promiseWithTimeout(bscProvider.getBalance(address), TIMEOUT_MS, `Timeout en getBalance para ${address}`)
+                promiseWithTimeout(usdtBscContract.balanceOf(address), TIMEOUT_MS),
+                promiseWithTimeout(bscProvider.getBalance(address), TIMEOUT_MS)
             ]);
-            balances = {
-                usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw, 18)),
-                bnb: parseFloat(ethers.utils.formatEther(bnbBalanceRaw)),
-                trx: 0,
-            };
+            balances = { usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw, 18)), bnb: parseFloat(ethers.utils.formatEther(bnbBalanceRaw)), trx: 0, };
         } else if (chain === 'TRON') {
             const usdtTronContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
             const [usdtBalanceRaw, trxBalanceRaw] = await Promise.all([
-                promiseWithTimeout(usdtTronContract.balanceOf(address).call(), TIMEOUT_MS, `Timeout en balanceOf para ${address}`),
-                promiseWithTimeout(tronWeb.trx.getBalance(address), TIMEOUT_MS, `Timeout en getBalance para ${address}`)
+                promiseWithTimeout(usdtTronContract.balanceOf(address).call(), TIMEOUT_MS),
+                promiseWithTimeout(tronWeb.trx.getBalance(address), TIMEOUT_MS)
             ]);
-            balances = {
-                usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6)),
-                trx: parseFloat(tronWeb.fromSun(trxBalanceRaw)),
-                bnb: 0
-            };
+            balances = { usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6)), trx: parseFloat(tronWeb.fromSun(trxBalanceRaw)), bnb: 0 };
         }
         res.json({ success: true, balances });
     } catch (error) {
@@ -301,25 +266,43 @@ const getWalletBalance = asyncHandler(async (req, res) => {
     }
 });
 
+// =======================================================================================
+// ==================== INICIO DE BARRIDO INTELIGENTE (v19.1) ============================
+// =======================================================================================
+
 const sweepFunds = asyncHandler(async (req, res) => {
-    const { chain, token, recipientAddress } = req.body;
-    if (!chain || !token || !recipientAddress) {
+    // <-- CAMBIO: Leemos la lista de wallets pre-filtradas desde el frontend
+    const { chain, token, recipientAddress, walletsToSweep } = req.body;
+
+    // <-- CAMBIO: Nueva validación
+    if (!chain || !token || !recipientAddress || !walletsToSweep || !Array.isArray(walletsToSweep)) {
         res.status(400);
-        throw new Error("Se requieren 'chain', 'token' y 'recipientAddress'.");
+        throw new Error("Se requieren 'chain', 'token', 'recipientAddress' y un array 'walletsToSweep'.");
     }
     if (token.toUpperCase() !== 'USDT') {
         res.status(400);
         throw new Error("Actualmente, solo se puede barrer USDT.");
     }
-    const wallets = await CryptoWallet.find({ chain }).lean();
+    
+    // <-- CAMBIO: Consulta quirúrgica a la BD. Solo traemos las wallets que nos interesan.
+    const wallets = await CryptoWallet.find({ 
+        address: { $in: walletsToSweep },
+        chain: chain
+    }).lean();
+
     if (wallets.length === 0) {
-        return res.json({ message: "No se encontraron wallets para la cadena especificada.", summary: {}, details: [] });
+        return res.json({ message: "Ninguna de las wallets candidatas fue encontrada en la base de datos.", summary: {}, details: [] });
     }
+
     const report = {
         summary: { walletsScanned: wallets.length, successfulSweeps: 0, skippedForNoGas: 0, skippedForNoToken: 0, failedTxs: 0, totalSwept: 0, },
         details: [],
     };
+    
+    // La lógica de contratos y barrido permanece igual, pero ahora es mucho más eficiente
+    // porque el bucle 'for...of' itera sobre un número mucho menor de wallets.
     const usdtTronContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
+
     for (const wallet of wallets) {
         try {
             let tokenBalance, gasBalance, gasThreshold, sweepFunction;
@@ -327,15 +310,17 @@ const sweepFunds = asyncHandler(async (req, res) => {
                 const [tokenBalanceRaw, gasBalanceRaw] = await Promise.all([ usdtBscContract.balanceOf(wallet.address), bscProvider.getBalance(wallet.address) ]);
                 tokenBalance = parseFloat(ethers.utils.formatUnits(tokenBalanceRaw, 18));
                 gasBalance = parseFloat(ethers.utils.formatEther(gasBalanceRaw));
-                gasThreshold = 0.0015;
+                gasThreshold = 0.0015; // Umbral de gas para BSC
                 sweepFunction = transactionService.sweepUsdtOnBscFromDerivedWallet;
-            } else {
+            } else { // TRON
                 const [tokenBalanceRaw, gasBalanceRaw] = await Promise.all([ usdtTronContract.balanceOf(wallet.address).call(), tronWeb.trx.getBalance(wallet.address) ]);
                 tokenBalance = parseFloat(ethers.utils.formatUnits(tokenBalanceRaw.toString(), 6));
                 gasBalance = parseFloat(tronWeb.fromSun(trxBalanceRaw));
-                gasThreshold = 25;
+                gasThreshold = 25; // Umbral de gas para Tron
                 sweepFunction = transactionService.sweepUsdtOnTronFromDerivedWallet;
             }
+
+            // Estas verificaciones actúan como una doble seguridad, aunque el frontend ya pre-filtró.
             if (tokenBalance <= 0.000001) {
                 report.summary.skippedForNoToken++;
                 report.details.push({ address: wallet.address, status: 'SKIPPED_NO_TOKEN', reason: 'Saldo de USDT es cero.' });
@@ -346,11 +331,13 @@ const sweepFunds = asyncHandler(async (req, res) => {
                 report.details.push({ address: wallet.address, status: 'SKIPPED_NO_GAS', reason: `Gas insuficiente. Se requieren > ${gasThreshold}, se tienen ${gasBalance}.` });
                 continue;
             }
+            
             console.log(`[SweepFunds] Intentando barrer ${tokenBalance} USDT desde ${wallet.address}`);
             const txHash = await sweepFunction(wallet.derivationIndex, recipientAddress);
             report.summary.successfulSweeps++;
             report.summary.totalSwept += tokenBalance;
-            report.details.push({ address: wallet.address, status: 'SUCCESS', txHash });
+            report.details.push({ address: wallet.address, status: 'SUCCESS', txHash, amount: tokenBalance });
+
         } catch (error) {
             console.error(`[SweepFunds] Fallo al barrer la wallet ${wallet.address}:`, error);
             report.summary.failedTxs++;
@@ -361,28 +348,13 @@ const sweepFunds = asyncHandler(async (req, res) => {
 });
 
 // =======================================================================================
-// ===================== FIN DE LA FUNCIONALIDAD DE TESORERÍA v18.5 ======================
+// ===================== FIN DE BARRIDO INTELIGENTE (v19.1) ==============================
 // =======================================================================================
 
 module.exports = {
-  getPendingWithdrawals,
-  processWithdrawal,
-  getAllUsers,
-  updateUser,
-  setUserStatus,
-  getDashboardStats,
-  getAllTransactions,
-  createManualTransaction,
-  getAllTools,
-  createTool,
-  updateTool,
-  deleteTool,
-  getUserDetails,
-  getSettings,
-  updateSettings,
-  generateTwoFactorSecret,
-  verifyAndEnableTwoFactor,
-  getTreasuryWalletsList,
-  getWalletBalance,
-  sweepFunds,
+  getPendingWithdrawals, processWithdrawal, getAllUsers, updateUser, setUserStatus,
+  getDashboardStats, getAllTransactions, createManualTransaction, getAllTools, createTool,
+  updateTool, deleteTool, getUserDetails, getSettings, updateSettings,
+  generateTwoFactorSecret, verifyAndEnableTwoFactor, getTreasuryWalletsList,
+  getWalletBalance, sweepFunds,
 };
