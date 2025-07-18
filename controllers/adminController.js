@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN DEFINITIVA Y COMPLETA v20.3 - BLINDADO)
+// RUTA: backend/controllers/adminController.js (REFACTORIZADO v21.0 - ESTABILIDAD TRON)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -9,25 +9,26 @@ const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const { getTemporaryPhotoUrl } = require('./userController'); 
-const asyncHandler = require('express-async-handler');
+const asyncHandler = 'express-async-handler';
 const { sendTelegramMessage } = require('../services/notificationService');
-const transactionService = require('../services/transactionService');
+const transactionService = require('../services/transactionService'); // Nuestro servicio refactorizado
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
 const PendingTx = require('../models/pendingTxModel');
 const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const PLACEHOLDER_AVATAR_URL = 'https://i.ibb.co/606BFx4/user-avatar-placeholder.png';
 
-const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
-const tronWeb = new TronWeb({
-    fullHost: 'https://api.trongrid.io',
-    headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
-});
+// --- ELIMINADO ---
+// Las instancias globales se han eliminado para evitar corrupción de estado.
+// Se crearán localmente en cada función que las necesite.
+// const bscProvider = ...
+// const tronWeb = ...
+
 const USDT_TRON_ADDRESS = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
 const USDT_ABI = ['function balanceOf(address) view returns (uint256)'];
-const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, bscProvider);
 
+// Función helper sin cambios, pero su uso será con instancias locales
 function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió el tiempo de espera.') {
   const timeout = new Promise((_, reject) => {
     const id = setTimeout(() => { clearTimeout(id); reject(new Error(timeoutMessage)); }, ms);
@@ -281,7 +282,9 @@ const createManualTransaction = asyncHandler(async (req, res) => {
     }
 });
 
-// ================== FUNCIÓN CRÍTICA CORREGIDA ==================
+// =======================================================================================
+// ========================== FUNCIÓN CRÍTICA CORREGIDA (DASHBOARD) ======================
+// =======================================================================================
 const getDashboardStats = asyncHandler(async (req, res) => {
     const [
         totalUsers, 
@@ -296,17 +299,32 @@ const getDashboardStats = asyncHandler(async (req, res) => {
         Transaction.countDocuments({ type: 'withdrawal', status: 'pending' })
     ]);
 
-     let centralWalletBalances = { usdt: 0, bnb: 0, trx: 0 };
+    let centralWalletBalances = { usdt: 0, bnb: 0, trx: 0 };
     try {
+        // 1. Obtener credenciales de la fuente única de verdad.
         const { bscWallet, tronWallet } = transactionService.getCentralWallets();
 
-        const tronWebInstance = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }});
+        // 2. Crear instancias locales y efímeras para esta petición.
+        const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
+        const tronWebInstance = new TronWeb({
+            fullHost: 'https://api.trongrid.io',
+            headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
+        });
+        
+        // 3. Inyectar la clave privada en la instancia de TronWeb.
+        // ESTE ES EL PASO CLAVE QUE RESUELVE EL ERROR 'owner_address isn't set'.
+        tronWebInstance.setPrivateKey(tronWallet.privateKey);
+
+        // 4. Ejecutar las llamadas a la blockchain.
+        const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, bscProvider);
+        const usdtTronContract = await tronWebInstance.contract().at(USDT_TRON_ADDRESS);
         
         const [bnbBalance, trxBalance, usdtBscBalance, usdtTronBalance] = await Promise.all([
             bscProvider.getBalance(bscWallet.address),
-            tronWebInstance.trx.getBalance(tronWallet.address),
+            // La instancia ahora sabe quién es el 'owner' gracias a setPrivateKey.
+            tronWebInstance.trx.getBalance(tronWallet.address), 
             usdtBscContract.balanceOf(bscWallet.address),
-            (await tronWebInstance.contract().at(USDT_TRON_ADDRESS)).balanceOf(tronWallet.address).call()
+            usdtTronContract.balanceOf(tronWallet.address).call()
         ]);
 
         centralWalletBalances = {
@@ -314,8 +332,13 @@ const getDashboardStats = asyncHandler(async (req, res) => {
             trx: parseFloat(tronWebInstance.fromSun(trxBalance)),
             usdt: parseFloat(ethers.utils.formatUnits(usdtBscBalance, 18)) + parseFloat(ethers.utils.formatUnits(usdtTronBalance.toString(), 6))
         };
+        // Opcional: Alerta de gas bajo
+        await checkAndSendGasAlert('BSC', centralWalletBalances.bnb);
+        await checkAndSendGasAlert('TRON', centralWalletBalances.trx);
     } catch (error) {
-        console.error("No se pudo obtener el balance de la billetera central:", error.message);
+        console.error("Error al obtener el balance de la billetera central:", error);
+        // Devolvemos el error en la respuesta para que el frontend pueda mostrarlo
+        return res.status(500).json({ message: `No se pudo obtener el balance de la billetera central: ${error.message}` });
     }
     
     res.json({ 
@@ -353,23 +376,33 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
 // ========================== INICIO DE TESORERÍA Y DISPENSADOR (PRODUCCIÓN) ===============
 // =======================================================================================
 
+// =======================================================================================
+// ========================== HELPER REFACTORIZADO PARA AISLAMIENTO ======================
+// =======================================================================================
 async function _getBalancesForAddress(address, chain) {
     const TIMEOUT_MS = 15000;
     try {
         if (chain === 'BSC') {
+            const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
+            const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, bscProvider);
             const [usdtBalanceRaw, bnbBalanceRaw] = await Promise.all([
                 promiseWithTimeout(usdtBscContract.balanceOf(address), TIMEOUT_MS),
                 promiseWithTimeout(bscProvider.getBalance(address), TIMEOUT_MS)
             ]);
             return { usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw, 18)), bnb: parseFloat(ethers.utils.formatEther(bnbBalanceRaw)), trx: 0 };
         } else if (chain === 'TRON') {
-            const tempTronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }, privateKey: '01'.repeat(32) });
+            // Creamos una instancia limpia, sin clave privada, ya que es solo para lectura pública.
+            const tempTronWeb = new TronWeb({
+                fullHost: 'https://api.trongrid.io',
+                headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
+            });
             const usdtTronContract = await tempTronWeb.contract().at(USDT_TRON_ADDRESS);
             const [usdtBalanceRaw, trxBalanceRaw] = await Promise.all([
                 promiseWithTimeout(usdtTronContract.balanceOf(address).call(), TIMEOUT_MS),
                 promiseWithTimeout(tempTronWeb.trx.getBalance(address), TIMEOUT_MS)
             ]);
-            return { usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6)), trx: parseFloat(tronWeb.fromSun(trxBalanceRaw)), bnb: 0 };
+            // Usamos la instancia local para la conversión, no una global.
+            return { usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6)), trx: parseFloat(tempTronWeb.fromSun(trxBalanceRaw)), bnb: 0 };
         }
     } catch (error) {
         console.error(`Error al obtener saldo para ${address}: ${error.message}`);
@@ -451,33 +484,41 @@ const sweepFunds = asyncHandler(async (req, res) => {
     res.json(report);
 });
 
-// ================== FUNCIÓN CRÍTICA CONFIANDO EN EL NUEVO SERVICIO ==================
+// =======================================================================================
+// ========================== FUNCIÓN CRÍTICA CORREGIDA (DISPENSADOR) ====================
+// =======================================================================================
 const analyzeGasNeeds = asyncHandler(async (req, res) => {
     const { chain } = req.body;
-    if (!['BSC', 'TRON'].includes(chain)) { res.status(400); throw new Error("Cadena no válida."); }
+    if (!['BSC', 'TRON'].includes(chain)) { res.status(400).throw(new Error("Cadena no válida.")); }
     
     let centralWalletBalance = 0;
     
     try {
+        // 1. Obtener credenciales de la fuente única de verdad.
         const { bscWallet, tronWallet } = transactionService.getCentralWallets();
         
         if (chain === 'BSC') {
+            const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
             centralWalletBalance = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(bscWallet.address)));
         } else { // TRON
-            const tronWebInstance = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }});
+            // 2. Crear instancia local y estéril.
+            const tronWebInstance = new TronWeb({
+                fullHost: 'https://api.trongrid.io',
+                headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
+            });
+            // 3. Inyectar clave para definir el 'owner'.
+            tronWebInstance.setPrivateKey(tronWallet.privateKey);
+            // 4. Ejecutar llamada.
             centralWalletBalance = parseFloat(tronWebInstance.fromSun(await tronWebInstance.trx.getBalance(tronWallet.address)));
         }
 
     } catch (error) {
-        console.error("CRITICAL ERROR: Fallo al procesar la billetera central.", error.message);
+        console.error("CRITICAL ERROR: Fallo al procesar la billetera central.", error);
         res.status(500);
-        throw new Error("Fallo al procesar la billetera central. Verifique MASTER_SEED_PHRASE.");
+        throw new Error(`Fallo al obtener balance de billetera central: ${error.message}`);
     }
     
-    // --- INICIO DE LA LÓGICA DE GAS PRECISO ---
     const requiredGasForSweep = await _getEstimatedSweepFee(chain);
-    // --- FIN DE LA LÓGICA DE GAS PRECISO ---
-
     const walletsInChain = await CryptoWallet.find({ chain }).lean();
     const walletsNeedingGas = [];
 
@@ -486,13 +527,12 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
             const balances = await _getBalancesForAddress(wallet.address, chain);
             const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
             
-            // La condición ahora es: tiene USDT y su gas actual es MENOR que el requerido para el barrido.
             if (balances.usdt > 0.1 && gasBalance < requiredGasForSweep) {
                 walletsNeedingGas.push({ 
                     address: wallet.address, 
                     usdtBalance: balances.usdt, 
                     gasBalance: gasBalance,
-                    requiredGas: requiredGasForSweep // Añadimos la cantidad precisa que necesita
+                    requiredGas: requiredGasForSweep
                 });
             }
         } catch (error) {
