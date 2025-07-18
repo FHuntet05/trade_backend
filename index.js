@@ -6,7 +6,7 @@ const morgan = require('morgan');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
 const colors = require('colors');
-
+const { startWatcher } = require('./services/blockchainWatcherService');
 // --- Carga de Configuración y Variables de Entorno ---
 console.log('[SISTEMA] Iniciando aplicación NEURO LINK...');
 dotenv.config();
@@ -109,6 +109,7 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, async () => {
     console.log(`[SERVIDOR] 🚀 Servidor corriendo en puerto ${PORT}`.yellow.bold);
+     startWatcher(); 
     try {
         const botInfo = await bot.telegram.getMe();
         console.log(`[SERVIDOR] ✅ Conectado como bot: ${botInfo.username}.`);

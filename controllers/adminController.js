@@ -14,7 +14,7 @@ const { sendTelegramMessage } = require('../services/notificationService');
 const transactionService = require('../services/transactionService');
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
-
+const PendingTx = require('../models/pendingTxModel');
 const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const PLACEHOLDER_AVATAR_URL = 'https://i.ibb.co/606BFx4/user-avatar-placeholder.png';
 
@@ -38,6 +38,13 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
 // =======================================================================================
 // ========================== INICIO DE CONTROLADORES VARIOS =============================
 // =======================================================================================
+// ================== NUEVA FUNCIÓN PARA EL MONITOR ==================
+const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
+    const pendingTxs = await PendingTx.find()
+        .sort({ createdAt: -1 })
+        .limit(50); // Limitamos a las últimas 50 para no sobrecargar
+    res.json(pendingTxs);
+});
 
 const getPendingWithdrawals = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
@@ -586,5 +593,6 @@ module.exports = {
   dispatchGas,
   adjustUserBalance,
   sendBroadcastNotification,
-  checkAndSendGasAlert
+  checkAndSendGasAlert,
+  getPendingBlockchainTxs
 };

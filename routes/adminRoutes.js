@@ -39,4 +39,6 @@ router.post('/2fa/verify', protect, isAdmin, adminController.verifyAndEnableTwoF
 // Ruta de notificaciones 
 router.post('/notifications/send', protect, isAdmin, adminController.sendBroadcastNotification);
 
+
+router.get('/blockchain-monitor/pending', protect, isAdmin, adminController.getPendingBlockchainTxs);
 module.exports = router;

@@ -2,7 +2,7 @@
 
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
-
+const PendingTx = require('../models/pendingTxModel');
 const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
 const tronWeb = new TronWeb({
   fullHost: 'https://api.trongrid.io',
@@ -88,6 +88,19 @@ const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddre
     console.log(`[SweepService] Iniciando barrido de ${ethers.utils.formatUnits(usdtBalance, 18)} USDT (BSC) desde ${depositWallet.address}`);
     try {
         const tx = await usdtContract.transfer(destinationAddress, usdtBalance);
+
+
+        // ================== INICIO DEL CAMBIO ==================
+    // --- REGISTRAR EN EL MONITOR ---
+    // Justo después de enviar, anotamos en nuestra libreta.
+    await PendingTx.create({
+        txHash: tx.hash,
+        chain: 'BSC',
+        type: 'USDT_SWEEP',
+        metadata: { from: depositWallet.address, to: destinationAddress, amount: ethers.utils.formatUnits(usdtBalance, 18) }
+    });
+    // =================== FIN DEL CAMBIO ====================
+
         console.log(`[SweepService] Barrido de ${depositWallet.address} (BSC) iniciado. Hash: ${tx.hash}`);
         return tx.hash;
     } catch(error) {
@@ -106,6 +119,19 @@ const sendBscGas = async (toAddress, amountInBnb) => {
     try {
         const tx = { to: toAddress, value: ethers.utils.parseEther(amountInBnb.toString()) };
         const txResponse = await bscWallet.sendTransaction(tx);
+
+        // ================== INICIO DEL CAMBIO ==================
+    // --- REGISTRAR EN EL MONITOR ---
+    // Anotamos en la libreta que hemos enviado gas.
+    await PendingTx.create({
+        txHash: txResponse.hash,
+        chain: 'BSC',
+        type: 'GAS_DISPATCH',
+        metadata: new Map([['to', toAddress], ['amount', amountInBnb.toString()]])
+    });
+    // =================== FIN DEL CAMBIO ====================
+
+
         await txResponse.wait();
         return txResponse.hash;
     } catch (error) {
@@ -130,6 +156,18 @@ const sendTronTrx = async (toAddress, amountInTrx) => {
             await localTronWeb.transactionBuilder.sendTrx(toAddress, amountInSun, tronWallet.address)
         );
         const receipt = await localTronWeb.trx.sendRawTransaction(signedTx);
+
+          // ================== INICIO DEL CAMBIO ==================
+    // --- REGISTRAR EN EL MONITOR ---
+    // Anotamos en la libreta que hemos enviado gas.
+    await PendingTx.create({
+        txHash: receipt.txid,
+        chain: 'TRON',
+        type: 'GAS_DISPATCH',
+        metadata: new Map([['to', toAddress], ['amount', amountInTrx.toString()]])
+    });
+    // =================== FIN DEL CAMBIO ====================
+    
         if (!receipt.result) {
            throw new Error(`La transacción TRX falló con el mensaje: ${receipt.resMessage ? localTronWeb.toUtf8(receipt.resMessage) : 'Error desconocido'}`);
         }
