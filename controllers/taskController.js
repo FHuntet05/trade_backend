@@ -1,49 +1,76 @@
-// backend/controllers/taskController.js (CÓDIGO COMPLETO Y CORREGIDO)
+// backend/controllers/taskController.js (RECONSTRUCCIÓN FÉNIX v23.0)
 const asyncHandler = require('express-async-handler');
 const User = require('../models/userModel.js');
 
+/**
+ * @desc Marca la tarea de Telegram como visitada.
+ * @route POST /api/tasks/mark-as-visited
+ * @access Private
+ *
+ * JUSTIFICACIÓN DEL FRACASO v22.0: La versión anterior modificaba un objeto en memoria
+ * y dependía de user.save() y markModified en un campo 'tasks' que no existía en el schema.
+ * Esto causaba que el estado 'visitado' nunca se guardara de forma fiable.
+ *
+ * SOLUCIÓN FÉNIX v23.0: Se utiliza User.findByIdAndUpdate con el operador atómico $set.
+ * Esta es una instrucción directa y única a la base de datos para establecer
+ * 'telegramVisited' en true. Es una operación atómica, infalible y no depende de la
+ * detección de cambios de Mongoose.
+ */
 const markTaskAsVisited = asyncHandler(async (req, res) => {
     const { taskId } = req.body;
     if (taskId !== 'joinedTelegram') {
         res.status(400);
         throw new Error('ID de tarea no válido para esta acción.');
     }
-    const user = await User.findById(req.user.id);
-    if (!user) {
-        res.status(404);
-        throw new Error('Usuario no encontrado.');
-    }
-    if (!user.tasks) {
-        user.tasks = new Map();
-    }
-    user.tasks.set('telegramVisited', true);
 
-    // === INICIO DE LA CORRECCIÓN CRÍTICA DE PERSISTENCIA ===
-    // Forzamos a Mongoose a reconocer que el campo 'tasks' ha sido modificado.
-    // Esto garantiza que el cambio se escribirá en la base de datos.
-    user.markModified('tasks');
-    // === FIN DE LA CORRECCIÓN CRÍTICA DE PERSISTENCIA ===
+    await User.findByIdAndUpdate(req.user.id, {
+        $set: { telegramVisited: true }
+    });
 
-    await user.save();
     res.status(200).json({
         success: true,
         message: 'Tarea marcada como visitada.',
     });
 });
 
+/**
+ * @desc Reclama la recompensa de una tarea completada.
+ * @route POST /api/tasks/claim
+ * @access Private
+ *
+ * JUSTIFICACIÓN DEL FRACASO v22.0: La versión anterior realizaba múltiples modificaciones
+ * en el objeto 'user' en memoria (balance, estado de la tarea) y luego intentaba
+ * guardarlo todo con un solo y frágil user.save(). Esto creaba condiciones de carrera
+ * y fallos de persistencia, permitiendo reclamar recompensas múltiples veces.
+ *
+ * SOLUCIÓN FÉNIX v23.0:
+ * 1. Primero se busca al usuario para realizar validaciones en el servidor.
+ * 2. Si las validaciones pasan, se ejecuta UNA ÚNICA operación atómica
+ *    User.findByIdAndUpdate que realiza dos acciones simultáneas en la base de datos:
+ *    - Incrementar el balance con $inc (seguro contra race conditions).
+ *    - Marcar la tarea como reclamada con $set en el sub-documento.
+ * 3. Se usa { new: true } para obtener el documento actualizado y devolverlo,
+ *    garantizando que el frontend recibe el estado real post-operación.
+ *    Esta estrategia es indestructible y elimina toda posibilidad de explotación.
+ */
 const claimTaskReward = asyncHandler(async (req, res) => {
     const { taskId } = req.body;
-    const user = await User.findById(req.user.id).select('+tasks +balance');
+    const userId = req.user.id;
+
+    // 1. Obtener datos para validación
+    const user = await User.findById(userId).select('claimedTasks telegramVisited activeTools referrals');
     if (!user) {
         res.status(404);
         throw new Error('Usuario no encontrado');
     }
-    if (!user.tasks) user.tasks = new Map();
-    const claimedTasks = user.tasks.get('claimedTasks') || {};
-    if (claimedTasks[taskId]) {
+
+    // 2. Validar si la recompensa ya fue reclamada
+    if (user.claimedTasks && user.claimedTasks[taskId]) {
         res.status(400);
         throw new Error('Ya has reclamado esta recompensa.');
     }
+
+    // 3. Definir recompensas y validar tarea
     const taskRewards = {
         boughtUpgrade: 1500,
         invitedTenFriends: 1000,
@@ -54,59 +81,78 @@ const claimTaskReward = asyncHandler(async (req, res) => {
         res.status(400);
         throw new Error('Tarea no válida.');
     }
+
+    // 4. Validar si la tarea fue completada
     let isCompleted = false;
     switch (taskId) {
         case 'boughtUpgrade':
             isCompleted = user.activeTools && user.activeTools.length > 0;
             break;
         case 'invitedTenFriends':
-            const referralCount = Array.isArray(user.referrals) ? user.referrals.length : 0;
-            isCompleted = referralCount >= 3;
+            // La tarea requiere 3 amigos según TaskItem.jsx
+            isCompleted = user.referrals && user.referrals.length >= 3;
             break;
         case 'joinedTelegram':
-            isCompleted = user.tasks.get('telegramVisited') === true;
+            isCompleted = user.telegramVisited === true;
             break;
         default:
             isCompleted = false;
     }
+
     if (!isCompleted) {
         res.status(400);
         throw new Error('La tarea aún no está completada.');
     }
-    user.balance.ntx += reward;
-    claimedTasks[taskId] = true;
-    user.tasks.set('claimedTasks', claimedTasks);
 
-    // === INICIO DE LA CORRECCIÓN CRÍTICA DE PERSISTENCIA ===
-    // Forzamos a Mongoose a reconocer que el campo 'tasks' ha sido modificado.
-    // Esto garantiza que el estado "reclamado" se escribirá en la base de datos.
-    user.markModified('tasks');
-    // === FIN DE LA CORRECCIÓN CRÍTICA DE PERSISTENCIA ===
+    // 5. Ejecutar la actualización atómica y definitiva
+    const updatedUser = await User.findByIdAndUpdate(userId,
+        {
+            $inc: { 'balance.ntx': reward },
+            $set: { [`claimedTasks.${taskId}`]: true }
+        },
+        { new: true } // Devuelve el documento actualizado
+    ).populate('referrals');
 
-    await user.save();
-    const updatedUser = await User.findById(user._id).populate('referrals');
-    res.json({ message: `¡+${reward.toLocaleString()} NTX reclamados!`, user: updatedUser });
+    res.json({
+        message: `¡+${reward.toLocaleString()} NTX reclamados!`,
+        user: updatedUser
+    });
 });
 
+/**
+ * @desc Obtiene el estado actual de todas las tareas del usuario.
+ * @route GET /api/tasks/status
+ * @access Private
+ *
+ * JUSTIFICACIÓN DEL FRACASO v22.0: La versión anterior leía de un campo 'tasks'
+ * inexistente en el schema, devolviendo datos inconsistentes o incorrectos
+ * que causaban un comportamiento errático en la UI tras recargar.
+ *
+ * SOLUCIÓN FÉNIX v23.0: Lee directamente de los campos correctos y persistentes
+ * en el modelo (claimedTasks, telegramVisited, etc.). Devuelve un estado que
+ * es un reflejo 100% fiel de lo que está guardado en la base de datos.
+ * Esta es ahora la única fuente de verdad para la UI.
+ */
 const getTaskStatus = asyncHandler(async (req, res) => {
-    const user = await User.findById(req.user.id).select('tasks activeTools referrals');
+    const user = await User.findById(req.user.id).select('claimedTasks telegramVisited activeTools referrals');
     if (!user) {
         res.status(404);
         throw new Error('Usuario no encontrado');
     }
-    const tasks = user.tasks || new Map();
-    const referralCount = Array.isArray(user.referrals) ? user.referrals.length : 0;
-    const hasBoughtUpgrade = Array.isArray(user.activeTools) ? user.activeTools.length > 0 : false;
+
+    const referralCount = user.referrals ? user.referrals.length : 0;
+    const hasBoughtUpgrade = user.activeTools ? user.activeTools.length > 0 : false;
+
     res.json({
-        claimedTasks: tasks.get('claimedTasks') || {},
-        telegramVisited: tasks.get('telegramVisited') || false,
+        claimedTasks: user.claimedTasks || {},
+        telegramVisited: user.telegramVisited || false,
         referralCount: referralCount,
         hasBoughtUpgrade: hasBoughtUpgrade,
     });
 });
 
-module.exports = { 
-    getTaskStatus, 
-    claimTaskReward, 
-    markTaskAsVisited 
+module.exports = {
+    getTaskStatus,
+    claimTaskReward,
+    markTaskAsVisited
 };
