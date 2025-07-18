@@ -1,16 +1,17 @@
-// RUTA: backend/routes/taskRoutes.js (COMPLETO Y REPARADO v21.22)
+// backend/routes/taskRoutes.js
+import express from 'express';
+import { protect } from '../middleware/authMiddleware.js';
+import { getTaskStatus, claimTaskReward, markTaskAsVisited } from '../controllers/taskController.js';
 
-const express = require('express');
 const router = express.Router();
-const { getTaskStatus, claimTask, markTaskAsVisited } = require('../controllers/taskController');
-const { protect } = require('../middleware/authMiddleware');
 
+// Rutas existentes
 router.get('/status', protect, getTaskStatus);
-router.post('/claim', protect, claimTask);
+router.post('/claim', protect, claimTaskReward);
 
-// --- INICIO DE LA LÍNEA FALTANTE ---
-// Registramos la ruta POST que el frontend está buscando.
+// === NUEVA RUTA CRÍTICA ===
+// Esta ruta permite al frontend notificar al backend que el usuario ha
+// interactuado con una tarea externa, como visitar un enlace.
 router.post('/mark-as-visited', protect, markTaskAsVisited);
-// --- FIN DE LA LÍNEA FALTANTE ---
 
-module.exports = router;
+export default router;

@@ -36,30 +36,6 @@ const getTaskStatus = async (req, res) => {
   }
 };
 
-// --- INICIO DE LA LÓGICA FALTANTE ---
-const markTaskAsVisited = async (req, res) => {
-  const { taskName } = req.body;
-  if (taskName !== 'joinedTelegram') {
-    return res.status(400).json({ message: 'Nombre de tarea no válido.' });
-  }
-
-  try {
-    const user = await User.findById(req.user.id);
-    if (!user) {
-      return res.status(404).json({ message: 'Usuario no encontrado.' });
-    }
-
-    // Marcamos la tarea como visitada
-    user.tasks.joinedTelegram.visited = true;
-    await user.save();
-
-    res.json({ message: 'Visita registrada. Ahora puedes reclamar la tarea.' });
-  } catch (error) {
-    console.error("Error en markTaskAsVisited:", error);
-    res.status(500).json({ message: 'Error del servidor.' });
-  }
-};
-// --- FIN DE LA LÓGICA FALTANTE ---
 
 const claimTask = async (req, res) => {
   const { taskName } = req.body;
@@ -102,8 +78,47 @@ const claimTask = async (req, res) => {
   }
 };
 
-module.exports = {
-  getTaskStatus,
-  markTaskAsVisited, // Exportamos la nueva función
-  claimTask,
-};
+// === NUEVO CONTROLADOR CRÍTICO ===
+// @desc    Marca una tarea como visitada por el usuario
+// @route   POST /api/tasks/mark-as-visited
+// @access  Private
+export const markTaskAsVisited = asyncHandler(async (req, res) => {
+    const { taskId } = req.body;
+    
+    // Solo permitimos esta lógica para tareas específicas
+    if (taskId !== 'joinedTelegram') {
+        res.status(400);
+        throw new Error('ID de tarea no válido para esta acción.');
+    }
+
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+        res.status(404);
+        throw new Error('Usuario no encontrado.');
+    }
+    
+    // Usamos el método .set() de Mongoose Map para asegurar la detección de cambios.
+    // Marcamos la tarea de Telegram como "visitada".
+    user.tasks.set('telegramVisited', true);
+
+    // Guardamos los cambios en la base de datos.
+    await user.save();
+    
+    // Devolvemos el estado actualizado de las tareas para que el frontend
+    // pueda re-renderizar inmediatamente sin necesidad de otra llamada a la API.
+    const updatedTaskStatus = {
+        claimedTasks: user.tasks.get('claimedTasks') || {},
+        telegramVisited: user.tasks.get('telegramVisited') || false,
+        referralCount: user.referrals ? user.referrals.length : 0,
+        hasBoughtUpgrade: user.activeTools.length > 0,
+    };
+
+    res.status(200).json({
+        message: 'Tarea marcada como visitada.',
+        taskStatus: updatedTaskStatus,
+    });
+});
+
+// Exporta todo junto
+export { getTaskStatus, claimTaskReward, markTaskAsVisited };
