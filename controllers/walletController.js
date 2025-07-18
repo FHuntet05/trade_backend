@@ -154,6 +154,7 @@ const cryptoCloudWebhook = async (req, res) => {
           for (let i = 0; i < quantity; i++) {
             user.activeTools.push({ tool: tool._id, purchaseDate: now, expiryDate: expiryDate });
           }
+           user.lastMiningClaim = new Date();
           await user.save();
           await createTransaction(userId, 'purchase', amountPaid, 'USDT', `Compra de ${quantity}x ${tool.name} (Crypto)`);
           await distributeCommissions(user, amountPaid);
@@ -170,10 +171,7 @@ const cryptoCloudWebhook = async (req, res) => {
     res.status(500).send('Server error processing webhook');
   }
 };
-// --- INICIO DE LA CORRECCIÓN CLAVE ---
-          // Al procesar una compra vía webhook, también se resetea el ciclo de minería.
-          user.lastMiningClaim = new Date();
-          // --- FIN DE LA CORRECCIÓN CLAVE ---
+
 const MINING_CYCLE_DURATION_MS = 24 * 60 * 60 * 1000;
 
 const claim = async (req, res) => {
