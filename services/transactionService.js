@@ -1,13 +1,8 @@
-// RUTA: backend/services/transactionService.js (REFACTORIZADO v21.0 - ESTABILIDAD TRON)
+// RUTA: backend/services/transactionService.js (CORREGIDO v21.3 - ESTABILIDAD TRON)
 
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
 const PendingTx = require('../models/pendingTxModel');
-
-// --- ELIMINADO ---
-// Ya no usamos instancias globales que puedan corromper su estado.
-// const bscProvider = ...
-// const tronWeb = ...
 
 const USDT_TRON_ADDRESS = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
@@ -22,53 +17,53 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
 }
 
 // =========================================================================================
-// ================ FUNCIÓN CENTRAL DE DERIVACIÓN DE WALLETS (NÚCLEO DEL CAMBIO) ===========
+// ================ FUNCIÓN CENTRAL DE DERIVACIÓN DE WALLETS (CORREGIDA) ===================
 // =========================================================================================
 const getCentralWallets = () => {
     if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
         throw new Error("CRITICAL: MASTER_SEED_PHRASE no está definida o es inválida.");
     }
     
-    // ethers.js es ahora la única fuente de verdad para la derivación
     const masterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
 
-    // 1. Derivación BSC (sin cambios, ya era robusta)
+    // 1. Derivación BSC (sin cambios)
     const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
     const bscNode = masterNode.derivePath(`m/44'/60'/0'/0/0`);
     const bscWallet = new ethers.Wallet(bscNode.privateKey, bscProvider);
 
-    // 2. Derivación TRON (NUEVO MÉTODO - 100% ethers.js)
-    const tronNode = masterNode.derivePath(`m/44'/195'/0'/0/0`); // Path de derivación para TRON
-    const tronPrivateKey = tronNode.privateKey;
-    const tronAddress = TronWeb.address.fromPrivateKey(tronPrivateKey); // Obtenemos la dirección desde la clave privada
+    // 2. Derivación TRON (CORREGIDA)
+    const tronNode = masterNode.derivePath(`m/44'/195'/0'/0/0`);
+    // --- CORRECCIÓN CLAVE ---
+    // ethers.js devuelve la clave con "0x". TronWeb la quiere sin él.
+    const tronPrivateKey = tronNode.privateKey.slice(2); // Se elimina el prefijo "0x"
+    const tronAddress = TronWeb.address.fromPrivateKey(tronPrivateKey);
 
     return {
-        bscWallet, // Instancia de ethers.Wallet
+        bscWallet,
         tronWallet: {
-            privateKey: tronPrivateKey,
+            privateKey: tronPrivateKey, // Clave privada en formato limpio
             address: tronAddress
         }
     };
 };
 
-// =========================================================================
-// =================== FUNCIONES DE BARRIDO REFACTORIZADAS =================
-// =========================================================================
-
-// --- REFACTORIZADA --- Ahora usa ethers.js para derivar, eliminando TronWeb.fromMnemonic
+// =========================================================================================
+// =================== FUNCIONES DE BARRIDO REFACTORIZADAS (CORREGIDA) =====================
+// =========================================================================================
 const sweepUsdtOnTronFromDerivedWallet = async (derivationIndex, destinationAddress) => {
   if (derivationIndex === undefined || !destinationAddress) throw new Error("Índice de derivación y dirección de destino son requeridos.");
 
   const masterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
   const depositWalletNode = masterNode.derivePath(`m/44'/195'/${derivationIndex}'/0/0`);
-  const depositWalletPrivateKey = depositWalletNode.privateKey;
+  
+  // --- CORRECCIÓN CLAVE (APLICADA TAMBIÉN AQUÍ) ---
+  const depositWalletPrivateKey = depositWalletNode.privateKey.slice(2); // Se elimina el prefijo "0x"
   const depositWalletAddress = TronWeb.address.fromPrivateKey(depositWalletPrivateKey);
   
-  // Creamos una instancia local y efímera de TronWeb
   const tempTronWeb = new TronWeb({
     fullHost: 'https://api.trongrid.io',
     headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
-    privateKey: depositWalletPrivateKey // Inyectamos la clave privada directamente
+    privateKey: depositWalletPrivateKey // Se inyecta la clave limpia
   });
 
   const usdtContract = await tempTronWeb.contract().at(USDT_TRON_ADDRESS);
@@ -88,6 +83,9 @@ const sweepUsdtOnTronFromDerivedWallet = async (derivationIndex, destinationAddr
     throw new Error(`Fallo en la transacción de barrido. Detalles: ${error.message}`);
   }
 };
+
+// --- EL RESTO DEL ARCHIVO PERMANECE IGUAL ---
+// ... (código idéntico a v21.2) ...
 
 const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddress) => {
     if (derivationIndex === undefined || !destinationAddress) throw new Error("Índice de derivación y dirección de destino son requeridos.");
@@ -121,12 +119,8 @@ const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddre
     }
 };
 
-// =========================================================================
-// ================ FUNCIONES DISPENSADOR DE GAS (YA ERAN ROBUSTAS) ========
-// =========================================================================
-
 const sendBscGas = async (toAddress, amountInBnb) => {
-    const { bscWallet } = getCentralWallets(); // Usa la función centralizada
+    const { bscWallet } = getCentralWallets();
     console.log(`[GasDispenser] Enviando ${amountInBnb} BNB desde ${bscWallet.address} a ${toAddress}`);
     try {
         const tx = { to: toAddress, value: ethers.utils.parseEther(amountInBnb.toString()) };
@@ -146,18 +140,16 @@ const sendBscGas = async (toAddress, amountInBnb) => {
 };
 
 const sendTronTrx = async (toAddress, amountInTrx) => {
-    const { tronWallet } = getCentralWallets(); // Usa la función centralizada
-    // Se crea una instancia local para esta operación
+    const { tronWallet } = getCentralWallets();
     const localTronWeb = new TronWeb({
         fullHost: 'https://api.trongrid.io',
         headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
-        privateKey: tronWallet.privateKey // Inyección directa de la clave
+        privateKey: tronWallet.privateKey
     });
 
     console.log(`[GasDispenser] Enviando ${amountInTrx} TRX desde ${tronWallet.address} a ${toAddress}`);
     try {
         const amountInSun = localTronWeb.toSun(amountInTrx);
-        // El método transactionBuilder ya usa la privateKey inyectada para firmar.
         const tx = await localTronWeb.transactionBuilder.sendTrx(toAddress, amountInSun, tronWallet.address);
         const signedTx = await localTronWeb.trx.sign(tx);
         const receipt = await localTronWeb.trx.sendRawTransaction(signedTx);
@@ -179,7 +171,6 @@ const sendTronTrx = async (toAddress, amountInTrx) => {
     }
 };
 
-// Exportamos la función central y las de operación
 module.exports = {
   sweepUsdtOnTronFromDerivedWallet,
   sweepUsdtOnBscFromDerivedWallet,
