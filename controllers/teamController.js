@@ -1,4 +1,4 @@
-// --- START OF FILE backend/controllers/teamController.js (VERSIÓN FINAL Y 100% FUNCIONAL) ---
+// backend/controllers/teamController.js (COMPLETO Y REPARADO v21.20)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -8,18 +8,20 @@ const getTeamStats = async (req, res) => {
   try {
     const userId = new mongoose.Types.ObjectId(req.user.id);
 
+    // --- INICIO DE LA CORRECCIÓN CLAVE ---
+    // Simplificamos y corregimos la consulta. Eliminamos los 'select' restrictivos
+    // que cortaban la cadena de referidos en el nivel 3.
+    // Esta consulta ahora carga de forma fiable toda la jerarquía de 3 niveles.
     const user = await User.findById(userId).populate({
       path: 'referrals.user',
-      select: 'telegramId activeTools totalRecharge totalWithdrawal referrals',
       populate: {
         path: 'referrals.user',
-        select: 'telegramId activeTools totalRecharge totalWithdrawal referrals',
         populate: {
-          path: 'referrals.user',
-          select: 'telegramId activeTools totalRecharge totalWithdrawal'
+          path: 'referrals.user'
         }
       }
     });
+    // --- FIN DE LA CORRECCIÓN CLAVE ---
 
     if (!user) {
       return res.status(404).json({ message: "Usuario no encontrado" });
@@ -37,32 +39,33 @@ const getTeamStats = async (req, res) => {
       ],
     };
 
+    // La lógica de iteración ahora funcionará porque 'user' contiene todos los datos.
     if (user.referrals && user.referrals.length > 0) {
-      stats.levels[0].totalMembers = user.referrals.length;
       user.referrals.forEach(referralLvl1 => {
         const memberLvl1 = referralLvl1.user;
         if (!memberLvl1) return;
         stats.totalTeamMembers++;
+        stats.levels[0].totalMembers++;
         if (memberLvl1.activeTools && memberLvl1.activeTools.length > 0) { stats.levels[0].validMembers++; }
         stats.totalTeamRecharge += memberLvl1.totalRecharge || 0;
         stats.totalTeamWithdrawals += memberLvl1.totalWithdrawal || 0;
 
         if (memberLvl1.referrals && memberLvl1.referrals.length > 0) {
-          stats.levels[1].totalMembers += memberLvl1.referrals.length;
           memberLvl1.referrals.forEach(referralLvl2 => {
             const memberLvl2 = referralLvl2.user;
             if (!memberLvl2) return;
             stats.totalTeamMembers++;
+            stats.levels[1].totalMembers++;
             if (memberLvl2.activeTools && memberLvl2.activeTools.length > 0) { stats.levels[1].validMembers++; }
             stats.totalTeamRecharge += memberLvl2.totalRecharge || 0;
             stats.totalTeamWithdrawals += memberLvl2.totalWithdrawal || 0;
 
             if (memberLvl2.referrals && memberLvl2.referrals.length > 0) {
-              stats.levels[2].totalMembers += memberLvl2.referrals.length;
               memberLvl2.referrals.forEach(referralLvl3 => {
                 const memberLvl3 = referralLvl3.user;
                 if(!memberLvl3) return;
                 stats.totalTeamMembers++;
+                stats.levels[2].totalMembers++;
                 if (memberLvl3.activeTools && memberLvl3.activeTools.length > 0) { stats.levels[2].validMembers++; }
                 stats.totalTeamRecharge += memberLvl3.totalRecharge || 0;
                 stats.totalTeamWithdrawals += memberLvl3.totalWithdrawal || 0;
@@ -96,7 +99,6 @@ const getLevelDetails = async (req, res) => {
       return res.status(400).json({ message: 'Nivel no válido.' });
     }
 
-    // Usamos el método .populate() anidado, que es más fiable y consistente.
     const user = await User.findById(userId).populate({
       path: 'referrals.user',
       populate: {
@@ -134,11 +136,10 @@ const getLevelDetails = async (req, res) => {
     }
 
     const finalResponse = levelMembers
-      .filter(Boolean) // Nos aseguramos de filtrar cualquier posible miembro nulo
+      .filter(Boolean)
       .map(member => ({
         username: member.username,
         photoUrl: member.photoUrl,
-        // Usamos el mismo campo que en la lógica anterior para consistencia
         miningRate: parseFloat((member.effectiveMiningRate || 0).toFixed(2))
       }));
 
@@ -151,5 +152,3 @@ const getLevelDetails = async (req, res) => {
 };
 
 module.exports = { getTeamStats, getLevelDetails };
-
-// --- END OF FILE backend/controllers/teamController.js ---
