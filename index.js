@@ -102,9 +102,38 @@ const escapeMarkdownV2 = (text) => text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\
 bot.command('start', async (ctx) => {
     try {
         const telegramId = ctx.from.id.toString();
-        const startPayload = ctx.startPayload ? ctx.startPayload.trim() : null;
-        if (startPayload) console.log(`[Bot] Usuario ${telegramId} ha llegado con referido: ${startPayload}`);
-        await ctx.replyWithMarkdownV2(escapeMarkdownV2(WELCOME_MESSAGE), Markup.inlineKeyboard([Markup.button.webApp('🚀 Abrir App', `${process.env.FRONTEND_URL}?ref=${startPayload || ''}`)]));
+        const startPayload = ctx.startPayload ? ctx.startPayload.trim() : ''; // Aseguramos que sea string
+        
+        // =======================================================================
+        // === INICIO DE LA CORRECCIÓN CRÍTICA DE REFERIDOS (OPERACIÓN FÉNIX) ===
+        //
+        // JUSTIFICACIÓN DEL FRACASO: La implementación anterior usaba `?ref=...`,
+        // lo que obligaba al frontend a capturar, almacenar y reenviar el código.
+        // Esto es frágil y propenso a errores. Si el frontend falla, toda la
+        // cadena de referidos se rompe.
+        //
+        // SOLUCIÓN DEFINITIVA: Usamos el método nativo de Telegram. Al no añadir
+        // parámetros de consulta a la URL, Telegram automáticamente añade el
+        // startPayload al `initData` bajo el campo `start_param`. Nuestro backend
+        // ya está diseñado para leer este campo. Esto elimina al frontend como
+        // intermediario y crea un canal de datos directo y a prueba de fallos
+        // desde el bot hasta el backend.
+        //
+        const webAppUrl = process.env.FRONTEND_URL;
+        //
+        // === FIN DE LA CORRECCIÓN CRÍTICA DE REFERIDOS ===
+        // =======================================================================
+
+        if (startPayload) {
+            console.log(`[Bot] Usuario ${telegramId} ha llegado con referido: ${startPayload}`.cyan);
+        }
+
+        await ctx.replyWithMarkdownV2(
+            escapeMarkdownV2(WELCOME_MESSAGE),
+            // La URL que se pasa aquí DEBE ser la URL base de la app, sin parámetros.
+            Markup.inlineKeyboard([Markup.button.webApp('🚀 Abrir App', webAppUrl)])
+        );
+
     } catch (error) { 
         console.error('[Bot] Error en /start:', error); 
     }
