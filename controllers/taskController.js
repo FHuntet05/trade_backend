@@ -1,10 +1,11 @@
-// backend/controllers/taskController.js
+// backend/controllers/taskController.js (CÓDIGO COMPLETO Y CORREGIDO)
 const asyncHandler = require('express-async-handler');
 const User = require('../models/userModel.js');
 
 // @desc    Marca una tarea como visitada por el usuario
 // @route   POST /api/tasks/mark-as-visited
 // @access  Private
+// NINGÚN CAMBIO EN ESTA FUNCIÓN
 const markTaskAsVisited = asyncHandler(async (req, res) => {
     const { taskId } = req.body;
     
@@ -38,7 +39,8 @@ const markTaskAsVisited = asyncHandler(async (req, res) => {
 // @access  Private
 const claimTaskReward = asyncHandler(async (req, res) => {
     const { taskId } = req.body;
-    const user = await User.findById(req.user.id).select('+tasks');
+    // Se añade 'balance' a la selección para asegurar que se carga
+    const user = await User.findById(req.user.id).select('+tasks +balance');
 
     if (!user) {
         res.status(404);
@@ -72,7 +74,6 @@ const claimTaskReward = asyncHandler(async (req, res) => {
             isCompleted = user.activeTools && user.activeTools.length > 0;
             break;
         case 'invitedTenFriends':
-            // Asegurarnos que user.referrals existe antes de acceder a length
             const referralCount = Array.isArray(user.referrals) ? user.referrals.length : 0;
             isCompleted = referralCount >= 3;
             break;
@@ -88,20 +89,24 @@ const claimTaskReward = asyncHandler(async (req, res) => {
         throw new Error('La tarea aún no está completada.');
     }
 
-    user.balance += reward;
+    // === INICIO DE LA CORRECCIÓN CRÍTICA ===
+    // Se corrige la operación de suma para apuntar al sub-campo 'ntx' del balance.
+    user.balance.ntx += reward;
+    // === FIN DE LA CORRECCIÓN CRÍTICA ===
+    
     claimedTasks[taskId] = true;
     user.tasks.set('claimedTasks', claimedTasks);
 
     await user.save();
     
-    // Devolvemos el usuario completo y actualizado para el store de Zustand
     const updatedUser = await User.findById(user._id).populate('referrals');
-    res.json({ message: '¡Recompensa reclamada!', user: updatedUser });
+    res.json({ message: `¡+${reward.toLocaleString()} NTX reclamados!`, user: updatedUser });
 });
 
 // @desc    Obtiene el estado actual de las tareas del usuario
 // @route   GET /api/tasks/status
 // @access  Private
+// NINGÚN CAMBIO EN ESTA FUNCIÓN
 const getTaskStatus = asyncHandler(async (req, res) => {
     const user = await User.findById(req.user.id).select('tasks activeTools referrals');
 
