@@ -1,10 +1,11 @@
-// backend/controllers/userController.js (VERSIÓN v17.0 - CON FUNCIÓN REUTILIZABLE)
+// backend/controllers/userController.js (VERSIÓN INSTRUMENTADA Y COMPLETA)
 const axios = require('axios');
 const User = require('../models/userModel');
 const asyncHandler = require('express-async-handler');
 
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
-const PLACEHOLDER_AVATAR = '/assets/images/user-avatar-placeholder.png'; // Placeholder por defecto
+// Asegurémonos de que el placeholder sea una URL completa para evitar problemas
+const PLACEHOLDER_AVATAR = `${process.env.FRONTEND_URL}/assets/images/user-avatar-placeholder.png`;
 
 /**
  * @desc    Obtiene la URL de descarga temporal de una foto de Telegram.
@@ -12,24 +13,36 @@ const PLACEHOLDER_AVATAR = '/assets/images/user-avatar-placeholder.png'; // Plac
  * @returns {Promise<string|null>} La URL temporal o null si falla.
  */
 const getTemporaryPhotoUrl = async (photoFileId) => {
+    // 1. PUNTO DE ENTRADA
+    console.log(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] Invocado.`);
     if (!photoFileId) {
+        console.log(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] No hay photoFileId. Retornando null.`);
         return null;
     }
+    console.log(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] Intentando resolver file_id: ${photoFileId}`);
+
     try {
+        // 2. LLAMADA A LA API DE TELEGRAM
+        console.log(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] Realizando llamada a /getFile...`);
         const fileInfoResponse = await axios.get(`${TELEGRAM_API_URL}/getFile`, {
             params: { file_id: photoFileId },
             timeout: 4000 // Timeout agresivo para no bloquear
         });
 
         if (!fileInfoResponse.data.ok) {
-            console.error(`Telegram API no pudo obtener la info del archivo para file_id: ${photoFileId}`);
+            console.error(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] ERROR: Telegram API no pudo obtener la info del archivo para file_id: ${photoFileId}. Respuesta:`, fileInfoResponse.data);
             return null;
         }
 
         const filePath = fileInfoResponse.data.result.file_path;
-        return `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${filePath}`;
+        const finalUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${filePath}`;
+        
+        // 3. ÉXITO
+        console.log(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] Éxito. URL generada.`);
+        return finalUrl;
     } catch (error) {
-        console.error(`Error al resolver la foto para el file_id ${photoFileId}:`, error.message);
+        // 4. FALLO
+        console.error(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] CATCH: Error al resolver la foto para el file_id ${photoFileId}:`, error.message);
         return null;
     }
 };
@@ -58,5 +71,5 @@ const getUserPhoto = asyncHandler(async (req, res) => {
 
 module.exports = {
     getUserPhoto,
-    getTemporaryPhotoUrl // <--- EXPORTAMOS LA FUNCIÓN
+    getTemporaryPhotoUrl
 };
