@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN v18.9 - DIAGNÓSTICO DE CORS)
+// backend/index.js (VERSIÓN CON REFERIDOS BLINDADOS v24.0)
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
@@ -53,10 +53,10 @@ app.disable('etag');
 const whitelist = [process.env.FRONTEND_URL, process.env.ADMIN_URL];
 const corsOptions = {
     origin: (origin, callback) => {
+        // Permitir peticiones sin origen (como las de Postman o scripts de servidor)
         if (!origin || whitelist.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
-            // CORRECCIÓN DEFINITIVA: Añadimos un log para ver exactamente por qué se rechaza.
             console.error(`[CORS] ❌ Origen RECHAZADO: '${origin}'. No está en la whitelist: [${whitelist.join(', ')}]`.red.bold);
             callback(new Error(`Origen no permitido por CORS: ${origin}`));
         }
@@ -99,16 +99,34 @@ const WELCOME_MESSAGE = `
 `;
 
 const escapeMarkdownV2 = (text) => text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
+
+// ======================= INICIO CORRECCIÓN ARQUITECTURAL DE REFERIDOS =======================
 bot.command('start', async (ctx) => {
     try {
         const telegramId = ctx.from.id.toString();
         const startPayload = ctx.startPayload ? ctx.startPayload.trim() : null;
-        if (startPayload) console.log(`[Bot] Usuario ${telegramId} ha llegado con referido: ${startPayload}`);
-        await ctx.replyWithMarkdownV2(escapeMarkdownV2(WELCOME_MESSAGE), Markup.inlineKeyboard([Markup.button.webApp('🚀 Abrir App', `${process.env.FRONTEND_URL}?ref=${startPayload || ''}`)]));
+
+        if (startPayload) {
+            console.log(`[Bot] Usuario ${telegramId} ha llegado con referido: ${startPayload}`);
+        }
+
+        // CORRECCIÓN: Usamos `startapp` para pasar el código de referido, como dicta la documentación de Telegram.
+        const webAppUrl = startPayload
+            ? `${process.env.FRONTEND_URL}?startapp=${startPayload}`
+            : process.env.FRONTEND_URL;
+
+        await ctx.replyWithMarkdownV2(
+            escapeMarkdownV2(WELCOME_MESSAGE),
+            Markup.inlineKeyboard([
+                Markup.button.webApp('🚀 Abrir App', webAppUrl)
+            ])
+        );
     } catch (error) { 
         console.error('[Bot] Error en /start:', error); 
     }
 });
+// ======================== FIN CORRECCIÓN ARQUITECTURAL DE REFERIDOS =========================
+
 bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
 
 // --- Middlewares de Manejo de Errores (al final) ---
@@ -119,7 +137,7 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, async () => {
     console.log(`[SERVIDOR] 🚀 Servidor corriendo en puerto ${PORT}`.yellow.bold);
-     startWatcher(); 
+    startWatcher(); 
     try {
         const botInfo = await bot.telegram.getMe();
         console.log(`[SERVIDOR] ✅ Conectado como bot: ${botInfo.username}.`);

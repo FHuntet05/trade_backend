@@ -1,4 +1,4 @@
-// backend/controllers/authController.js (VERSIÓN CON REFERIDOS BLINDADOS v24.0)
+// backend/controllers/authController.js (VERSIÓN CON REFERIDOS Y USERNAME BLINDADOS v24.0)
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
 const jwt = require('jsonwebtoken');
@@ -20,8 +20,12 @@ const syncUser = async (req, res) => {
     try {
         let user = await User.findOne({ telegramId });
         
+        // ======================= INICIO CORRECCIÓN ARQUITECTURAL DE REFERIDOS =======================
         if (!user) {
-            console.log(`[Sync] Usuario nuevo detectado: ${telegramUser.username} (${telegramId}). Creando...`);
+            // CORRECCIÓN: Blindaje contra username undefined.
+            const username = telegramUser.username || `user_${telegramId}`;
+            console.log(`[Sync] Usuario nuevo detectado: ${username} (${telegramId}). Creando...`);
+            
             let referrer = null;
             if (refCode && refCode !== telegramId) {
                 referrer = await User.findOne({ telegramId: refCode });
@@ -31,14 +35,17 @@ const syncUser = async (req, res) => {
                     console.warn(`[Sync] Código de referido (${refCode}) no corresponde a ningún usuario.`);
                 }
             }
+
             const fullName = `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim();
+
             user = await User.create({
                 telegramId,
-                username: telegramUser.username || `user_${telegramId}`,
-                fullName: fullName || telegramUser.username,
+                username: username, // Usamos el username blindado
+                fullName: fullName || username, // Usamos el username blindado como fallback
                 language: telegramUser.language_code || 'es',
                 referredBy: referrer ? referrer._id : null
             });
+
             if (referrer) {
                 referrer.referrals.push({ level: 1, user: user._id });
                 await referrer.save();
@@ -46,27 +53,21 @@ const syncUser = async (req, res) => {
             }
         } else {
              console.log(`[Sync] Usuario existente: ${user.username}.`);
-             user.username = telegramUser.username || user.username;
+             user.username = telegramUser.username || user.username; // Actualizamos si ha cambiado
              await user.save();
         }
+        // ======================== FIN CORRECCIÓN ARQUITECTURAL DE REFERIDOS =========================
 
-        // ======================= INICIO DE LA CORRECCIÓN DE REFERIDOS =======================
-        // Poblamos las herramientas Y TAMBIÉN el referente para enviar sus datos al frontend.
         const userWithDetails = await User.findById(user._id)
             .populate('activeTools.tool')
-            .populate('referredBy', 'username fullName'); // <-- ¡LA REPARACIÓN CRÍTICA!
-        // ======================== FIN DE LA CORRECCIÓN DE REFERIDOS =========================
-
+            .populate('referredBy', 'username fullName');
+        
         const settings = await Setting.findOne({ singleton: 'global_settings' }) || await Setting.create({ singleton: 'global_settings' });
         const userObject = userWithDetails.toObject();
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
         const token = generateToken(user._id);
 
-        res.status(200).json({
-            token,
-            user: userObject,
-            settings
-        });
+        res.status(200).json({ token, user: userObject, settings });
 
     } catch (error) {
         console.error("Error catastrófico en syncUser:", error);
@@ -78,9 +79,7 @@ const syncUser = async (req, res) => {
 const getUserProfile = async (req, res) => {
     try {
         const user = await User.findById(req.user.id).populate('activeTools.tool').populate('referredBy', 'username fullName');
-        if (!user) {
-            return res.status(404).json({ message: 'Usuario no encontrado' });
-        }
+        if (!user) { return res.status(404).json({ message: 'Usuario no encontrado' }); }
         const settings = await Setting.findOne({ singleton: 'global_settings' });
         const userObject = user.toObject();
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
