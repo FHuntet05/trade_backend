@@ -32,30 +32,57 @@ const generateToken = (id, role, username) => {
     return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
 };
 
+
+/**
+ * @desc Autentica o registra un usuario desde Telegram.
+ *
+ * JUSTIFICACIÓN DEL FRACASO v23: El código leía el `startParam` de `req.body` en lugar
+ * de leerlo del objeto `parsedData`, que es donde la librería coloca el código
+ * de referido que viene nativamente en el `initData`. Esto causaba que el vínculo
+ * de referido nunca se estableciera.
+ *
+ * SOLUCIÓN FÉNIX v24.0:
+ * 1. Lee el código de referido EXCLUSIVAMENTE de `parsedData.startParam`.
+ * 2. Si hay un referente, la actualización de su lista de referidos se hace con
+ *    una operación atómica `$push` (`findByIdAndUpdate`), eliminando el frágil `referrer.save()`.
+ * 3. Añadido logging detallado para trazar el flujo de referidos.
+ */
 const authTelegramUser = async (req, res) => {
-    const { initData, startParam } = req.body;
-    if (!initData) { return res.status(400).json({ message: 'initData es requerido.' }); }
+    const { initData } = req.body; // Solo necesitamos initData
+    if (!initData) {
+        return res.status(400).json({ message: 'initData es requerido.' });
+    }
+    
     try {
         await validate(initData, process.env.TELEGRAM_BOT_TOKEN, { expiresIn: 3600 });
         const parsedData = parse(initData);
+        
+        // LOG DE DIAGNÓSTICO: Veremos exactamente qué datos llegan.
+        console.log('[Auth] Datos parseados de initData:', { 
+            user: parsedData.user, 
+            startParam: parsedData.startParam 
+        });
+
         const userData = parsedData.user;
-        if (!userData) { return res.status(401).json({ message: 'Información de usuario no encontrada.' }); }
+        if (!userData) {
+            return res.status(401).json({ message: 'Información de usuario no encontrada.' });
+        }
         
         const telegramId = userData.id.toString();
         let user = await User.findOne({ telegramId });
 
-        if (!user) {
+        if (!user) { // === Lógica para NUEVO USUARIO ===
             let referrer = null;
-            // --- INICIO DE LA CORRECCIÓN DE REFERIDOS ---
-            // 1. Verificamos que el startParam exista y no sea el propio ID del usuario.
-            if (startParam && startParam !== telegramId) {
-                // 2. Buscamos al referente por su telegramId, que es lo que llega.
-                referrer = await User.findOne({ telegramId: startParam });
-                if (!referrer) {
-                    console.warn(`[Referral] Se intentó referir con un telegramId inválido o no existente: ${startParam}`);
+            const referrerTelegramId = parsedData.startParam; // <-- ¡LA LÍNEA CLAVE! Leemos del lugar correcto.
+
+            if (referrerTelegramId && referrerTelegramId !== telegramId) {
+                referrer = await User.findOne({ telegramId: referrerTelegramId });
+                if (referrer) {
+                    console.log(`[Referral] Código de referido válido: ${referrerTelegramId}. Referente encontrado: ${referrer.username}`.green);
+                } else {
+                    console.warn(`[Referral] Código de referido ${referrerTelegramId} no corresponde a un usuario existente.`.yellow);
                 }
             }
-            // --- FIN DE LA CORRECCIÓN DE REFERIDOS ---
             
             const photoFileId = await getPhotoFileId(telegramId);
             const fullName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim();
@@ -68,28 +95,29 @@ const authTelegramUser = async (req, res) => {
                 photoFileId: photoFileId,
                 referredBy: referrer ? referrer._id : null 
             });
-            await user.save();
+            await user.save(); // Guardamos el nuevo usuario
             
             if (referrer) {
-                // 3. Añadimos el nuevo usuario a la lista de referidos del referente.
-                referrer.referrals.push({ level: 1, user: user._id });
-                await referrer.save();
-                console.log(`[Referral] Usuario ${user.username} ha sido referido por ${referrer.username}.`);
+                // Actualización atómica del referente. No más 'referrer.save()'.
+                await User.findByIdAndUpdate(referrer._id, {
+                    $push: { referrals: { level: 1, user: user._id } }
+                });
+                console.log(`[Referral] ÉXITO: Usuario ${user.username} ha sido vinculado al referente ${referrer.username}.`.bgGreen.black);
             }
-        } else {
+        } else { // === Lógica para USUARIO EXISTENTE ===
             if (!user.photoFileId) {
                 user.photoFileId = await getPhotoFileId(telegramId);
                 if (user.photoFileId) await user.save();
             }
         }
         
+        // El resto del flujo para generar token y devolver datos se mantiene...
         const [userWithTools, settings] = await Promise.all([
             User.findById(user._id).populate('activeTools.tool'),
             Setting.findOneAndUpdate({ singleton: 'global_settings' }, { $setOnInsert: { singleton: 'global_settings' } }, { upsert: true, new: true, setDefaultsOnInsert: true })
         ]);
 
         const userObject = userWithTools.toObject();
-        // CORRECCIÓN: Obtenemos la URL de descarga directa de Telegram
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
 
         if (userObject.referredBy) {
@@ -98,11 +126,13 @@ const authTelegramUser = async (req, res) => {
         }
         const token = generateToken(userObject._id, userObject.role, userObject.username);
         res.json({ token, user: userObject, settings });
+        
     } catch (error) {
         console.error("Error en authTelegramUser:", error);
         res.status(401).json({ message: `Autenticación fallida: ${error.message}` });
     }
 };
+
 
 const getUserProfile = async (req, res) => {
     try {
