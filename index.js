@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN FÉNIX v23.2 - BIENVENIDA VISUAL)
+// backend/index.js (CÓDIGO COMPLETO CON COMANDO /START CORREGIDO)
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
@@ -7,12 +7,11 @@ const crypto = require('crypto');
 const dotenv = require('dotenv');
 const colors = require('colors');
 const { startWatcher } = require('./services/blockchainWatcherService');
-// --- Carga de Configuración y Variables de Entorno ---
+
 console.log('[SISTEMA] Iniciando aplicación NEURO LINK...');
 dotenv.config();
 const connectDB = require('./config/db');
 
-// --- Verificación de Variables Críticas ---
 function checkEnvVariables() {
     console.log('[SISTEMA] Verificando variables de entorno críticas...');
     const requiredVars = ['MONGO_URI', 'JWT_SECRET', 'TELEGRAM_BOT_TOKEN', 'FRONTEND_URL', 'ADMIN_URL', 'BACKEND_URL', 'BSCSCAN_API_KEY', 'MASTER_SEED_PHRASE'];
@@ -24,11 +23,8 @@ function checkEnvVariables() {
     console.log('[SISTEMA] ✅ Todas las variables de entorno críticas están presentes.');
 }
 checkEnvVariables();
-
-// --- Conexión a la Base de Datos ---
 connectDB();
 
-// --- Carga de Módulos de Rutas ---
 console.log('[SISTEMA] Cargando módulos de rutas...');
 const authRoutes = require('./routes/authRoutes');
 const toolRoutes = require('./routes/toolRoutes');
@@ -43,11 +39,9 @@ const userRoutes = require('./routes/userRoutes');
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 console.log('[SISTEMA] ✅ Módulos de rutas cargados.');
 
-// --- Inicialización de Express y Telegram ---
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// --- Configuración de Middlewares ---
 app.disable('etag');
 
 const whitelist = [process.env.FRONTEND_URL, process.env.ADMIN_URL];
@@ -67,7 +61,6 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(morgan('dev'));
 
-// --- Definición de Rutas de la API ---
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/tools', toolRoutes);
@@ -85,8 +78,9 @@ const secretPath = `/api/telegram-webhook/${secretToken}`;
 app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
 console.log('[SISTEMA] ✅ Rutas de API registradas.');
 
+
 // =======================================================================
-// === INICIO DE LA RECONSTRUCCIÓN DEL COMANDO /START (BIENVENIDA VISUAL) ===
+// === INICIO DE LA RECONSTRUCCIÓN DEL COMANDO /START (CORRECCIÓN FINAL) ===
 // =======================================================================
 
 const WELCOME_MESSAGE = `
@@ -104,64 +98,53 @@ bot.command('start', async (ctx) => {
     try {
         const telegramId = ctx.from.id.toString();
         const startPayload = ctx.startPayload ? ctx.startPayload.trim() : '';
-        const webAppUrl = process.env.FRONTEND_URL;
-        const WELCOME_IMAGE_URL = 'https://i.postimg.cc/pVFs2JYx/NEURO-LINK.jpg'; // <-- URL DE SU IMAGEN
+        const baseWebAppUrl = process.env.FRONTEND_URL;
+        const WELCOME_IMAGE_URL = 'https://i.postimg.cc/pVFs2JYx/NEURO-LINK.jpg';
 
+        // === INICIO DE LA CORRECCIÓN CRÍTICA DEL ENLACE ===
+        let finalWebAppUrl = baseWebAppUrl;
         if (startPayload) {
             console.log(`[Bot Start] Usuario ${telegramId} ha llegado con startPayload: '${startPayload}'`.cyan);
+            // Adjuntamos el código de referido a la URL que abrirá la Mini App
+            finalWebAppUrl = `${baseWebAppUrl}?startapp=${startPayload}`;
         }
+        // === FIN DE LA CORRECCIÓN CRÍTICA DEL ENLACE ===
 
-        // =======================================================================
-        // === INICIO DE LA CORRECCIÓN CRÍTICA DE TECLADO (OPERACIÓN FÉNIX) ===
-        //
-        // JUSTIFICACIÓN DEL FRACASO: El bot tenía un teclado persistente ('Gana Ahora')
-        // que entraba en conflicto con el botón inline que queríamos mostrar.
-        //
-        // SOLUCIÓN DEFINITIVA: Se construye manualmente el objeto `reply_markup`.
-        // 1. `inline_keyboard`: Define nuestro botón "Abrir App".
-        // 2. `remove_keyboard: true`: Envía una orden explícita al cliente de Telegram
-        //    para que ELIMINE cualquier teclado persistente anterior.
-        // Esto garantiza que nuestro botón siempre se muestre y la UI esté limpia.
-        //
         await ctx.replyWithPhoto(WELCOME_IMAGE_URL, {
             caption: WELCOME_MESSAGE,
             reply_markup: {
                 inline_keyboard: [[
-                    Markup.button.webApp('🚀 Abrir App', webAppUrl)
+                    // Usamos la URL final, que puede contener o no el código de referido
+                    Markup.button.webApp('🚀 Abrir App', finalWebAppUrl)
                 ]],
             }
         });
         
-        // Se envía un mensaje posterior y vacío con la orden de eliminar el teclado
-        // por si la configuración anterior no funcionara en todos los clientes.
-        // Esto es un seguro adicional de robustez.
         await ctx.reply("...", {
              reply_markup: {
                 remove_keyboard: true
              }
         }).then(result => ctx.deleteMessage(result.message_id));
 
-
     } catch (error) {
         console.error('[Bot Start] Error en el comando /start:', error);
         await ctx.reply('Hubo un error al iniciar. Por favor, intenta de nuevo.').catch(e => console.error("Error en fallback de /start", e));
     }
 });
+
 bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
 
 // =======================================================================
 // === FIN DE LA RECONSTRUCCIÓN DEL COMANDO /START ===
 // =======================================================================
 
-// --- Middlewares de Manejo de Errores (al final) ---
 app.use(notFound);
 app.use(errorHandler);
 
-// --- Arranque del Servidor ---
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, async () => {
     console.log(`[SERVIDOR] 🚀 Servidor corriendo en puerto ${PORT}`.yellow.bold);
-     startWatcher(); 
+    startWatcher(); 
     try {
         const botInfo = await bot.telegram.getMe();
         console.log(`[SERVIDOR] ✅ Conectado como bot: ${botInfo.username}.`);
