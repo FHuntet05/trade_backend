@@ -1,4 +1,4 @@
-// backend/controllers/authController.js (VERSIÓN RESTAURACIÓN FINAL v26.0)
+// backend/controllers/authController.js (VERSIÓN TIERRA QUEMADA v29.0 - FINAL)
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
 const jwt = require('jsonwebtoken');
@@ -11,6 +11,11 @@ const generateToken = (id) => {
 };
 
 const syncUser = async (req, res) => {
+     // ======================= LÍNEA DE AUTOPSIA =======================
+    console.log('--- AUTOPSIA: DATOS RECIBIDOS EN EL CONTROLADOR ---');
+    console.log('req.body:', JSON.stringify(req.body, null, 2));
+    console.log('--------------------------------------------------');
+    // ===============================================================
     const { telegramUser, refCode } = req.body;
     if (!telegramUser || !telegramUser.id) return res.status(400).json({ message: 'Telegram ID es requerido.' });
     
@@ -18,30 +23,49 @@ const syncUser = async (req, res) => {
 
     try {
         let user = await User.findOne({ telegramId });
+        let referrer = null;
+
+        // Buscamos al referente ANTES, si hay un refCode.
+        if (refCode && refCode !== 'null' && refCode !== 'undefined' && refCode !== telegramId) {
+            referrer = await User.findOne({ telegramId: refCode });
+        }
 
         if (!user) {
-            console.log(`[Sync] Usuario nuevo con ID: ${telegramId}. RefCode: '${refCode}'`);
+            // FLUJO DE USUARIO NUEVO
+            console.log(`[Sync-Final] Usuario nuevo con ID: ${telegramId}.`);
             const username = telegramUser.username || `user_${telegramId}`;
             const fullName = `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim();
             const newUser_data = { telegramId, username, fullName: fullName || username, language: telegramUser.language_code || 'es' };
 
-            if (refCode && refCode !== 'null' && refCode !== 'undefined' && refCode !== telegramId) {
-                const referrer = await User.findOne({ telegramId: refCode });
-                if (referrer) {
-                    console.log(`[Sync] Referente encontrado: ${referrer.username}`);
-                    newUser_data.referredBy = referrer._id;
-                    user = new User(newUser_data);
-                    await user.save();
-                    referrer.referrals.push({ level: 1, user: user._id });
-                    await referrer.save();
-                } else {
-                    user = await User.create(newUser_data);
-                }
+            if (referrer) {
+                console.log(`[Sync-Final] Asignando referente ${referrer.username} al nuevo usuario.`);
+                newUser_data.referredBy = referrer._id;
+            }
+            
+            user = new User(newUser_data);
+            await user.save();
+
+            if (referrer) {
+                referrer.referrals.push({ level: 1, user: user._id });
+                await referrer.save();
+            }
+
+        } else {
+            // FLUJO DE USUARIO EXISTENTE
+            // ESTA ES LA REPARACIÓN CRÍTICA: si el usuario existe pero no tiene referente, y nos llega uno, lo asignamos.
+            if (referrer && !user.referredBy) {
+                console.log(`[Sync-Final] Usuario existente sin referente. Asignando referente: ${referrer.username}`);
+                user.referredBy = referrer._id;
+                await user.save();
+                
+                referrer.referrals.push({ level: 1, user: user._id });
+                await referrer.save();
             } else {
-                user = await User.create(newUser_data);
+                console.log(`[Sync-Final] Usuario existente encontrado: ${user.username}. No se requieren cambios de referido.`);
             }
         }
         
+        // El resto del flujo para devolver los datos completos
         const userWithDetails = await User.findById(user._id).populate('activeTools.tool').populate('referredBy', 'username fullName');
         const settings = await Setting.findOne({ singleton: 'global_settings' }) || await Setting.create({ singleton: 'global_settings' });
         const userObject = userWithDetails.toObject();
@@ -51,7 +75,7 @@ const syncUser = async (req, res) => {
         res.status(200).json({ token, user: userObject, settings });
 
     } catch (error) {
-        console.error('[Sync] ERROR FATAL:', error);
+        console.error('[Sync-Final] ERROR FATAL:', error);
         return res.status(500).json({ message: 'Error interno del servidor.', details: error.message });
     }
 };
