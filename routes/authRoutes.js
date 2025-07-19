@@ -1,3 +1,4 @@
+// backend/routes/authRoutes.js (CÓDIGO COMPLETO Y SIN CAMBIOS)
 const express = require('express');
 const router = express.Router();
 const { authTelegramUser, getUserProfile, loginAdmin } = require('../controllers/authController');
