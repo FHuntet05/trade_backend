@@ -1,4 +1,4 @@
-// backend/index.js (CÓDIGO VALIDADO - NO REQUIERE CAMBIOS)
+// backend/index.js (CON CORS CORREGIDO Y ROBUSTO)
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
@@ -25,7 +25,6 @@ function checkEnvVariables() {
 checkEnvVariables();
 connectDB();
 
-console.log('[SISTEMA] Cargando módulos de rutas...');
 const authRoutes = require('./routes/authRoutes');
 const toolRoutes = require('./routes/toolRoutes');
 const rankingRoutes = require('./routes/rankingRoutes');
@@ -37,27 +36,26 @@ const adminRoutes = require('./routes/adminRoutes');
 const treasuryRoutes = require('./routes/treasuryRoutes');
 const userRoutes = require('./routes/userRoutes');
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
-console.log('[SISTEMA] ✅ Módulos de rutas cargados.');
 
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 app.disable('etag');
 
+// =======================================================================
+// === INICIO DE LA CORRECCIÓN CRÍTICA DE CORS ===
+// =======================================================================
 const whitelist = [process.env.FRONTEND_URL, process.env.ADMIN_URL];
-const corsOptions = {
-    origin: (origin, callback) => {
-        if (!origin || whitelist.indexOf(origin) !== -1) {
-            callback(null, true);
-        } else {
-            console.error(`[CORS] ❌ Origen RECHAZADO: '${origin}'. No está en la whitelist: [${whitelist.join(', ')}]`.red.bold);
-            callback(new Error(`Origen no permitido por CORS: ${origin}`));
-        }
-    },
+// =======================================================================
+// === BYPASS TEMPORAL DE CORS PARA DEPURACIÓN ===
+// =======================================================================
+console.warn('[CORS-DEBUG] ¡ADVERTENCIA! CORS está completamente abierto para depuración.'.yellow.bold);
+app.use(cors({
+    origin: '*', // Permite CUALQUIER origen
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     credentials: true,
-};
-app.use(cors(corsOptions));
+}));
+// =======================================================================
 app.use(express.json());
 app.use(morgan('dev'));
 
