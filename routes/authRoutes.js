@@ -1,21 +1,16 @@
-// backend/routes/authRoutes.js (VERSIÓN CORREGIDA v24.0)
+// backend/routes/authRoutes.js (VERSIÓN FLUJO DIRECTO v24.2 - LIMPIEZA)
 const express = require('express');
 const router = express.Router();
-// ======================= INICIO DE LA CORRECCIÓN DE RUTAS =======================
-// Importamos la nueva función 'syncUser' y las que se conservan.
-const { syncUser, getUserProfile, loginAdmin } = require('../controllers/authController');
-const { verifyLoginToken } = require('../controllers/twoFactorAuthController');
+const { validateUser, getUserProfile, loginAdmin } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
 
-// La nueva ruta para la sincronización inicial del usuario desde la Mini App.
-router.post('/sync', syncUser);
-// ======================== FIN DE LA CORRECCIÓN DE RUTAS =========================
+// La ruta ahora es para VALIDAR, no para sincronizar todo.
 router.post('/validate', validateUser);
+
 // Rutas existentes que se mantienen
 router.get('/profile', protect, getUserProfile);
 router.post('/login/admin', loginAdmin);
-router.post('/2fa/verify-login', verifyLoginToken);
 
-// Se elimina la ruta obsoleta 'POST /login'.
+// Se elimina la ruta de 2FA que no se está utilizando en este flujo.
 
 module.exports = router;
