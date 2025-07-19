@@ -1,4 +1,4 @@
-// backend/controllers/authController.js (CÓDIGO COMPLETO CON LOGGING)
+// backend/controllers/authController.js (CÓDIGO VALIDADO - NO REQUIERE CAMBIOS)
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
 const jwt = require('jsonwebtoken');
@@ -8,7 +8,7 @@ const { getTemporaryPhotoUrl } = require('./userController');
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const PLACEHOLDER_AVATAR_URL = `${process.env.FRONTEND_URL}/assets/images/user-avatar-placeholder.png`;
 
-// --- FUNCIONES DE UTILIDAD (COMPLETAS) ---
+// --- FUNCIONES DE UTILIDAD ---
 const getPhotoFileId = async (userId) => {
     try {
         const response = await axios.get(`${TELEGRAM_API_URL}/getUserProfilePhotos`, {
@@ -32,7 +32,7 @@ const generateToken = (id, role, username) => {
 };
 
 
-// --- CONTROLADOR DE SINCRONIZACIÓN (COMPLETO CON LOGGING) ---
+// --- CONTROLADOR DE SINCRONIZACIÓN (ROL: SYNCHRONIZER) ---
 const syncUser = async (req, res) => {
     console.log('[Controller] -> /api/auth/sync: Petición RECIBIDA.');
     const { user: tgUser, refCode } = req.body;
@@ -106,7 +106,7 @@ const syncUser = async (req, res) => {
     }
 };
 
-// --- FUNCIONES EXISTENTES (COMPLETAS) ---
+// --- FUNCIONES EXISTENTES (SIN CAMBIOS) ---
 const getUserProfile = async (req, res) => {
     try {
         const [user, settings] = await Promise.all([

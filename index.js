@@ -1,4 +1,4 @@
-// backend/index.js (CÓDIGO COMPLETO CON COMANDO /START CORREGIDO)
+// backend/index.js (CÓDIGO VALIDADO - NO REQUIERE CAMBIOS)
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
@@ -80,7 +80,7 @@ console.log('[SISTEMA] ✅ Rutas de API registradas.');
 
 
 // =======================================================================
-// === INICIO DE LA RECONSTRUCCIÓN DEL COMANDO /START (CORRECCIÓN FINAL) ===
+// === COMANDO /START FUNCIONANDO COMO PASARELA (GATEWAY) ===
 // =======================================================================
 
 const WELCOME_MESSAGE = `
@@ -101,15 +101,14 @@ bot.command('start', async (ctx) => {
         const baseWebAppUrl = process.env.FRONTEND_URL;
         const WELCOME_IMAGE_URL = 'https://i.postimg.cc/pVFs2JYx/NEURO-LINK.jpg';
 
-        // === INICIO DE LA CORRECCIÓN CRÍTICA DEL ENLACE ===
+        // Lógica de la Pasarela: Construye la URL final
         let finalWebAppUrl = baseWebAppUrl;
         if (startPayload) {
             console.log(`[Bot Start] Usuario ${telegramId} ha llegado con startPayload: '${startPayload}'`.cyan);
             // Adjuntamos el código de referido a la URL que abrirá la Mini App
             finalWebAppUrl = `${baseWebAppUrl}?startapp=${startPayload}`;
         }
-        // === FIN DE LA CORRECCIÓN CRÍTICA DEL ENLACE ===
-
+        
         await ctx.replyWithPhoto(WELCOME_IMAGE_URL, {
             caption: WELCOME_MESSAGE,
             reply_markup: {
@@ -135,7 +134,7 @@ bot.command('start', async (ctx) => {
 bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
 
 // =======================================================================
-// === FIN DE LA RECONSTRUCCIÓN DEL COMANDO /START ===
+// === FIN DEL BLOQUE DE PASARELA ===
 // =======================================================================
 
 app.use(notFound);
