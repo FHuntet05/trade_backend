@@ -1,144 +1,125 @@
-// backend/controllers/authController.js (VERSIÓN v17.0 - ESTRATEGIA URL DIRECTA)
+// backend/controllers/authController.js (VERSIÓN RECONSTRUIDA v24.0)
 const User = require('../models/userModel');
-const PendingReferral = require('../models/pendingReferralModel');
 const Setting = require('../models/settingsModel');
 const jwt = require('jsonwebtoken');
-const { validate, parse } = require('@telegram-apps/init-data-node');
-const axios = require('axios');
-const { getTemporaryPhotoUrl } = require('./userController'); // <-- IMPORTAMOS LA NUEVA FUNCIÓN
+const { getTemporaryPhotoUrl } = require('./userController');
 
-const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
+// Constante para la URL del avatar por defecto para evitar repetición.
 const PLACEHOLDER_AVATAR_URL = `${process.env.FRONTEND_URL}/assets/images/user-avatar-placeholder.png`;
 
-const getPhotoFileId = async (userId) => {
-    try {
-        const response = await axios.get(`${TELEGRAM_API_URL}/getUserProfilePhotos`, {
-            params: { user_id: userId, limit: 1 },
-            timeout: 5000
-        });
-        if (response.data.ok && response.data.result.photos.length > 0) {
-            const photoArray = response.data.result.photos[0];
-            return photoArray[photoArray.length - 1].file_id;
-        }
-        return null;
-    } catch (error) {
-        console.error(`Error obteniendo el file_id para ${userId}:`, error.message);
-        return null;
+// Función de utilidad para generar el token JWT.
+const generateToken = (id) => {
+    return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+};
+
+// ======================= INICIO DE LA NUEVA LÓGICA DE SINCRONIZACIÓN =======================
+// Esta es la nueva función que sigue el patrón "Sincronizador".
+const syncUser = async (req, res) => {
+    // 1. EXTRAER DATOS DEL FRONTEND
+    const { user: telegramUser, refCode } = req.body;
+
+    if (!telegramUser || !telegramUser.id) {
+        return res.status(400).json({ message: 'Datos de usuario de Telegram inválidos.' });
     }
-};
 
-const generateToken = (id, role, username) => {
-    const payload = { id, role, username };
-    return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
-};
+    const telegramId = telegramUser.id.toString();
 
-const authTelegramUser = async (req, res) => {
-    const { initData, startParam } = req.body;
-    if (!initData) { return res.status(400).json({ message: 'initData es requerido.' }); }
     try {
-        await validate(initData, process.env.TELEGRAM_BOT_TOKEN, { expiresIn: 3600 });
-        const parsedData = parse(initData);
-        const userData = parsedData.user;
-        if (!userData) { return res.status(401).json({ message: 'Información de usuario no encontrada.' }); }
-        
-        const telegramId = userData.id.toString();
         let user = await User.findOne({ telegramId });
-
+        
+        // 2. CREAR USUARIO SI NO EXISTE
         if (!user) {
+            console.log(`[Sync] Usuario nuevo detectado: ${telegramUser.username} (${telegramId}). Creando...`);
             let referrer = null;
-            // --- INICIO DE LA CORRECCIÓN DE REFERIDOS ---
-            // 1. Verificamos que el startParam exista y no sea el propio ID del usuario.
-            if (startParam && startParam !== telegramId) {
-                // 2. Buscamos al referente por su telegramId, que es lo que llega.
-                referrer = await User.findOne({ telegramId: startParam });
-                if (!referrer) {
-                    console.warn(`[Referral] Se intentó referir con un telegramId inválido o no existente: ${startParam}`);
+            
+            // Lógica de referidos blindada:
+            if (refCode && refCode !== telegramId) {
+                // Buscamos al referente por su Telegram ID, que es lo que el bot pasa.
+                referrer = await User.findOne({ telegramId: refCode });
+                if (referrer) {
+                    console.log(`[Sync] Referente encontrado: ${referrer.username} (${refCode})`);
+                } else {
+                    console.warn(`[Sync] Código de referido (${refCode}) no corresponde a ningún usuario existente.`);
                 }
             }
-            // --- FIN DE LA CORRECCIÓN DE REFERIDOS ---
             
-            const photoFileId = await getPhotoFileId(telegramId);
-            const fullName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim();
+            const fullName = `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim();
 
-            user = new User({ 
-                telegramId, 
-                username: userData.username || `user_${telegramId}`,
-                fullName: fullName || userData.username,
-                language: userData.languageCode || 'es', 
-                photoFileId: photoFileId,
-                referredBy: referrer ? referrer._id : null 
+            user = await User.create({
+                telegramId,
+                username: telegramUser.username || `user_${telegramId}`,
+                fullName: fullName || telegramUser.username,
+                language: telegramUser.language_code || 'es',
+                // Dejamos photoFileId nulo. Se puede obtener en una llamada separada si es necesario.
+                referredBy: referrer ? referrer._id : null
             });
-            await user.save();
-            
+
+            // Si se encontró un referente, actualizarlo.
             if (referrer) {
-                // 3. Añadimos el nuevo usuario a la lista de referidos del referente.
                 referrer.referrals.push({ level: 1, user: user._id });
                 await referrer.save();
-                console.log(`[Referral] Usuario ${user.username} ha sido referido por ${referrer.username}.`);
+                console.log(`[Sync] Usuario ${user.username} añadido a la lista de referidos de ${referrer.username}.`);
             }
         } else {
-            if (!user.photoFileId) {
-                user.photoFileId = await getPhotoFileId(telegramId);
-                if (user.photoFileId) await user.save();
-            }
+             console.log(`[Sync] Usuario existente: ${user.username}. Actualizando datos si es necesario.`);
+             // Opcional: Aquí se puede añadir lógica para actualizar datos del usuario si han cambiado en Telegram.
+             user.username = telegramUser.username || user.username;
+             await user.save();
         }
-        
-        const [userWithTools, settings] = await Promise.all([
-            User.findById(user._id).populate('activeTools.tool'),
-            Setting.findOneAndUpdate({ singleton: 'global_settings' }, { $setOnInsert: { singleton: 'global_settings' } }, { upsert: true, new: true, setDefaultsOnInsert: true })
-        ]);
 
-        const userObject = userWithTools.toObject();
-        // CORRECCIÓN: Obtenemos la URL de descarga directa de Telegram
+        // 3. DEVOLVER DATOS Y TOKEN
+        // Poblamos las herramientas activas para el estado inicial.
+        const userWithDetails = await User.findById(user._id).populate('activeTools.tool');
+        const settings = await Setting.findOne({ singleton: 'global_settings' }) || await Setting.create({ singleton: 'global_settings' });
+
+        const userObject = userWithDetails.toObject();
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
+        
+        const token = generateToken(user._id);
 
-        if (userObject.referredBy) {
-            const referrerData = await User.findById(userObject.referredBy).select('telegramId');
-            if (referrerData) userObject.referrerId = referrerData.telegramId;
-        }
-        const token = generateToken(userObject._id, userObject.role, userObject.username);
-        res.json({ token, user: userObject, settings });
+        res.status(200).json({
+            token,
+            user: userObject,
+            settings
+        });
+
     } catch (error) {
-        console.error("Error en authTelegramUser:", error);
-        res.status(401).json({ message: `Autenticación fallida: ${error.message}` });
+        console.error("Error catastrófico en syncUser:", error);
+        res.status(500).json({ message: `Error interno del servidor: ${error.message}` });
     }
 };
+// ======================== FIN DE LA NUEVA LÓGICA DE SINCRONIZACIÓN =========================
+
+
+// --- FUNCIONES EXISTENTES QUE SE MANTIENEN ---
 
 const getUserProfile = async (req, res) => {
     try {
-        const [user, settings] = await Promise.all([
-            User.findById(req.user.id).populate('activeTools.tool'),
-            Setting.findOne({ singleton: 'global_settings' })
-        ]);
-        if (!user) { return res.status(404).json({ message: 'Usuario no encontrado' }); }
+        const user = await User.findById(req.user.id).populate('activeTools.tool');
+        if (!user) {
+            return res.status(404).json({ message: 'Usuario no encontrado' });
+        }
         
+        const settings = await Setting.findOne({ singleton: 'global_settings' });
         const userObject = user.toObject();
-        // CORRECCIÓN: Obtenemos la URL de descarga directa de Telegram
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
 
-        if (userObject.referredBy) {
-            const referrerData = await User.findById(userObject.referredBy).select('telegramId');
-            if (referrerData) userObject.referrerId = referrerData.telegramId;
-        }
         res.json({ user: userObject, settings: settings || {} });
     } catch (error) {
+        console.error("Error en getUserProfile:", error);
         res.status(500).json({ message: 'Error del servidor' });
     }
 };
 
 const loginAdmin = async (req, res) => {
     const { username, password } = req.body;
-    if (!username || !password) {
-        return res.status(400).json({ message: 'Por favor, ingrese usuario y contraseña.' });
-    }
     try {
         const adminUser = await User.findOne({
-            $or: [{ username: username }, { telegramId: username }]
+            $or: [{ username }, { telegramId: username }]
         }).select('+password');
 
         if (adminUser && adminUser.role === 'admin' && (await adminUser.matchPassword(password))) {
-            const token = generateToken(adminUser._id, adminUser.role, adminUser.username);
-            // CORRECCIÓN: Obtenemos la URL de descarga directa de Telegram
+            const token = generateToken(adminUser._id);
             const photoUrl = await getTemporaryPhotoUrl(adminUser.photoFileId) || PLACEHOLDER_AVATAR_URL;
             
             res.json({ 
@@ -146,15 +127,22 @@ const loginAdmin = async (req, res) => {
                 username: adminUser.username, 
                 role: adminUser.role, 
                 isTwoFactorEnabled: adminUser.isTwoFactorEnabled, 
-                token: token, 
-                photoUrl: photoUrl 
+                token, 
+                photoUrl
             });
         } else {
             res.status(401).json({ message: 'Credenciales inválidas.' });
         }
     } catch (error) {
+        console.error("Error en loginAdmin:", error);
         res.status(500).json({ message: 'Error del servidor' });
     }
 };
 
-module.exports = { authTelegramUser, getUserProfile, loginAdmin };
+
+// Exportamos la nueva función 'syncUser' y mantenemos las existentes.
+module.exports = {
+    syncUser,
+    getUserProfile,
+    loginAdmin
+};
