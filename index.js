@@ -1,4 +1,4 @@
-// backend/index.js (CON CORS CORREGIDO Y ROBUSTO)
+// backend/index.js (CÓDIGO FINAL DE PRODUCCIÓN)
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
@@ -8,10 +8,10 @@ const dotenv = require('dotenv');
 const colors = require('colors');
 const { startWatcher } = require('./services/blockchainWatcherService');
 
-console.log('[SISTEMA] Iniciando aplicación NEURO LINK...');
 dotenv.config();
 const connectDB = require('./config/db');
 
+// Verificación de variables de entorno (se mantiene)
 function checkEnvVariables() {
     console.log('[SISTEMA] Verificando variables de entorno críticas...');
     const requiredVars = ['MONGO_URI', 'JWT_SECRET', 'TELEGRAM_BOT_TOKEN', 'FRONTEND_URL', 'ADMIN_URL', 'BACKEND_URL', 'BSCSCAN_API_KEY', 'MASTER_SEED_PHRASE'];
@@ -43,22 +43,31 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 app.disable('etag');
 
 // =======================================================================
-// === INICIO DE LA CORRECCIÓN CRÍTICA DE CORS ===
+// === CONFIGURACIÓN DE MIDDLEWARE (ORDEN CRÍTICO Y CORRECTO) ===
 // =======================================================================
+
+// 1. CORS: Debe ser el primero para manejar las peticiones pre-vuelo (OPTIONS)
+// y permitir que el navegador continúe con la petición principal.
 const whitelist = [process.env.FRONTEND_URL, process.env.ADMIN_URL];
-// =======================================================================
-// === BYPASS TEMPORAL DE CORS PARA DEPURACIÓN ===
-// =======================================================================
-console.warn('[CORS-DEBUG] ¡ADVERTENCIA! CORS está completamente abierto para depuración.'.yellow.bold);
-app.use(cors({
-    origin: '*', // Permite CUALQUIER origen
+console.log(`[CORS] Orígenes permitidos: [${whitelist.join(', ')}]`);
+const corsOptions = {
+    origin: whitelist,
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     credentials: true,
-}));
-// =======================================================================
+};
+app.use(cors(corsOptions));
+
+// 2. BODY PARSER: Debe ir después de CORS y antes de las rutas.
+// Parsea el JSON del body de las peticiones (ej. POST, PUT) y lo pone en `req.body`.
+// SIN ESTO, `req.body` EN TUS CONTROLADORES SERÁ `undefined`.
 app.use(express.json());
+
+// 3. LOGGER: Después de los parsers para que pueda loguear la información de la petición.
 app.use(morgan('dev'));
 
+// =======================================================================
+
+// 4. RUTAS: Van al final, después de que todos los middlewares de preparación se hayan ejecutado.
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/tools', toolRoutes);
@@ -74,13 +83,8 @@ app.use('/api/users', userRoutes);
 const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
 const secretPath = `/api/telegram-webhook/${secretToken}`;
 app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
-console.log('[SISTEMA] ✅ Rutas de API registradas.');
 
-
-// =======================================================================
-// === COMANDO /START FUNCIONANDO COMO PASARELA (GATEWAY) ===
-// =======================================================================
-
+// Lógica del bot (Pasarela) se mantiene sin cambios.
 const WELCOME_MESSAGE = `
 👋 ¡Bienvenido a NEURO LINK!\n\n
 🔐 Tu acceso privilegiado al universo de la minería digital avanzada. Aquí, cada acción te acerca a recompensas exclusivas en NTX.\n\n
@@ -94,47 +98,26 @@ const WELCOME_MESSAGE = `
 
 bot.command('start', async (ctx) => {
     try {
-        const telegramId = ctx.from.id.toString();
         const startPayload = ctx.startPayload ? ctx.startPayload.trim() : '';
         const baseWebAppUrl = process.env.FRONTEND_URL;
-        const WELCOME_IMAGE_URL = 'https://i.postimg.cc/pVFs2JYx/NEURO-LINK.jpg';
-
-        // Lógica de la Pasarela: Construye la URL final
         let finalWebAppUrl = baseWebAppUrl;
         if (startPayload) {
-            console.log(`[Bot Start] Usuario ${telegramId} ha llegado con startPayload: '${startPayload}'`.cyan);
-            // Adjuntamos el código de referido a la URL que abrirá la Mini App
             finalWebAppUrl = `${baseWebAppUrl}?startapp=${startPayload}`;
         }
-        
-        await ctx.replyWithPhoto(WELCOME_IMAGE_URL, {
+        await ctx.replyWithPhoto('https://i.postimg.cc/pVFs2JYx/NEURO-LINK.jpg', {
             caption: WELCOME_MESSAGE,
             reply_markup: {
-                inline_keyboard: [[
-                    // Usamos la URL final, que puede contener o no el código de referido
-                    Markup.button.webApp('🚀 Abrir App', finalWebAppUrl)
-                ]],
+                inline_keyboard: [[Markup.button.webApp('🚀 Abrir App', finalWebAppUrl)]],
             }
         });
-        
-        await ctx.reply("...", {
-             reply_markup: {
-                remove_keyboard: true
-             }
-        }).then(result => ctx.deleteMessage(result.message_id));
-
+        await ctx.reply("...", { reply_markup: { remove_keyboard: true } }).then(result => ctx.deleteMessage(result.message_id));
     } catch (error) {
-        console.error('[Bot Start] Error en el comando /start:', error);
-        await ctx.reply('Hubo un error al iniciar. Por favor, intenta de nuevo.').catch(e => console.error("Error en fallback de /start", e));
+        console.error('[Bot Start] Error:', error);
     }
 });
-
 bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
 
-// =======================================================================
-// === FIN DEL BLOQUE DE PASARELA ===
-// =======================================================================
-
+// 5. MANEJADORES DE ERRORES: Siempre al final de todo.
 app.use(notFound);
 app.use(errorHandler);
 
@@ -148,8 +131,8 @@ const server = app.listen(PORT, async () => {
         const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
         await bot.telegram.setWebhook(webhookUrl, { secret_token: secretToken, drop_pending_updates: true });
         console.log(`[SERVIDOR] ✅ Webhook configurado en: ${webhookUrl}`.green.bold);
-    } catch (telegramError) {
-        console.error("[SERVIDOR] ❌ ERROR AL CONFIGURAR TELEGRAM:", telegramError.message);
+    } catch (e) {
+        console.error("[SERVIDOR] ❌ ERROR AL CONFIGURAR TELEGRAM:", e.message);
     }
 });
 
