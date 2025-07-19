@@ -1,29 +1,160 @@
-const User = require('../models/User');
+// backend/controllers/authController.js (VERSIÓN v17.0 - ESTRATEGIA URL DIRECTA)
+const User = require('../models/userModel');
+const PendingReferral = require('../models/pendingReferralModel');
+const Setting = require('../models/settingsModel');
+const jwt = require('jsonwebtoken');
+const { validate, parse } = require('@telegram-apps/init-data-node');
+const axios = require('axios');
+const { getTemporaryPhotoUrl } = require('./userController'); // <-- IMPORTAMOS LA NUEVA FUNCIÓN
 
-exports.syncUser = async (req, res) => {
-  const { user, refCode } = req.body;
+const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
+const PLACEHOLDER_AVATAR_URL = `${process.env.FRONTEND_URL}/assets/images/user-avatar-placeholder.png`;
 
-  if (!user || !refCode) {
-    return res.status(400).json({ error: 'Faltan datos' });
-  }
-
-  try {
-    const existingUser = await User.findOne({ telegramId: user.telegramId });
-
-    if (existingUser) {
-      // Actualizar datos del usuario existente
-      existingUser.name = user.name;
-      existingUser.username = user.username;
-      await existingUser.save();
-      return res.json({ token: existingUser.token, user: existingUser, settings: existingUser.settings });
-    } else {
-      // Crear nuevo usuario
-      const newUser = new User({ telegramId: user.telegramId, name: user.name, username: user.username, refCode });
-      await newUser.save();
-      return res.json({ token: newUser.token, user: newUser, settings: newUser.settings });
+const getPhotoFileId = async (userId) => {
+    try {
+        const response = await axios.get(`${TELEGRAM_API_URL}/getUserProfilePhotos`, {
+            params: { user_id: userId, limit: 1 },
+            timeout: 5000
+        });
+        if (response.data.ok && response.data.result.photos.length > 0) {
+            const photoArray = response.data.result.photos[0];
+            return photoArray[photoArray.length - 1].file_id;
+        }
+        return null;
+    } catch (error) {
+        console.error(`Error obteniendo el file_id para ${userId}:`, error.message);
+        return null;
     }
-  } catch (error) {
-    console.error('Error al sincronizar usuario:', error);
-    return res.status(500).json({ error: 'Error interno del servidor' });
-  }
 };
+
+const generateToken = (id, role, username) => {
+    const payload = { id, role, username };
+    return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
+};
+
+const authTelegramUser = async (req, res) => {
+    const { initData, startParam } = req.body;
+    if (!initData) { return res.status(400).json({ message: 'initData es requerido.' }); }
+    try {
+        await validate(initData, process.env.TELEGRAM_BOT_TOKEN, { expiresIn: 3600 });
+        const parsedData = parse(initData);
+        const userData = parsedData.user;
+        if (!userData) { return res.status(401).json({ message: 'Información de usuario no encontrada.' }); }
+        
+        const telegramId = userData.id.toString();
+        let user = await User.findOne({ telegramId });
+
+        if (!user) {
+            let referrer = null;
+            // --- INICIO DE LA CORRECCIÓN DE REFERIDOS ---
+            // 1. Verificamos que el startParam exista y no sea el propio ID del usuario.
+            if (startParam && startParam !== telegramId) {
+                // 2. Buscamos al referente por su telegramId, que es lo que llega.
+                referrer = await User.findOne({ telegramId: startParam });
+                if (!referrer) {
+                    console.warn(`[Referral] Se intentó referir con un telegramId inválido o no existente: ${startParam}`);
+                }
+            }
+            // --- FIN DE LA CORRECCIÓN DE REFERIDOS ---
+            
+            const photoFileId = await getPhotoFileId(telegramId);
+            const fullName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim();
+
+            user = new User({ 
+                telegramId, 
+                username: userData.username || `user_${telegramId}`,
+                fullName: fullName || userData.username,
+                language: userData.languageCode || 'es', 
+                photoFileId: photoFileId,
+                referredBy: referrer ? referrer._id : null 
+            });
+            await user.save();
+            
+            if (referrer) {
+                // 3. Añadimos el nuevo usuario a la lista de referidos del referente.
+                referrer.referrals.push({ level: 1, user: user._id });
+                await referrer.save();
+                console.log(`[Referral] Usuario ${user.username} ha sido referido por ${referrer.username}.`);
+            }
+        } else {
+            if (!user.photoFileId) {
+                user.photoFileId = await getPhotoFileId(telegramId);
+                if (user.photoFileId) await user.save();
+            }
+        }
+        
+        const [userWithTools, settings] = await Promise.all([
+            User.findById(user._id).populate('activeTools.tool'),
+            Setting.findOneAndUpdate({ singleton: 'global_settings' }, { $setOnInsert: { singleton: 'global_settings' } }, { upsert: true, new: true, setDefaultsOnInsert: true })
+        ]);
+
+        const userObject = userWithTools.toObject();
+        // CORRECCIÓN: Obtenemos la URL de descarga directa de Telegram
+        userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
+
+        if (userObject.referredBy) {
+            const referrerData = await User.findById(userObject.referredBy).select('telegramId');
+            if (referrerData) userObject.referrerId = referrerData.telegramId;
+        }
+        const token = generateToken(userObject._id, userObject.role, userObject.username);
+        res.json({ token, user: userObject, settings });
+    } catch (error) {
+        console.error("Error en authTelegramUser:", error);
+        res.status(401).json({ message: `Autenticación fallida: ${error.message}` });
+    }
+};
+
+const getUserProfile = async (req, res) => {
+    try {
+        const [user, settings] = await Promise.all([
+            User.findById(req.user.id).populate('activeTools.tool'),
+            Setting.findOne({ singleton: 'global_settings' })
+        ]);
+        if (!user) { return res.status(404).json({ message: 'Usuario no encontrado' }); }
+        
+        const userObject = user.toObject();
+        // CORRECCIÓN: Obtenemos la URL de descarga directa de Telegram
+        userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
+
+        if (userObject.referredBy) {
+            const referrerData = await User.findById(userObject.referredBy).select('telegramId');
+            if (referrerData) userObject.referrerId = referrerData.telegramId;
+        }
+        res.json({ user: userObject, settings: settings || {} });
+    } catch (error) {
+        res.status(500).json({ message: 'Error del servidor' });
+    }
+};
+
+const loginAdmin = async (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) {
+        return res.status(400).json({ message: 'Por favor, ingrese usuario y contraseña.' });
+    }
+    try {
+        const adminUser = await User.findOne({
+            $or: [{ username: username }, { telegramId: username }]
+        }).select('+password');
+
+        if (adminUser && adminUser.role === 'admin' && (await adminUser.matchPassword(password))) {
+            const token = generateToken(adminUser._id, adminUser.role, adminUser.username);
+            // CORRECCIÓN: Obtenemos la URL de descarga directa de Telegram
+            const photoUrl = await getTemporaryPhotoUrl(adminUser.photoFileId) || PLACEHOLDER_AVATAR_URL;
+            
+            res.json({ 
+                _id: adminUser._id, 
+                username: adminUser.username, 
+                role: adminUser.role, 
+                isTwoFactorEnabled: adminUser.isTwoFactorEnabled, 
+                token: token, 
+                photoUrl: photoUrl 
+            });
+        } else {
+            res.status(401).json({ message: 'Credenciales inválidas.' });
+        }
+    } catch (error) {
+        res.status(500).json({ message: 'Error del servidor' });
+    }
+};
+
+module.exports = { authTelegramUser, getUserProfile, loginAdmin };

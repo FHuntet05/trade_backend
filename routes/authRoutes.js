@@ -1,8 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { syncUser } = require('../controllers/authController');
+const { authTelegramUser, getUserProfile, loginAdmin } = require('../controllers/authController');
+const { verifyLoginToken } = require('../controllers/twoFactorAuthController');
 const { protect } = require('../middleware/authMiddleware');
 
-router.post('/api/auth/sync', protect, syncUser);
+router.post('/login', authTelegramUser);
+router.get('/profile', protect, getUserProfile);
+router.post('/login/admin', loginAdmin);
+router.post('/2fa/verify-login', verifyLoginToken);
 
 module.exports = router;
