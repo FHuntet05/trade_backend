@@ -1,15 +1,14 @@
-// backend/routes/authRoutes.js (CÓDIGO COMPLETO, INTEGRADO Y CORREGIDO)
+// backend/routes/authRoutes.js (CÓDIGO COMPLETO, RESTAURADO Y CORREGIDO)
 const express = require('express');
 const router = express.Router();
-// Importamos todos los controladores necesarios
 const { syncUser, getUserProfile, loginAdmin } = require('../controllers/authController');
 const { verifyLoginToken } = require('../controllers/twoFactorAuthController');
 const { protect } = require('../middleware/authMiddleware');
 
-// Ruta principal para la Mini App (sustituye a /login)
+// La ruta /login se reemplaza conceptualmente por /sync para la Mini App
 router.post('/sync', syncUser);
 
-// Rutas existentes que se mantienen
+// Se mantienen las rutas existentes para no romper la funcionalidad
 router.get('/profile', protect, getUserProfile);
 router.post('/login/admin', loginAdmin);
 router.post('/2fa/verify-login', verifyLoginToken);

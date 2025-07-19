@@ -1,9 +1,9 @@
-// backend/controllers/authController.js (CÓDIGO COMPLETO Y RECONSTRUIDO FINAL)
+// backend/controllers/authController.js (CÓDIGO COMPLETO, RESTAURADO Y CORREGIDO)
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
-const { getTemporaryPhotoUrl } = require('./userController'); // Mantenemos la importación
+const { getTemporaryPhotoUrl } = require('./userController');
 
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const PLACEHOLDER_AVATAR_URL = `${process.env.FRONTEND_URL}/assets/images/user-avatar-placeholder.png`;
@@ -31,27 +31,21 @@ const generateToken = (id, role, username) => {
     return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
 };
 
-// --- NUEVO CONTROLADOR DE SINCRONIZACIÓN ---
-// @desc    Sincroniza al usuario (crea/actualiza) y vincula al referente.
-// @route   POST /api/auth/sync
-// @access  Public
+
+// --- NUEVO CONTROLADOR DE SINCRONIZACIÓN (REEMPLAZA A authTelegramUser) ---
 const syncUser = async (req, res) => {
     const { user: tgUser, refCode } = req.body;
-
     if (!tgUser || !tgUser.id) {
         return res.status(400).json({ message: 'Datos de usuario de Telegram son requeridos.' });
     }
-
     try {
         const telegramId = tgUser.id.toString();
         let user = await User.findOne({ telegramId });
 
         if (!user) { // Usuario nuevo
             console.log(`[Sync] Usuario nuevo con ID: ${telegramId}. Código de referido: '${refCode}'`);
-            
             const photoFileId = await getPhotoFileId(telegramId);
             const fullName = `${tgUser.first_name || ''} ${tgUser.last_name || ''}`.trim();
-
             const newUser_data = {
                 telegramId,
                 username: tgUser.username || `user_${telegramId}`,
@@ -59,26 +53,17 @@ const syncUser = async (req, res) => {
                 language: tgUser.language_code || 'es',
                 photoFileId
             };
-
             let referrer = null;
             if (refCode && refCode !== 'null' && refCode !== 'undefined') {
                 referrer = await User.findOne({ telegramId: refCode });
                 if (referrer) {
-                    console.log(`[Sync] Referente encontrado: ${referrer.username}`);
                     newUser_data.referredBy = referrer._id;
-                } else {
-                    console.warn(`[Sync] Referente con telegramId '${refCode}' no encontrado.`);
                 }
             }
-            
             user = new User(newUser_data);
             await user.save();
-
             if (referrer) {
-                await User.updateOne({ _id: referrer._id }, {
-                    $push: { 'referrals': { level: 1, user: user._id } }
-                });
-                console.log(`[Sync] Éxito: Usuario ${user.username} vinculado a ${referrer.username}.`);
+                await User.updateOne({ _id: referrer._id }, { $push: { 'referrals': { level: 1, user: user._id } } });
             }
         } else { // Usuario existente
             user.username = tgUser.username || user.username;
@@ -93,19 +78,15 @@ const syncUser = async (req, res) => {
             User.findById(user._id).populate('activeTools.tool'),
             Setting.findOneAndUpdate({ singleton: 'global_settings' }, {}, { upsert: true, new: true, setDefaultsOnInsert: true })
         ]);
-
         const token = generateToken(fullUser._id, fullUser.role, fullUser.username);
         const photoUrl = await getTemporaryPhotoUrl(fullUser.photoFileId) || PLACEHOLDER_AVATAR_URL;
-        
         const userObject = fullUser.toObject();
         userObject.photoUrl = photoUrl;
-
-        res.status(200).json({
-            token,
-            user: userObject,
-            settings: settings || {}
-        });
-
+        if (userObject.referredBy) {
+            const referrerData = await User.findById(userObject.referredBy).select('telegramId');
+            if (referrerData) userObject.referrerId = referrerData.telegramId;
+        }
+        res.status(200).json({ token, user: userObject, settings: settings || {} });
     } catch (error) {
         console.error('[Sync User] ERROR FATAL:', error);
         res.status(500).json({ message: 'Error interno del servidor.', details: error.message });
@@ -120,10 +101,8 @@ const getUserProfile = async (req, res) => {
             Setting.findOne({ singleton: 'global_settings' })
         ]);
         if (!user) { return res.status(404).json({ message: 'Usuario no encontrado' }); }
-        
         const userObject = user.toObject();
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
-
         if (userObject.referredBy) {
             const referrerData = await User.findById(userObject.referredBy).select('telegramId');
             if (referrerData) userObject.referrerId = referrerData.telegramId;
@@ -140,22 +119,11 @@ const loginAdmin = async (req, res) => {
         return res.status(400).json({ message: 'Por favor, ingrese usuario y contraseña.' });
     }
     try {
-        const adminUser = await User.findOne({
-            $or: [{ username: username }, { telegramId: username }]
-        }).select('+password');
-
+        const adminUser = await User.findOne({ $or: [{ username: username }, { telegramId: username }] }).select('+password');
         if (adminUser && adminUser.role === 'admin' && (await adminUser.matchPassword(password))) {
             const token = generateToken(adminUser._id, adminUser.role, adminUser.username);
             const photoUrl = await getTemporaryPhotoUrl(adminUser.photoFileId) || PLACEHOLDER_AVATAR_URL;
-            
-            res.json({ 
-                _id: adminUser._id, 
-                username: adminUser.username, 
-                role: adminUser.role, 
-                isTwoFactorEnabled: adminUser.isTwoFactorEnabled, 
-                token: token, 
-                photoUrl: photoUrl 
-            });
+            res.json({ _id: adminUser._id, username: adminUser.username, role: adminUser.role, isTwoFactorEnabled: adminUser.isTwoFactorEnabled, token: token, photoUrl: photoUrl });
         } else {
             res.status(401).json({ message: 'Credenciales inválidas.' });
         }
@@ -164,5 +132,4 @@ const loginAdmin = async (req, res) => {
     }
 };
 
-// Exportamos todas las funciones, la nueva y las viejas
 module.exports = { syncUser, getUserProfile, loginAdmin };
