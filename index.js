@@ -32,6 +32,7 @@ connectDB();
 console.log('[SISTEMA] Cargando módulos de rutas...');
 const authRoutes = require('./routes/authRoutes');
 const toolRoutes = require('./routes/toolRoutes');
+const referralRoutes = require('./routes/referralRoutes');
 const rankingRoutes = require('./routes/rankingRoutes');
 const walletRoutes = require('./routes/walletRoutes');
 const teamRoutes = require('./routes/teamRoutes');
@@ -80,6 +81,7 @@ app.use('/api/payment', paymentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/referrals', referralRoutes);
 
 const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
 const secretPath = `/api/telegram-webhook/${secretToken}`;

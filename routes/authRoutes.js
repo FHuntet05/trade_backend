@@ -10,7 +10,7 @@ const { protect } = require('../middleware/authMiddleware');
 // La nueva ruta para la sincronización inicial del usuario desde la Mini App.
 router.post('/sync', syncUser);
 // ======================== FIN DE LA CORRECCIÓN DE RUTAS =========================
-
+router.post('/validate', validateUser);
 // Rutas existentes que se mantienen
 router.get('/profile', protect, getUserProfile);
 router.post('/login/admin', loginAdmin);
