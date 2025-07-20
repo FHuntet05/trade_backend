@@ -21,7 +21,7 @@ const TRON_API_KEY = process.env.TRONGRID_API_KEY;
 
 // --- CONFIGURACIÓN DE SINCRONIZACIÓN (BSC) ---
 const BATCH_SIZE_BSC = 5000;
-const SYNC_THRESHOLD_BSC = 50000;
+const SYNC_THRESHOLD_BSC = 500000;
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
