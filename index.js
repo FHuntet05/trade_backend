@@ -1,7 +1,6 @@
-// backend/index.js (VERSIÓN FINALÍSIMA v32.1 - LÓGICA COMPLETA)
+// backend/index.js (VERSIÓN FINAL v35.2 - MONITOREO UNIFICADO)
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
-// Módulos necesarios para el servidor, la base de datos y el bot de Telegram.
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
@@ -9,15 +8,20 @@ const morgan = require('morgan');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
 const colors = require('colors');
-const { startWatcher } = require('./services/blockchainWatcherService');
 const connectDB = require('./config/db');
-const User = require('./models/userModel'); // Asegúrese de que la ruta a su modelo es correcta
+const User = require('./models/userModel');
+
+// --- INICIO DE MODIFICACIÓN v35.2 ---
+// Se importa el servicio de monitoreo correcto y unificado.
+const { startMonitoring } = require('./services/transactionMonitor.js');
+// Se mantiene la importación del watcher antiguo, pero NO se usará.
+const { startWatcher } = require('./services/blockchainWatcherService');
+// --- FIN DE MODIFICACIÓN v35.2 ---
 
 console.log('[SISTEMA] Iniciando aplicación NEURO LINK...');
 dotenv.config();
 
 // --- VERIFICACIÓN DE VARIABLES DE ENTORNO ---
-// Función para asegurar que todas las variables críticas están definidas antes de arrancar.
 function checkEnvVariables() {
     console.log('[SISTEMA] Verificando variables de entorno críticas...');
     const requiredVars = ['MONGO_URI', 'JWT_SECRET', 'TELEGRAM_BOT_TOKEN', 'FRONTEND_URL', 'ADMIN_URL', 'BACKEND_URL', 'BSCSCAN_API_KEY', 'MASTER_SEED_PHRASE'];
@@ -66,7 +70,7 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(express.json());
-// app.use(morgan('dev')); // Descomentar para logging detallado de peticiones HTTP
+// app.use(morgan('dev'));
 
 // --- REGISTRO DE RUTAS DE LA API ---
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
@@ -82,7 +86,7 @@ app.use('/api/treasury', treasuryRoutes);
 app.use('/api/users', userRoutes);
 
 // =========================================================================
-// ================== LÓGICA DEL BOT DE TELEGRAM (CORREGIDA) ===============
+// ================== LÓGICA DEL BOT DE TELEGRAM ===========================
 // =========================================================================
 
 const WELCOME_MESSAGE = `
@@ -95,7 +99,6 @@ const WELCOME_MESSAGE = `
 4️⃣ Reclama y Evoluciona: 💎 Recupera tus NTX minados y fortalece tu saldo para futuras estrategias.\n\n
 ✨ Estás listo para comenzar tu travesía. Pulsa el botón inferior y desata el poder de la minería inteligente 🚀
 `;
-const escapeMarkdownV2 = (text) => text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
 
 bot.command('start', async (ctx) => {
     try {
@@ -112,7 +115,6 @@ bot.command('start', async (ctx) => {
         
         console.log(`[Bot /start] Petición de inicio. Usuario: ${referredId}. Potencial Referente: ${referrerId}`.cyan);
 
-        // --- Lógica de procesamiento de referido (SIN CAMBIOS) ---
         let referredUser = await User.findOne({ telegramId: referredId });
         if (!referredUser) {
             const username = ctx.from.username || `user_${referredId}`;
@@ -133,19 +135,12 @@ bot.command('start', async (ctx) => {
         await referredUser.save();
         console.log(`[Bot /start] Perfil del usuario ${referredId} guardado/actualizado en la BD.`);
         
-        // --- INICIO DE LA MODIFICACIÓN: RESPUESTA CON IMAGEN ---
-        
-        // 1. Define la URL de la imagen que quieres mostrar.
-        //    Asegúrate de que sea un enlace directo a una imagen (ej. .jpg, .png).
-        const imageUrl = 'https://i.postimg.cc/x8LsR9fC/NEURO-LINK.jpg'; // <-- CAMBIA ESTA URL POR LA TUYA
-
-        // 2. La URL de la web app sigue siendo limpia.
+        const imageUrl = 'https://i.postimg.cc/x8LsR9fC/NEURO-LINK.jpg';
         const webAppUrl = process.env.FRONTEND_URL;
         
-        // 3. Usa ctx.replyWithPhoto para enviar la imagen con el texto y el botón.
         await ctx.replyWithPhoto(imageUrl, {
-            caption: WELCOME_MESSAGE, // El texto ahora es el 'caption' de la foto.
-            parse_mode: 'Markdown',  // Usamos Markdown estándar para *negritas* e _itálicas_.
+            caption: WELCOME_MESSAGE,
+            parse_mode: 'Markdown',
             reply_markup: {
                 inline_keyboard: [
                     [ Markup.button.webApp('🚀 Abrir App', webAppUrl) ]
@@ -159,21 +154,25 @@ bot.command('start', async (ctx) => {
     }
 });
 
-// --- CONFIGURACIÓN DE COMANDOS Y WEBHOOK (SIN CAMBIOS) ---
+// --- CONFIGURACIÓN DE COMANDOS Y WEBHOOK ---
 bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
-
 const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
 const secretPath = `/api/telegram-webhook/${secretToken}`;
 app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
 
-// --- MIDDLEWARES DE ERROR Y ARRANQUE DEL SERVIDOR (SIN CAMBIOS) ---
+// --- MIDDLEWARES DE ERROR Y ARRANQUE DEL SERVIDOR ---
 app.use(notFound);
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, async () => {
     console.log(`[SERVIDOR] 🚀 Servidor corriendo en puerto ${PORT}`.yellow.bold);
-    startWatcher(); 
+  
+    // --- INICIO DE MODIFICACIÓN v35.2 ---
+    // startWatcher(); // <-- Se comenta el watcher antiguo y defectuoso.
+    startMonitoring(); // <-- Se inicia el monitor nuevo, unificado y correcto.
+    // --- FIN DE MODIFICACIÓN v35.2 ---
+
     try {
         const botInfo = await bot.telegram.getMe();
         console.log(`[SERVIDOR] ✅ Conectado como bot: ${botInfo.username}.`);
