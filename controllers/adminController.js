@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (ACTUALIZADO v35.11 - PRECISIÓN DE GAS)
+// RUTA: backend/controllers/adminController.js (ACTUALIZADO v35.12 - TESORERÍA DINÁMICA)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -331,7 +331,6 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
     else { res.status(400).json({ message: 'Token inválido.' }); }
 });
 
-// --- INICIO DE MODIFICACIÓN v35.11 ---
 async function _getBalancesForAddress(address, chain) {
     const TIMEOUT_MS = 15000;
     try {
@@ -343,16 +342,12 @@ async function _getBalancesForAddress(address, chain) {
                 promiseWithTimeout(bscProvider.getBalance(address), TIMEOUT_MS)
             ]);
             
-            // Log para depuración profunda:
             console.log(`[_getBalancesForAddress DEBUG] Wallet: ${address}, Raw BNB: ${bnbBalanceRaw.toString()}, Formatted BNB: ${ethers.utils.formatEther(bnbBalanceRaw)}`);
 
-            // Retornamos el BNB con mayor precisión para la comparación.
-            // Para la UI, podemos formatearlo a una cantidad fija de decimales si es necesario.
             const bnbFormatted = ethers.utils.formatEther(bnbBalanceRaw);
             return { 
                 usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw, 18)), 
-                // Convertimos el string a un número de forma segura o lo mantenemos como string para máxima precisión
-                bnb: parseFloat(bnbFormatted), // Mantenemos parseFloat aquí para consistencia con otros calculos
+                bnb: parseFloat(bnbFormatted),
                 trx: 0 
             };
         } else if (chain === 'TRON') {
@@ -368,7 +363,6 @@ async function _getBalancesForAddress(address, chain) {
                 promiseWithTimeout(tempTronWeb.trx.getBalance(address), TIMEOUT_MS)
             ]);
 
-            // Log para depuración profunda:
             console.log(`[_getBalancesForAddress DEBUG] Wallet: ${address}, Raw TRX: ${trxBalanceRaw.toString()}, Formatted TRX: ${tempTronWeb.fromSun(trxBalanceRaw)}`);
 
             const trxFormatted = tempTronWeb.fromSun(trxBalanceRaw);
@@ -383,32 +377,38 @@ async function _getBalancesForAddress(address, chain) {
         throw new Error(`Fallo al escanear ${address}. Causa: ${error.message}`);
     }
 }
-// --- FIN DE MODIFICACIÓN v35.11 ---
 
-
+// --- INICIO DE MODIFICACIÓN v35.12 ---
 const getTreasuryWalletsList = asyncHandler(async (req, res) => {
     const wallets = await CryptoWallet.find({}).select('address chain user').populate('user', 'username').lean();
     
-    // Iteramos sobre las wallets para obtener sus saldos en tiempo real
-    const walletsWithBalances = await Promise.all(wallets.map(async (wallet) => {
+    const walletsWithDetails = await Promise.all(wallets.map(async (wallet) => {
         try {
             const balances = await _getBalancesForAddress(wallet.address, wallet.chain);
-            // Formatear el saldo de gas para la UI con 6 decimales.
-            const gasFormattedForUI = wallet.chain === 'BSC' ? balances.bnb.toFixed(6) : balances.trx.toFixed(6);
+            let estimatedRequiredGas = 0;
+            if (balances.usdt > 0.000001) { // Solo estimar si hay USDT para barrer
+                if (wallet.chain === 'BSC') {
+                    estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt);
+                } else if (wallet.chain === 'TRON') {
+                    estimatedRequiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt);
+                }
+            }
+            
             return {
                 ...wallet,
                 usdtBalance: balances.usdt,
-                gasBalance: parseFloat(gasFormattedForUI) // Aseguramos que se muestre con 6 decimales
+                gasBalance: wallet.chain === 'BSC' ? balances.bnb : balances.trx,
+                estimatedRequiredGas: estimatedRequiredGas // ¡NUEVO CAMPO!
             };
         } catch (error) {
-            console.error(`Error al obtener balances para la wallet ${wallet.address}: ${error.message}`);
-            return { ...wallet, usdtBalance: 0, gasBalance: 0 }; // Devolver 0 en caso de error
+            console.error(`Error al obtener detalles para la wallet ${wallet.address}: ${error.message}`);
+            return { ...wallet, usdtBalance: 0, gasBalance: 0, estimatedRequiredGas: 0 };
         }
     }));
 
-    res.json(walletsWithBalances); // Enviar la lista con los balances
+    res.json(walletsWithDetails.filter(w => w.usdtBalance > 0 || w.gasBalance > 0)); // Filtrar solo wallets con algún saldo
 });
-
+// --- FIN DE MODIFICACIÓN v35.12 ---
 
 const getWalletBalance = asyncHandler(async (req, res) => {
     const { address, chain } = req.body;
@@ -458,8 +458,7 @@ const sweepFunds = asyncHandler(async (req, res) => {
                 report.details.push({ address: wallet.address, status: 'SKIPPED_NO_TOKEN', reason: 'Saldo de USDT es cero o insignificante.' }); 
                 continue; 
             }
-            // Comparación de BigNumber a BigNumber para máxima precisión
-            // Nota: Aquí comparamos números de punto flotante ya que las funciones estimate retornan floats
+            
             if (gasBalance < estimatedRequiredGas) { 
                 report.summary.skippedForNoGas++; 
                 report.details.push({ address: wallet.address, status: 'SKIPPED_NO_GAS', reason: `Gas insuficiente. Tienes ${gasBalance.toFixed(6)}, se requiere ~${estimatedRequiredGas.toFixed(6)}` }); 
@@ -524,7 +523,6 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
                     walletsNeedingGas.push({ 
                         address: wallet.address, 
                         usdtBalance: balances.usdt, 
-                        // Formatear el gas para la UI con la misma precisión que la estimación
                         gasBalance: parseFloat(gasBalance.toFixed(6)), 
                         requiredGas: parseFloat(requiredGas.toFixed(6))
                     });
@@ -618,7 +616,7 @@ module.exports = {
   updateSettings,
   generateTwoFactorSecret,
   verifyAndEnableTwoFactor,
-  getTreasuryWalletsList,
+  getTreasuryWalletsList, // Exportar la función modificada
   getWalletBalance,
   sweepFunds,
   analyzeGasNeeds,
