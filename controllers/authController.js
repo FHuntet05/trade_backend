@@ -1,25 +1,23 @@
-// backend/controllers/authController.js (VERSIÓN REFERIDO INSTANTÁNEO v30.0)
+// backend/controllers/authController.js (VERSIÓN FINAL v32.0 - SIMPLIFICADA)
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
 const jwt = require('jsonwebtoken');
-// Asumimos que userController existe y tiene esta función. Si no, debe ser creada o eliminada la llamada.
-const { getTemporaryPhotoUrl } = require('./userController'); 
+const { getTemporaryPhotoUrl } = require('./userController'); // Asegúrese de que este import es correcto
 
 const PLACEHOLDER_AVATAR_URL = `${process.env.FRONTEND_URL}/assets/images/user-avatar-placeholder.png`;
 
-// Generador de token (sin cambios)
 const generateToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 };
 
 /**
  * Sincroniza el usuario cuando la Mini App se abre.
- * NO maneja la lógica de referidos; esta ya fue procesada por el bot.
- * Su objetivo es autenticar al usuario y devolverle su estado completo.
+ * NO maneja la lógica de referidos. Su única misión es autenticar al usuario
+ * y devolverle su estado completo desde la base de datos.
  */
 const syncUser = async (req, res) => {
-    // Ya no se espera un `refCode` en el cuerpo de la petición.
+    // La petición ya no contiene 'refCode'.
     const { telegramUser } = req.body;
     
     console.log(`[Auth Sync] Petición de sincronización para el usuario: ${telegramUser?.id}`);
@@ -31,10 +29,11 @@ const syncUser = async (req, res) => {
     const telegramId = telegramUser.id.toString();
 
     try {
+        // La única responsabilidad de esta función es encontrar al usuario.
+        // Se asume que el comando /start del bot ya lo ha creado.
         let user = await User.findOne({ telegramId });
 
-        // Caso de seguridad: si el usuario por alguna razón no fue creado por el bot, lo creamos aquí.
-        // Esto previene un crash en la app si el usuario abre la app sin haber usado /start.
+        // Caso de seguridad: si el usuario no existe (p. ej., borró la BD y no usó /start).
         if (!user) {
             console.warn(`[Auth Sync] ADVERTENCIA: El usuario ${telegramId} no existía. Creándolo sobre la marcha.`.yellow);
             const username = telegramUser.username || `user_${telegramId}`;
@@ -47,27 +46,23 @@ const syncUser = async (req, res) => {
             });
             await user.save();
         } else {
-            // Opcional: Podríamos actualizar datos como el nombre de usuario o el nombre completo si han cambiado.
+             // Opcional: Actualizamos datos que pueden cambiar, como el nombre de usuario.
             user.username = telegramUser.username || user.username;
             user.fullName = `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim() || user.fullName;
             await user.save();
             console.log(`[Auth Sync] Usuario ${user.username} encontrado y actualizado.`);
         }
         
-        // Obtenemos los datos completos del usuario para enviarlos al frontend.
-        // El `populate` es crucial para obtener la información de las herramientas y el referente.
+        // Obtenemos los datos completos del usuario, incluyendo su referente si existe.
         const userWithDetails = await User.findById(user._id)
             .populate('activeTools.tool')
-            .populate('referredBy', 'username fullName'); // Traemos username y fullName del referente.
+            .populate('referredBy', 'username fullName');
 
-        // Obtenemos la configuración global del sistema.
         const settings = await Setting.findOne({ singleton: 'global_settings' }) || await Setting.create({ singleton: 'global_settings' });
         
         const userObject = userWithDetails.toObject();
-        // Asignamos la URL de la foto de perfil.
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
         
-        // Generamos un token de autenticación para el frontend.
         const token = generateToken(user._id);
 
         console.log(`[Auth Sync] Sincronización exitosa para ${user.username}.`);
@@ -79,7 +74,7 @@ const syncUser = async (req, res) => {
     }
 };
 
-// --- OTRAS FUNCIONES DE AUTENTICACIÓN (sin cambios) ---
+// --- OTRAS FUNCIONES (SIN CAMBIOS) ---
 
 const getUserProfile = async (req, res) => {
     try {

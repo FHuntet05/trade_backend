@@ -1,21 +1,21 @@
-// backend/index.js (VERSIÓN REFERIDO INSTANTÁNEO v30.0)
+// backend/index.js (VERSIÓN FINAL v32.0 - ARQUITECTURA "REFERIDO INSTANTÁNEO")
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
-const morgan = 'morgan';
+const morgan = require('morgan'); // Corregido el import de la v30
 const crypto = require('crypto');
 const dotenv = require('dotenv');
 const colors = require('colors');
 const { startWatcher } = require('./services/blockchainWatcherService');
 const connectDB = require('./config/db');
-const User = require('./models/userModel'); // IMPORTANTE: Asegurarse de que el modelo User está importado.
+const User = require('./models/userModel');
 
 console.log('[SISTEMA] Iniciando aplicación NEURO LINK...');
 dotenv.config();
 
-// Verificación de variables de entorno (sin cambios)
+// --- VERIFICACIÓN DE VARIABLES DE ENTORNO (SIN CAMBIOS) ---
 function checkEnvVariables() {
     console.log('[SISTEMA] Verificando variables de entorno críticas...');
     const requiredVars = ['MONGO_URI', 'JWT_SECRET', 'TELEGRAM_BOT_TOKEN', 'FRONTEND_URL', 'ADMIN_URL', 'BACKEND_URL', 'BSCSCAN_API_KEY', 'MASTER_SEED_PHRASE'];
@@ -28,7 +28,7 @@ function checkEnvVariables() {
 }
 checkEnvVariables();
 
-// Conexión a la base de datos (sin cambios)
+// --- CONEXIÓN A BASE DE DATOS (SIN CAMBIOS) ---
 connectDB();
 
 // --- IMPORTACIÓN DE RUTAS ---
@@ -64,7 +64,7 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(express.json());
-// app.use(morgan('dev')); // Descomentar si se necesita logging de peticiones
+// app.use(morgan('dev')); // Descomentar si se necesita logging detallado de peticiones
 
 // --- RUTAS DE LA API ---
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
@@ -79,9 +79,8 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
 app.use('/api/users', userRoutes);
 
-
 // =========================================================================
-// ================== LÓGICA DEL BOT DE TELEGRAM (MODIFICADA) ==============
+// ================== LÓGICA DEL BOT DE TELEGRAM (SU LÓGICA) ===============
 // =========================================================================
 
 const WELCOME_MESSAGE = `
@@ -98,14 +97,20 @@ const escapeMarkdownV2 = (text) => text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\
 
 bot.command('start', async (ctx) => {
     try {
-        const referredId = ctx.from.id.toString(); // ID del usuario nuevo que usa el bot
-        const referrerId = ctx.startPayload ? ctx.startPayload.trim() : null; // ID del usuario que lo refirió
+        const referredId = ctx.from.id.toString(); // El usuario que ejecuta el comando
+        let referrerId = null;
+
+        // Extraemos el ID del referente del payload del comando /start
+        const payload = ctx.startPayload ? ctx.startPayload.trim() : null;
+        if (payload && payload.startsWith('ref_')) {
+            referrerId = payload.substring(4); // Extraemos el ID después de "ref_"
+        }
         
         console.log(`[Bot /start] Petición de inicio. Usuario: ${referredId}. Potencial Referente: ${referrerId}`.cyan);
 
         // --- INICIO DE LA LÓGICA DE PROCESAMIENTO DE REFERIDO ---
 
-        // 1. Buscamos al usuario que está usando el comando.
+        // 1. Buscamos al usuario que está usando el comando (el referido).
         let referredUser = await User.findOne({ telegramId: referredId });
 
         // 2. Si el usuario no existe, lo creamos en memoria.
@@ -121,11 +126,9 @@ bot.command('start', async (ctx) => {
             });
         }
 
-        // 3. Procesamos la referencia SI:
-        //    a) Existe un ID de referente.
-        //    b) El usuario no se está refiriendo a sí mismo.
-        //    c) El usuario no tiene ya un referente asignado.
-        if (referrerId && referrerId !== referredId && !referredUser.referredBy) {
+        // 3. Verificamos y aplicamos la lógica de referido.
+        const canBeReferred = referrerId && referrerId !== referredId && !referredUser.referredBy;
+        if (canBeReferred) {
             console.log(`[Bot /start] Procesando referido del referente ${referrerId} para el usuario ${referredId}.`);
             const referrerUser = await User.findOne({ telegramId: referrerId });
 
@@ -133,7 +136,7 @@ bot.command('start', async (ctx) => {
                 console.log(`[Bot /start] Referente ${referrerUser.username} válido encontrado. Estableciendo relación.`);
                 referredUser.referredBy = referrerUser._id; // Asignamos la referencia
                 
-                // Añadimos al nuevo referido a la lista del referente
+                // Añadimos al nuevo referido a la lista del referente si no existe ya
                 if (!referrerUser.referrals.some(ref => ref.user.equals(referredUser._id))) {
                     referrerUser.referrals.push({ level: 1, user: referredUser._id });
                     await referrerUser.save(); // Guardamos los cambios en el referente
@@ -144,14 +147,13 @@ bot.command('start', async (ctx) => {
             }
         }
 
-        // 4. Guardamos los cambios del usuario referido (sea nuevo o actualizado).
+        // 4. Guardamos los cambios del usuario referido (sea nuevo o actualizado con referente).
         await referredUser.save();
         console.log(`[Bot /start] Perfil del usuario ${referredId} guardado/actualizado en la BD.`);
 
         // --- FIN DE LA LÓGICA DE PROCESAMIENTO ---
 
-        // 5. Respondemos al usuario con el mensaje de bienvenida y el botón.
-        // La URL de la web app es ahora siempre la misma, limpia y sin parámetros.
+        // 5. Respondemos al usuario con la URL LIMPIA, sin parámetros.
         const webAppUrl = process.env.FRONTEND_URL;
         
         await ctx.replyWithMarkdownV2(
@@ -163,7 +165,6 @@ bot.command('start', async (ctx) => {
 
     } catch (error) {
         console.error('[Bot /start] ERROR FATAL EN EL COMANDO START:'.red.bold, error);
-        // Enviamos un mensaje de error genérico al usuario para no exponer detalles.
         try {
             await ctx.reply('Lo sentimos, ha ocurrido un error al procesar tu solicitud. Por favor, intenta de nuevo más tarde.');
         } catch (replyError) {
@@ -172,15 +173,14 @@ bot.command('start', async (ctx) => {
     }
 });
 
-// Configuración de comandos visibles en Telegram
+// --- CONFIGURACIÓN DE COMANDOS Y WEBHOOK ---
 bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
 
-// --- WEBHOOK Y ARRANQUE DEL SERVIDOR ---
 const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
 const secretPath = `/api/telegram-webhook/${secretToken}`;
 app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
 
-// Middlewares de manejo de errores (sin cambios)
+// --- MIDDLEWARES DE ERROR Y ARRANQUE DEL SERVIDOR ---
 app.use(notFound);
 app.use(errorHandler);
 
