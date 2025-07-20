@@ -1,4 +1,4 @@
-// backend/services/transactionMonitor.js (SOLUCIÓN BUSD/USDT v35.5 - DETECCIÓN DE MÚLTIPLES STABLECOINS)
+// backend/services/transactionMonitor.js (DEPURACIÓN EXTREMA v35.6 - ULTIMA ESPERANZA DE LOGS)
 const axios = require('axios');
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -7,10 +7,9 @@ const { ethers } = require('ethers');
 const { sendTelegramMessage } = require('./notificationService');
 const { getPrice } = require('./priceService');
 
-// --- CONFIGURACIÓN DE CONSTANTES (ACTUALIZADO PARA BUSD) ---
+// --- CONFIGURACIÓN DE CONSTANTES ---
 const USDT_CONTRACT_BSC = '0x55d398326f99059fF775485246999027B3197955'; // Tether USDT BEP20
 const BUSD_CONTRACT_BSC = '0xe9e7CEA3DedcA5984780Bf86fEE1060eC3d';     // Binance USD (BUSD) BEP20
-// Array de contratos de stablecoins que queremos monitorear en BSC
 const BSC_STABLECOIN_CONTRACTS = [
     USDT_CONTRACT_BSC.toLowerCase(),
     BUSD_CONTRACT_BSC.toLowerCase()
@@ -29,13 +28,12 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifier) {
     const existingTx = await Transaction.findOne({ 'metadata.txid': txid });
     if (existingTx) {
+        // console.log(`[ProcessDeposit] Depósito ya procesado: ${txid}. Saltando.`);
         return;
     }
 
     console.log(`[ProcessDeposit] Procesando nuevo depósito: ${amount} ${currency} para usuario ${wallet.user} (TXID: ${txid})`);
     
-    // Si la moneda original es BNB/TRX, su precio se obtiene de la DB.
-    // Si es USDT/BUSD, su precio es 1 (porque se acreditan directamente como USDT).
     const price = (currency === 'BNB' || currency === 'TRX') ? await getPrice(currency) : 1;
     
     if (!price) {
@@ -43,7 +41,7 @@ async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifie
         return;
     }
 
-    const amountInUSDT = amount * price; // Convertir a USDT
+    const amountInUSDT = amount * price;
     const user = await User.findByIdAndUpdate(wallet.user, { $inc: { 'balance.usdt': amountInUSDT } }, { new: true });
     
     if (!user) {
@@ -58,7 +56,7 @@ async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifie
         user: wallet.user,
         type: 'deposit',
         amount: amountInUSDT,
-        currency: 'USDT', // Acreditamos siempre como USDT en el historial
+        currency: 'USDT',
         description: `Depósito de ${amount.toFixed(6)} ${currency} acreditado como ${amountInUSDT.toFixed(2)} USDT`,
         metadata: {
             txid: txid,
@@ -66,7 +64,7 @@ async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifie
             fromAddress: fromAddress,
             toAddress: toAddress,
             originalAmount: amount.toString(),
-            originalCurrency: currency, // Guardamos la moneda original (ej. BUSD)
+            originalCurrency: currency,
             priceUsed: price.toString(),
             blockIdentifier: blockIdentifier.toString(),
         }
@@ -86,7 +84,7 @@ async function getCurrentBscBlock() {
         const url = `https://api.bscscan.com/api?module=proxy&action=eth_blockNumber&apikey=${BSC_API_KEY}`;
         console.log(`[Monitor BSC - DEBUG - getCurrentBscBlock] URL de consulta: ${url}`);
         
-        const response = await axios.get(url);
+        const response = await axios.get(url, { timeout: 10000 }); // Añadir timeout explícito
         
         console.log(`[Monitor BSC - DEBUG - getCurrentBscBlock] Respuesta de Axios (status): ${response.status}`);
         console.log(`[Monitor BSC - DEBUG - getCurrentBscBlock] Respuesta de Axios (data):`, response.data);
@@ -115,51 +113,46 @@ async function getCurrentBscBlock() {
 async function scanBscBlockRange(wallet, startBlock, endBlock) {
     let latestBlockInScan = startBlock;
     try {
-        // --- INICIO DE MODIFICACIÓN v35.5 ---
-        // Se obtiene TODAS las transferencias de tokens (BEP20) y luego se filtra por stablecoins.
-        // Esto es más flexible que pedir a la API un contrato específico.
+        console.log(`[Monitor BSC - DEBUG - scanBscBlockRange] Iniciando escaneo para ${wallet.address} de ${startBlock} a ${endBlock}`);
+        
         const allTokenTxUrl = `https://api.bscscan.com/api?module=account&action=tokentx&address=${wallet.address}&startblock=${startBlock}&endblock=${endBlock}&sort=asc&apikey=${BSC_API_KEY}`;
-        console.log(`[Monitor BSC - DEBUG] Consultando BscScan para ${wallet.address} (TODOS los BEP20) desde bloque ${startBlock} hasta ${endBlock}`);
-        const allTokenTxResponse = await axios.get(allTokenTxUrl);
-
-        console.log(`[Monitor BSC - DEBUG] BscScan All BEP20 Response Status para ${wallet.address}: ${allTokenTxResponse.data.status}`);
+        console.log(`[Monitor BSC - DEBUG - scanBscBlockRange] URL BEP20: ${allTokenTxUrl}`);
+        const allTokenTxResponse = await axios.get(allTokenTxUrl, { timeout: 15000 }); // Añadir timeout
+        
+        console.log(`[Monitor BSC - DEBUG - scanBscBlockRange] BscScan All BEP20 Response Status para ${wallet.address}: ${allTokenTxResponse.data.status}`);
         if (allTokenTxResponse.data.result && allTokenTxResponse.data.result.length > 0) {
-            console.log(`[Monitor BSC - DEBUG] BscScan All BEP20 Result Length para ${wallet.address}: ${allTokenTxResponse.data.result.length}. Primeras 2 TXs:`, allTokenTxResponse.data.result.slice(0, 2));
+            console.log(`[Monitor BSC - DEBUG - scanBscBlockRange] BscScan All BEP20 Result Length para ${wallet.address}: ${allTokenTxResponse.data.result.length}. Primeras 2 TXs:`, allTokenTxResponse.data.result.slice(0, 2));
         } else {
-            console.log(`[Monitor BSC - DEBUG] BscScan All BEP20 Result es vacío o nulo para ${wallet.address}.`);
+            console.log(`[Monitor BSC - DEBUG - scanBscBlockRange] BscScan All BEP20 Result es vacío o nulo para ${wallet.address}.`);
         }
 
         if (allTokenTxResponse.data.status === '1' && Array.isArray(allTokenTxResponse.data.result)) {
             for (const tx of allTokenTxResponse.data.result) {
-                // Filtramos por transacciones ENTRANTES y que sean de nuestros contratos de stablecoins soportados.
                 const txContractAddressLower = tx.contractAddress ? tx.contractAddress.toLowerCase() : null;
                 if (tx.to.toLowerCase() === wallet.address.toLowerCase() && BSC_STABLECOIN_CONTRACTS.includes(txContractAddressLower)) {
                     const amount = parseFloat(ethers.utils.formatUnits(tx.value, tx.tokenDecimal));
-                    // Determinamos la moneda original para el log y metadata.
                     const originalCurrency = txContractAddressLower === USDT_CONTRACT_BSC.toLowerCase() ? 'USDT' : 
                                              (txContractAddressLower === BUSD_CONTRACT_BSC.toLowerCase() ? 'BUSD' : 'UNKNOWN_TOKEN');
                     
-                    console.log(`[Monitor BSC - DEBUG] Stablecoin (${originalCurrency}) detectada en ${tx.hash} para ${wallet.address}.`);
+                    console.log(`[Monitor BSC - DEBUG - scanBscBlockRange] Stablecoin (${originalCurrency}) detectada: ${tx.hash}`);
                     await processDeposit(tx, wallet, amount, originalCurrency, tx.hash, tx.blockNumber);
                     latestBlockInScan = Math.max(latestBlockInScan, parseInt(tx.blockNumber));
                 } else if (tx.to.toLowerCase() === wallet.address.toLowerCase()) {
-                    // Log para depuración: se detectó un token, pero no es una de nuestras stablecoins soportadas
-                    console.log(`[Monitor BSC - DEBUG] Ignorando token no soportado: ${tx.tokenSymbol} (${tx.contractAddress}) para ${wallet.address}.`);
+                    console.log(`[Monitor BSC - DEBUG - scanBscBlockRange] Ignorando token no soportado: ${tx.tokenSymbol} (${tx.contractAddress}) para ${wallet.address}.`);
                 }
             }
         }
         await sleep(300);
 
-        // El escaneo de BNB sigue igual.
-        console.log(`[Monitor BSC - DEBUG] Consultando BscScan para ${wallet.address} (BNB) desde bloque ${startBlock} hasta ${endBlock}`);
         const bnbUrl = `https://api.bscscan.com/api?module=account&action=txlist&address=${wallet.address}&startblock=${startBlock}&endblock=${endBlock}&sort=asc&apikey=${BSC_API_KEY}`;
-        const bnbResponse = await axios.get(bnbUrl);
-
-        console.log(`[Monitor BSC - DEBUG] BscScan BNB Response Status para ${wallet.address}: ${bnbResponse.data.status}`);
+        console.log(`[Monitor BSC - DEBUG - scanBscBlockRange] URL BNB: ${bnbUrl}`);
+        const bnbResponse = await axios.get(bnbUrl, { timeout: 15000 }); // Añadir timeout
+        
+        console.log(`[Monitor BSC - DEBUG - scanBscBlockRange] BscScan BNB Response Status para ${wallet.address}: ${bnbResponse.data.status}`);
         if (bnbResponse.data.result && bnbResponse.data.result.length > 0) {
-            console.log(`[Monitor BSC - DEBUG] BscScan BNB Result Length para ${wallet.address}: ${bnbResponse.data.result.length}. Primeras 2 TXs:`, bnbResponse.data.result.slice(0, 2));
+            console.log(`[Monitor BSC - DEBUG - scanBscBlockRange] BscScan BNB Result Length para ${wallet.address}: ${bnbResponse.data.result.length}. Primeras 2 TXs:`, bnbResponse.data.result.slice(0, 2));
         } else {
-            console.log(`[Monitor BSC - DEBUG] BscScan BNB Result es vacío o nulo para ${wallet.address}.`);
+            console.log(`[Monitor BSC - DEBUG - scanBscBlockRange] BscScan BNB Result es vacío o nulo para ${wallet.address}.`);
         }
 
         if (bnbResponse.data.status === '1' && Array.isArray(bnbResponse.data.result)) {
@@ -172,7 +165,14 @@ async function scanBscBlockRange(wallet, startBlock, endBlock) {
             }
         }
     } catch (error) {
-        console.error(`[Monitor BSC] Error escaneando el rango ${startBlock}-${endBlock} para ${wallet.address}:`, error.message);
+        console.error(`[Monitor BSC - DEBUG - scanBscBlockRange] EXCEPCIÓN al escanear rango ${startBlock}-${endBlock} para ${wallet.address}: ${error.message}`);
+        if (error.response) {
+            console.error(`[Monitor BSC - DEBUG - scanBscBlockRange] Error Response Status: ${error.response.status}`);
+            console.error(`[Monitor BSC - DEBUG - scanBscBlockRange] Error Response Data:`, error.response.data);
+        } else if (error.request) {
+            console.error(`[Monitor BSC - DEBUG - scanBscBlockRange] Error Request (No Response from Server):`, error.request);
+        }
+        console.error(`[Monitor BSC - DEBUG - scanBscBlockRange] Error Stack:`, error.stack);
     }
     return latestBlockInScan;
 }
@@ -193,6 +193,7 @@ async function checkBscTransactions() {
     console.log(`[Monitor BSC] Encontradas ${wallets.length} wallets. Bloque de red actual: ${currentNetworkBlock}`);
 
     for (const wallet of wallets) {
+        console.log(`[Monitor BSC - DEBUG - checkBscTransactions] Procesando wallet: ${wallet.address} (UserID: ${wallet.user})`);
         let lastScanned = wallet.lastScannedBlock || 0; 
         if (lastScanned === 0) {
             console.log(`[Monitor BSC] Wallet ${wallet.address} (UserID: ${wallet.user}) se escaneará desde el bloque 0 para su primera sincronización.`);
@@ -205,7 +206,9 @@ async function checkBscTransactions() {
             let fromBlock = lastScanned + 1;
             while (fromBlock < currentNetworkBlock) {
                 const toBlock = Math.min(fromBlock + BATCH_SIZE_BSC - 1, currentNetworkBlock);
-                console.log(`[Monitor BSC] Escaneando lote: ${fromBlock} -> ${toBlock} para wallet ${wallet.address}`);
+                // --- INICIO DE LOGS EXTREMOS ---
+                console.log(`[Monitor BSC - DEBUG - checkBscTransactions] Entrando a scanBscBlockRange para lote: ${fromBlock} -> ${toBlock}`);
+                // --- FIN DE LOGS EXTREMOS ---
                 await scanBscBlockRange(wallet, fromBlock, toBlock);
                 await CryptoWallet.findByIdAndUpdate(wallet._id, { lastScannedBlock: toBlock });
                 fromBlock = toBlock + 1;
@@ -216,6 +219,7 @@ async function checkBscTransactions() {
         } else if (blocksBehind > 0) {
             const startBlock = lastScanned + 1;
             console.log(`[Monitor BSC] Monitoreo normal para ${wallet.address} desde el bloque ${startBlock} hasta ${currentNetworkBlock}.`);
+            console.log(`[Monitor BSC - DEBUG - checkBscTransactions] Entrando a scanBscBlockRange (normal) para: ${startBlock} -> ${currentNetworkBlock}`);
             const latestBlockFound = await scanBscBlockRange(wallet, startBlock, currentNetworkBlock);
             if (latestBlockFound > lastScanned) {
                  await CryptoWallet.findByIdAndUpdate(wallet._id, { lastScannedBlock: latestBlockFound });
@@ -237,10 +241,9 @@ async function scanTronAddress(wallet) {
 
     try {
         console.log(`[Monitor TRON - DEBUG] Consultando TronGrid para ${wallet.address} (USDT) desde timestamp ${minTimestamp}`);
-        // Se mantiene el filtro por contrato específico en TRON, si no hay otras stablecoins.
         const usdtUrl = `https://api.trongrid.io/v1/accounts/${wallet.address}/transactions/trc20?only_to=true&min_timestamp=${minTimestamp}&contract_address=${TRON_USDT_CONTRACT}&limit=200`;
-        const usdtResponse = await axios.get(usdtUrl, { headers: { 'TRON-PRO-API-KEY': TRON_API_KEY } });
-
+        const usdtResponse = await axios.get(usdtUrl, { timeout: 15000 });
+        
         console.log(`[Monitor TRON - DEBUG] TronGrid USDT Response Success para ${wallet.address}: ${usdtResponse.data.success}`);
         if (usdtResponse.data.data && usdtResponse.data.data.length > 0) {
             console.log(`[Monitor TRON - DEBUG] TronGrid USDT Result Length para ${wallet.address}: ${usdtResponse.data.data.length}. Primeras 2 TXs:`, usdtResponse.data.data.slice(0, 2));
@@ -259,7 +262,7 @@ async function scanTronAddress(wallet) {
 
         console.log(`[Monitor TRON - DEBUG] Consultando TronGrid para ${wallet.address} (TRX) desde timestamp ${minTimestamp}`);
         const trxUrl = `https://api.trongrid.io/v1/accounts/${wallet.address}/transactions?only_to=true&min_timestamp=${minTimestamp}&limit=200`;
-        const trxResponse = await axios.get(trxUrl, { headers: { 'TRON-PRO-API-KEY': TRON_API_KEY } });
+        const trxResponse = await axios.get(trxUrl, { timeout: 15000 });
 
         console.log(`[Monitor TRON - DEBUG] TronGrid TRX Response Success para ${wallet.address}: ${trxResponse.data.success}`);
         if (trxResponse.data.data && trxResponse.data.data.length > 0) {
