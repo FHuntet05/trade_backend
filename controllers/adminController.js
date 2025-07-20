@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (ACTUALIZADO v35.14 - TOLERANCIA GAS)
+// RUTA: backend/controllers/adminController.js (ACTUALIZADO v35.16 - CORRECCIÓN DE FILTRADO Y PRECISIÓN)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -30,9 +30,7 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
     return Promise.race([promise, timeout]);
 }
 
-// --- NUEVA CONSTANTE: PEQUEÑA TOLERANCIA PARA COMPARACIONES DE GAS ---
-// Esto ayuda con problemas de punto flotante y permite un pequeño margen para dispensar si está "casi" bien
-const GAS_COMPARISON_EPSILON = 0.000000001; // 1 Gwei en términos de Wei para BNB. Ajustable.
+const GAS_SUFFICIENT_TOLERANCE = 0.000000001; // Pequeña tolerancia para comparaciones de punto flotante
 
 const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
     const pendingTxs = await PendingTx.find()
@@ -281,24 +279,11 @@ const getDashboardStats = asyncHandler(async (req, res) => {
             fullHost: 'https://api.trongrid.io',
             headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
         });
-        tronWebInstance.setPrivateKey(tronWallet.privateKey);
-        const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, bscProvider);
-        const usdtTronContract = await tronWebInstance.contract().at(USDT_TRON_ADDRESS);
+        centralWalletBalances = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(bscWallet.address)));
+        if (chain === 'TRON') {
+            centralWalletBalances = parseFloat(tronWebInstance.fromSun(await tronWebInstance.trx.getBalance(tronWallet.address)));
+        }
         
-        const [bnbBalance, trxBalance, usdtBscBalance, usdtTronBalance] = await Promise.all([
-            bscProvider.getBalance(bscWallet.address),
-            tronWebInstance.trx.getBalance(tronWallet.address), 
-            usdtBscContract.balanceOf(bscWallet.address),
-            usdtTronContract.balanceOf(tronWallet.address).call()
-        ]);
-
-        centralWalletBalances = {
-            bnb: parseFloat(ethers.utils.formatEther(bnbBalance)),
-            trx: parseFloat(tronWebInstance.fromSun(trxBalance)),
-            usdt: parseFloat(ethers.utils.formatUnits(usdtBscBalance, 18)) + parseFloat(ethers.utils.formatUnits(usdtTronBalance.toString(), 6))
-        };
-        await checkAndSendGasAlert('BSC', centralWalletBalances.bnb);
-        await checkAndSendGasAlert('TRON', centralWalletBalances.trx);
     } catch (error) {
         console.error("Error al obtener el balance de la billetera central:", error);
         return res.status(500).json({ message: `No se pudo obtener el balance de la billetera central: ${error.message}` });
@@ -409,7 +394,11 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
         }
     }));
 
-    res.json(walletsWithDetails.filter(w => w.usdtBalance > 0 || w.gasBalance > 0));
+    // --- INICIO DE MODIFICACIÓN v35.16 ---
+    // Eliminar el filtro aquí. El frontend se encarga del filtrado de la tabla,
+    // pero el modal de dispensación manual necesita la lista completa de wallets con balances.
+    res.json(walletsWithDetails); 
+    // --- FIN DE MODIFICACIÓN v35.16 ---
 });
 
 const getWalletBalance = asyncHandler(async (req, res) => {
@@ -461,7 +450,6 @@ const sweepFunds = asyncHandler(async (req, res) => {
                 continue; 
             }
             
-            // La comparación debe ser estricta para el barrido.
             if (gasBalance < estimatedRequiredGas) { 
                 report.summary.skippedForNoGas++; 
                 report.details.push({ address: wallet.address, status: 'SKIPPED_NO_GAS', reason: `Gas insuficiente. Tienes ${gasBalance.toFixed(8)}, se requiere ~${estimatedRequiredGas.toFixed(8)}` }); 
@@ -495,9 +483,9 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
             fullHost: 'https://api.trongrid.io',
             headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
         });
-        centralWalletBalance = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(bscWallet.address)));
+        centralWalletBalances = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(bscWallet.address)));
         if (chain === 'TRON') {
-            centralWalletBalance = parseFloat(tronWebInstance.fromSun(await tronWebInstance.trx.getBalance(tronWallet.address)));
+            centralWalletBalances = parseFloat(tronWebInstance.fromSun(await tronWebInstance.trx.getBalance(tronWallet.address)));
         }
         
     } catch (error) {
@@ -514,7 +502,7 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
             const balances = await _getBalancesForAddress(wallet.address, chain);
             const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
 
-            if (balances.usdt > 0.1) { // Wallets con USDT
+            if (balances.usdt > 0.000001) { // Wallets con USDT
                 let requiredGas = 0;
                 if (chain === 'BSC') {
                     requiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt);
@@ -522,10 +510,11 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
                     requiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt);
                 }
 
-                // --- INICIO DE MODIFICACIÓN v35.14 ---
-                // Aquí, la condición es que el gas sea INSUFICIENTE para que aparezca en la lista
-                // Usamos la tolerancia para asegurar que incluso diferencias mínimas lo incluyan.
-                if (gasBalance < (requiredGas - GAS_COMPARISON_EPSILON)) { 
+                const gasMissing = requiredGas - gasBalance;
+                
+                // Si el gas es menor que el requerido, O si la diferencia es muy pequeña (para cubrir flotantes)
+                // O si el gas es 0 y hay USDT (siempre queremos listarlas para recargar)
+                if (gasBalance < requiredGas || Math.abs(gasMissing) <= GAS_SUFFICIENT_TOLERANCE || gasBalance === 0) { 
                     walletsNeedingGas.push({ 
                         address: wallet.address, 
                         usdtBalance: balances.usdt, 
@@ -533,10 +522,8 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
                         requiredGas: requiredGas 
                     });
                 } else {
-                    // Log para depuración: por qué una wallet con USDT no aparece en la lista de "necesita gas"
-                    console.log(`[analyzeGasNeeds DEBUG] Wallet ${wallet.address} con ${balances.usdt} USDT. Gas: ${gasBalance.toFixed(8)}, Requerido: ${requiredGas.toFixed(8)}. No necesita gas (o la diferencia es mínima).`);
+                    console.log(`[analyzeGasNeeds DEBUG] Wallet ${wallet.address} con ${balances.usdt} USDT. Gas: ${gasBalance.toFixed(8)}, Requerido: ${requiredGas.toFixed(8)}. Gas Faltante: ${gasMissing.toFixed(8)}. No necesita gas (ya tiene suficiente).`);
                 }
-                // --- FIN DE MODIFICACIÓN v35.14 ---
             }
         } catch (error) {
             console.error(`No se pudo analizar la wallet ${wallet.address}: ${error.message}`);
@@ -629,7 +616,7 @@ module.exports = {
   getTreasuryWalletsList,
   getWalletBalance,
   sweepFunds,
-  analyzeGasNeeds, // Exportar la función modificada
+  analyzeGasNeeds,
   dispatchGas,
   adjustUserBalance,
   sendBroadcastNotification,
