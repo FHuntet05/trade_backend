@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (ACTUALIZADO v35.16 - CORRECCIÓN DE FILTRADO Y PRECISIÓN)
+// RUTA: backend/controllers/adminController.js (CORRECCIÓN DE DASHBOARD v35.18)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -30,7 +30,7 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
     return Promise.race([promise, timeout]);
 }
 
-const GAS_SUFFICIENT_TOLERANCE = 0.000000001; // Pequeña tolerancia para comparaciones de punto flotante
+const GAS_SUFFICIENT_TOLERANCE = 0.000000001; 
 
 const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
     const pendingTxs = await PendingTx.find()
@@ -279,14 +279,27 @@ const getDashboardStats = asyncHandler(async (req, res) => {
             fullHost: 'https://api.trongrid.io',
             headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
         });
-        centralWalletBalances = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(bscWallet.address)));
-        if (chain === 'TRON') {
-            centralWalletBalances = parseFloat(tronWebInstance.fromSun(await tronWebInstance.trx.getBalance(tronWallet.address)));
-        }
-        
+        // --- INICIO DE CORRECCIÓN PARA Dashboard Stats ---
+        const [bnbBalanceRaw, trxBalanceRaw, usdtBscBalanceRaw, usdtTronBalanceRaw] = await Promise.all([
+            bscProvider.getBalance(bscWallet.address),
+            tronWebInstance.trx.getBalance(tronWallet.address), 
+            new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, bscProvider).balanceOf(bscWallet.address),
+            (await tronWebInstance.contract().at(USDT_TRON_ADDRESS)).balanceOf(tronWallet.address).call()
+        ]);
+
+        centralWalletBalances = {
+            bnb: parseFloat(ethers.utils.formatEther(bnbBalanceRaw)),
+            trx: parseFloat(tronWebInstance.fromSun(trxBalanceRaw)),
+            usdt: parseFloat(ethers.utils.formatUnits(usdtBscBalanceRaw, 18)) + parseFloat(ethers.utils.formatUnits(usdtTronBalanceRaw.toString(), 6))
+        };
+        // --- FIN DE CORRECCIÓN ---
+
+        await checkAndSendGasAlert('BSC', centralWalletBalances.bnb);
+        await checkAndSendGasAlert('TRON', centralWalletBalances.trx);
     } catch (error) {
         console.error("Error al obtener el balance de la billetera central:", error);
-        return res.status(500).json({ message: `No se pudo obtener el balance de la billetera central: ${error.message}` });
+        // NO HACER res.status(500) aquí, ya que el dashboard no debe fallar por esto
+        centralWalletBalances = { usdt: 0, bnb: 0, trx: 0 }; // Asegurarse de que los balances sean 0 si falla
     }
     
     res.json({ 
@@ -394,11 +407,7 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
         }
     }));
 
-    // --- INICIO DE MODIFICACIÓN v35.16 ---
-    // Eliminar el filtro aquí. El frontend se encarga del filtrado de la tabla,
-    // pero el modal de dispensación manual necesita la lista completa de wallets con balances.
-    res.json(walletsWithDetails); 
-    // --- FIN DE MODIFICACIÓN v35.16 ---
+    res.json(walletsWithDetails);
 });
 
 const getWalletBalance = asyncHandler(async (req, res) => {
@@ -490,8 +499,7 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
         
     } catch (error) {
         console.error("CRITICAL ERROR: Fallo al obtener el balance de la billetera central.", error);
-        res.status(500);
-        throw new Error(`Fallo al obtener balance de billetera central: ${error.message}`);
+        centralWalletBalances = { usdt: 0, bnb: 0, trx: 0 };
     }
     
     const walletsInChain = await CryptoWallet.find({ chain }).lean();
@@ -512,9 +520,9 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
 
                 const gasMissing = requiredGas - gasBalance;
                 
-                // Si el gas es menor que el requerido, O si la diferencia es muy pequeña (para cubrir flotantes)
-                // O si el gas es 0 y hay USDT (siempre queremos listarlas para recargar)
-                if (gasBalance < requiredGas || Math.abs(gasMissing) <= GAS_SUFFICIENT_TOLERANCE || gasBalance === 0) { 
+                // Si el gas es menor que el requerido (con una pequeña tolerancia para flotantes)
+                // O si el gas es 0 (siempre queremos listarlas si tienen USDT y 0 gas)
+                if (gasBalance < requiredGas - GAS_SUFFICIENT_TOLERANCE || gasBalance === 0) { 
                     walletsNeedingGas.push({ 
                         address: wallet.address, 
                         usdtBalance: balances.usdt, 
