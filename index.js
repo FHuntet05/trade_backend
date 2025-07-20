@@ -99,82 +99,59 @@ const escapeMarkdownV2 = (text) => text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\
 
 bot.command('start', async (ctx) => {
     try {
-        const referredId = ctx.from.id.toString(); // El ID del usuario que ejecuta el comando.
-        
-        // --- INICIO DE LA LÓGICA DE EXTRACCIÓN DE REFERENTE (COMPLETA) ---
-        // Esta es la corrección crítica que implementa su lógica.
+        const referredId = ctx.from.id.toString();
         let referrerId = null;
-        
-        // MÉTODO A: El código viene en el payload (cuando se hace clic en un enlace t.me/bot?start=CODIGO).
         if (ctx.startPayload) {
             referrerId = ctx.startPayload.trim();
-            console.log(`[Bot /start] Referente detectado desde startPayload: ${referrerId}`);
-        } 
-        // MÉTODO B: El código viene como texto después del comando (cuando se escribe /start CODIGO).
-        else {
+        } else {
             const parts = ctx.message.text.split(' ');
             if (parts.length > 1 && parts[1]) {
                 referrerId = parts[1].trim();
-                console.log(`[Bot /start] Referente detectado desde texto del mensaje: ${referrerId}`);
             }
         }
-        // --- FIN DE LA LÓGICA DE EXTRACCIÓN ---
-
+        
         console.log(`[Bot /start] Petición de inicio. Usuario: ${referredId}. Potencial Referente: ${referrerId}`.cyan);
 
-        // --- PROCESAMIENTO DE REFERIDO EN EL BACKEND ---
-        
-        // 1. Buscamos al usuario referido.
+        // --- Lógica de procesamiento de referido (SIN CAMBIOS) ---
         let referredUser = await User.findOne({ telegramId: referredId });
-
-        // 2. Si no existe, preparamos un nuevo documento de usuario.
         if (!referredUser) {
-            console.log(`[Bot /start] Usuario ${referredId} no encontrado. Creando nuevo perfil.`);
             const username = ctx.from.username || `user_${referredId}`;
             const fullName = `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim();
-            referredUser = new User({
-                telegramId: referredId,
-                username: username,
-                fullName: fullName || username,
-                language: ctx.from.language_code || 'es',
-            });
+            referredUser = new User({ telegramId: referredId, username, fullName: fullName || username, language: ctx.from.language_code || 'es' });
         }
-
-        // 3. Aplicamos la lógica de referido si se cumplen todas las condiciones.
         const canBeReferred = referrerId && referrerId !== referredId && !referredUser.referredBy;
         if (canBeReferred) {
-            console.log(`[Bot /start] Procesando referido del referente ${referrerId} para el usuario ${referredId}.`);
             const referrerUser = await User.findOne({ telegramId: referrerId });
-
             if (referrerUser) {
-                // Si el referente existe, establecemos la relación.
-                console.log(`[Bot /start] Referente ${referrerUser.username} válido encontrado. Estableciendo relación.`);
                 referredUser.referredBy = referrerUser._id;
-                
-                // Actualizamos la lista de referidos del referente para que lo vea en su equipo.
                 if (!referrerUser.referrals.some(ref => ref.user.equals(referredUser._id))) {
                     referrerUser.referrals.push({ level: 1, user: referredUser._id });
                     await referrerUser.save();
-                    console.log(`[Bot /start] El usuario ${referrerUser.username} ha sido actualizado con su nuevo referido.`);
                 }
-            } else {
-                console.warn(`[Bot /start] ADVERTENCIA: Referente con ID ${referrerId} no encontrado en la BD.`.yellow);
             }
         }
-
-        // 4. Guardamos el estado final del usuario referido.
         await referredUser.save();
         console.log(`[Bot /start] Perfil del usuario ${referredId} guardado/actualizado en la BD.`);
         
-        // 5. Respondemos al usuario con una URL LIMPIA.
+        // --- INICIO DE LA MODIFICACIÓN: RESPUESTA CON IMAGEN ---
+        
+        // 1. Define la URL de la imagen que quieres mostrar.
+        //    Asegúrate de que sea un enlace directo a una imagen (ej. .jpg, .png).
+        const imageUrl = 'https://i.ibb.co/6r02zQ9/photo-2024-07-20-00-09-51.jpg'; // <-- CAMBIA ESTA URL POR LA TUYA
+
+        // 2. La URL de la web app sigue siendo limpia.
         const webAppUrl = process.env.FRONTEND_URL;
         
-        await ctx.replyWithMarkdownV2(
-            escapeMarkdownV2(WELCOME_MESSAGE),
-            Markup.inlineKeyboard([
-                Markup.button.webApp('🚀 Abrir App', webAppUrl)
-            ])
-        );
+        // 3. Usa ctx.replyWithPhoto para enviar la imagen con el texto y el botón.
+        await ctx.replyWithPhoto(imageUrl, {
+            caption: WELCOME_MESSAGE, // El texto ahora es el 'caption' de la foto.
+            parse_mode: 'Markdown',  // Usamos Markdown estándar para *negritas* e _itálicas_.
+            reply_markup: {
+                inline_keyboard: [
+                    [ Markup.button.webApp('🚀 Abrir App', webAppUrl) ]
+                ]
+            }
+        });
 
     } catch (error) {
         console.error('[Bot /start] ERROR FATAL EN EL COMANDO START:'.red.bold, error);
