@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (ACTUALIZADO v35.9 - LÓGICA DE GAS CONSISTENTE)
+// RUTA: backend/controllers/adminController.js (ACTUALIZADO v35.11 - PRECISIÓN DE GAS)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -12,10 +12,10 @@ const { getTemporaryPhotoUrl } = require('./userController');
 const asyncHandler = require('express-async-handler');
 const { sendTelegramMessage } = require('../services/notificationService');
 const transactionService = require('../services/transactionService');
-const gasEstimatorService = require('../services/gasEstimatorService'); // Asegúrate de importar esto
+const gasEstimatorService = require('../services/gasEstimatorService');
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
-const PendingTx = require('../models/pendingTxModel'); // Asegúrate de importar esto
+const PendingTx = require('../models/pendingTxModel');
 const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const PLACEHOLDER_AVATAR_URL = 'https://i.postimg.cc/mD21B6r7/user-avatar-placeholder.png';
 
@@ -331,6 +331,7 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
     else { res.status(400).json({ message: 'Token inválido.' }); }
 });
 
+// --- INICIO DE MODIFICACIÓN v35.11 ---
 async function _getBalancesForAddress(address, chain) {
     const TIMEOUT_MS = 15000;
     try {
@@ -341,7 +342,19 @@ async function _getBalancesForAddress(address, chain) {
                 promiseWithTimeout(usdtBscContract.balanceOf(address), TIMEOUT_MS),
                 promiseWithTimeout(bscProvider.getBalance(address), TIMEOUT_MS)
             ]);
-            return { usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw, 18)), bnb: parseFloat(ethers.utils.formatEther(bnbBalanceRaw)), trx: 0 };
+            
+            // Log para depuración profunda:
+            console.log(`[_getBalancesForAddress DEBUG] Wallet: ${address}, Raw BNB: ${bnbBalanceRaw.toString()}, Formatted BNB: ${ethers.utils.formatEther(bnbBalanceRaw)}`);
+
+            // Retornamos el BNB con mayor precisión para la comparación.
+            // Para la UI, podemos formatearlo a una cantidad fija de decimales si es necesario.
+            const bnbFormatted = ethers.utils.formatEther(bnbBalanceRaw);
+            return { 
+                usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw, 18)), 
+                // Convertimos el string a un número de forma segura o lo mantenemos como string para máxima precisión
+                bnb: parseFloat(bnbFormatted), // Mantenemos parseFloat aquí para consistencia con otros calculos
+                trx: 0 
+            };
         } else if (chain === 'TRON') {
             const tempTronWeb = new TronWeb({
                 fullHost: 'https://api.trongrid.io',
@@ -354,18 +367,48 @@ async function _getBalancesForAddress(address, chain) {
                 promiseWithTimeout(usdtTronContract.balanceOf(address).call(), TIMEOUT_MS),
                 promiseWithTimeout(tempTronWeb.trx.getBalance(address), TIMEOUT_MS)
             ]);
-            return { usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6)), trx: parseFloat(tempTronWeb.fromSun(trxBalanceRaw)), bnb: 0 };
+
+            // Log para depuración profunda:
+            console.log(`[_getBalancesForAddress DEBUG] Wallet: ${address}, Raw TRX: ${trxBalanceRaw.toString()}, Formatted TRX: ${tempTronWeb.fromSun(trxBalanceRaw)}`);
+
+            const trxFormatted = tempTronWeb.fromSun(trxBalanceRaw);
+            return { 
+                usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6)), 
+                trx: parseFloat(trxFormatted),
+                bnb: 0 
+            };
         }
     } catch (error) {
         console.error(`Error al obtener saldo para ${address} en ${chain}:`, error);
         throw new Error(`Fallo al escanear ${address}. Causa: ${error.message}`);
     }
 }
+// --- FIN DE MODIFICACIÓN v35.11 ---
+
 
 const getTreasuryWalletsList = asyncHandler(async (req, res) => {
     const wallets = await CryptoWallet.find({}).select('address chain user').populate('user', 'username').lean();
-    res.json(wallets);
+    
+    // Iteramos sobre las wallets para obtener sus saldos en tiempo real
+    const walletsWithBalances = await Promise.all(wallets.map(async (wallet) => {
+        try {
+            const balances = await _getBalancesForAddress(wallet.address, wallet.chain);
+            // Formatear el saldo de gas para la UI con 6 decimales.
+            const gasFormattedForUI = wallet.chain === 'BSC' ? balances.bnb.toFixed(6) : balances.trx.toFixed(6);
+            return {
+                ...wallet,
+                usdtBalance: balances.usdt,
+                gasBalance: parseFloat(gasFormattedForUI) // Aseguramos que se muestre con 6 decimales
+            };
+        } catch (error) {
+            console.error(`Error al obtener balances para la wallet ${wallet.address}: ${error.message}`);
+            return { ...wallet, usdtBalance: 0, gasBalance: 0 }; // Devolver 0 en caso de error
+        }
+    }));
+
+    res.json(walletsWithBalances); // Enviar la lista con los balances
 });
+
 
 const getWalletBalance = asyncHandler(async (req, res) => {
     const { address, chain } = req.body;
@@ -378,7 +421,6 @@ const getWalletBalance = asyncHandler(async (req, res) => {
     }
 });
 
-// --- INICIO DE MODIFICACIÓN v35.9 ---
 const sweepFunds = asyncHandler(async (req, res) => {
     const { chain, token, recipientAddress, walletsToSweep } = req.body;
     if (!chain || !token || !recipientAddress || !walletsToSweep || !Array.isArray(walletsToSweep)) {
@@ -400,9 +442,8 @@ const sweepFunds = asyncHandler(async (req, res) => {
             const tokenBalance = balances.usdt;
             const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
 
-            // 1. Re-estimar el gas necesario para este barrido específico.
             let estimatedRequiredGas = 0;
-            if (tokenBalance > 0.000001) { // Solo estimar si hay USDT para barrer
+            if (tokenBalance > 0.000001) {
                 if (chain === 'BSC') {
                     estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, tokenBalance);
                 } else if (chain === 'TRON') {
@@ -417,7 +458,8 @@ const sweepFunds = asyncHandler(async (req, res) => {
                 report.details.push({ address: wallet.address, status: 'SKIPPED_NO_TOKEN', reason: 'Saldo de USDT es cero o insignificante.' }); 
                 continue; 
             }
-            // 2. Usar la estimación dinámica para el umbral de gas.
+            // Comparación de BigNumber a BigNumber para máxima precisión
+            // Nota: Aquí comparamos números de punto flotante ya que las funciones estimate retornan floats
             if (gasBalance < estimatedRequiredGas) { 
                 report.summary.skippedForNoGas++; 
                 report.details.push({ address: wallet.address, status: 'SKIPPED_NO_GAS', reason: `Gas insuficiente. Tienes ${gasBalance.toFixed(6)}, se requiere ~${estimatedRequiredGas.toFixed(6)}` }); 
@@ -435,7 +477,6 @@ const sweepFunds = asyncHandler(async (req, res) => {
     }
     res.json(report);
 });
-// --- FIN DE MODIFICACIÓN v35.9 ---
 
 const analyzeGasNeeds = asyncHandler(async (req, res) => {
     const { chain } = req.body;
@@ -483,8 +524,9 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
                     walletsNeedingGas.push({ 
                         address: wallet.address, 
                         usdtBalance: balances.usdt, 
-                        gasBalance: gasBalance,
-                        requiredGas: requiredGas
+                        // Formatear el gas para la UI con la misma precisión que la estimación
+                        gasBalance: parseFloat(gasBalance.toFixed(6)), 
+                        requiredGas: parseFloat(requiredGas.toFixed(6))
                     });
                 }
             }
