@@ -1,10 +1,13 @@
-// backend/services/transactionMonitor.js (SOLUCIÓN FINAL v35.9 - VERIFICACIÓN PENDING_TX + ROBUSTEZ)
+// backend/services/transactionMonitor.js (VERIFICACIÓN FINAL DE INTEGRIDAD v35.10 - INCLUYE TODAS LAS FUNCIONES)
+// DESCRIPCIÓN: Versión consolidada con verificación de PENDING_TX, robustez y todas las funciones.
+
 const axios = require('axios');
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
-const PendingTx = require('../models/pendingTxModel'); // Asegúrate de importar PendingTxModel
+const PendingTx = require('../models/pendingTxModel'); // Importar el modelo PendingTx
 const { ethers } = require('ethers');
+const TronWeb = require('tronweb'); // Importar TronWeb
 const { sendTelegramMessage } = require('./notificationService');
 const { getPrice } = require('./priceService');
 
@@ -21,8 +24,8 @@ const BSC_API_KEY = process.env.BSCSCAN_API_KEY;
 const TRON_API_KEY = process.env.TRONGRID_API_KEY;
 
 // --- CONFIGURACIÓN DE SINCRONIZACIÓN (BSC) ---
-const BATCH_SIZE_BSC = 500;    
-const SYNC_THRESHOLD_BSC = 5000;
+const BATCH_SIZE_BSC = 200;    
+const SYNC_THRESHOLD_BSC = 500;
 
 // --- CONFIGURACIÓN DE REINTENTOS ---
 const MAX_RETRIES = 3;
@@ -38,16 +41,19 @@ async function makeHttpRequestWithRetries(url, config = {}, retries = 0) {
         return await axios.get(url, config);
     } catch (error) {
         if (retries < MAX_RETRIES) {
-            const delay = RETRY_DELAY_MS * Math.pow(2, retries);
+            const delay = RETRY_DELAY_MS * Math.pow(2, retries); // Retraso exponencial
             console.warn(`[HTTP_RETRY] Intento ${retries + 1} fallido para ${url}. Reintentando en ${delay / 1000}s. Error: ${error.message}`);
             await sleep(delay);
             return makeHttpRequestWithRetries(url, config, retries + 1);
         } else {
-            throw error;
+            throw error; // Lanzar el error final si se exceden los reintentos
         }
     }
 }
 
+/**
+ * Procesa un depósito detectado, lo registra y actualiza el saldo del usuario.
+ */
 async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifier) {
     const existingTx = await Transaction.findOne({ 'metadata.txid': txid });
     if (existingTx) {
@@ -100,6 +106,9 @@ async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifie
     }
 }
 
+/**
+ * Obtiene el número de bloque actual de la red BSC.
+ */
 async function getCurrentBscBlock() {
     console.log("[Monitor BSC - DEBUG - getCurrentBscBlock] Iniciando... ");
     try {
@@ -132,6 +141,9 @@ async function getCurrentBscBlock() {
     }
 }
 
+/**
+ * Escanea un rango de bloques en BSC para una billetera específica.
+ */
 async function scanBscBlockRange(wallet, startBlock, endBlock) {
     let latestBlockInScan = startBlock;
     try {
@@ -199,6 +211,9 @@ async function scanBscBlockRange(wallet, startBlock, endBlock) {
     return latestBlockInScan;
 }
 
+/**
+ * Función principal para verificar transacciones en la red BSC.
+ */
 async function checkBscTransactions() {
     console.log("[Monitor BSC] Iniciando ciclo de escaneo STATEFUL para BSC.");
     const wallets = await CryptoWallet.find({ chain: 'BSC' });
@@ -255,6 +270,9 @@ async function checkBscTransactions() {
     }
 }
 
+/**
+ * Escanea una dirección de TRON en busca de nuevos depósitos (USDT y TRX).
+ */
 async function scanTronAddress(wallet) {
     const minTimestamp = wallet.lastScannedTimestamp ? wallet.lastScannedTimestamp + 1 : 0;
     let latestTimestampInScan = wallet.lastScannedTimestamp || 0;
@@ -314,9 +332,26 @@ async function scanTronAddress(wallet) {
     }
 }
 
-// =======================================================================
-// === NUEVA FUNCIÓN: PROCESAR ESTADOS DE TRANSACCIONES PENDIENTES ===
-// =======================================================================
+/**
+ * Función principal para verificar transacciones en la red TRON.
+ */
+async function checkTronTransactions() { // <<< ESTA ES LA FUNCIÓN QUE DEBE ESTAR DEFINIDA
+    console.log("[Monitor TRON] Iniciando ciclo de escaneo STATEFUL para TRON.");
+    const wallets = await CryptoWallet.find({ chain: 'TRON' });
+    if (wallets.length === 0) {
+        console.log("[Monitor TRON] No hay billeteras TRON en el sistema para escanear.");
+        return;
+    }
+
+    for (const wallet of wallets) {
+        await scanTronAddress(wallet);
+        await sleep(550);
+    }
+}
+
+/**
+ * Procesa el estado de las transacciones PENDING en la base de datos (GAS_DISPATCH, USDT_SWEEP, etc.).
+ */
 async function processPendingTransactionsStatus() {
     console.log('[Monitor PendingTx] Verificando transacciones con estado PENDING...');
     const pendingTxs = await PendingTx.find({ status: 'PENDING' });
@@ -343,6 +378,7 @@ async function processPendingTransactionsStatus() {
                 }
             } else if (tx.chain === 'TRON') {
                 console.log(`[Monitor PendingTx] TRON: Verificando hash ${tx.txHash}`);
+                // Asegúrate de usar 'new TronWeb.default' si tu importación de TronWeb es solo 'TronWeb'
                 const localTronWeb = new TronWeb.default({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': TRON_API_KEY } });
                 const tronTxInfo = await localTronWeb.trx.getTransactionInfo(tx.txHash);
                 if (tronTxInfo && tronTxInfo.receipt && tronTxInfo.receipt.result === 'SUCCESS') {
@@ -356,10 +392,7 @@ async function processPendingTransactionsStatus() {
             if (isConfirmed) {
                 tx.status = 'CONFIRMED';
                 console.log(`[Monitor PendingTx] ✅ Transacción ${tx.txHash} (${tx.chain}) CONFIRMADA en blockchain.`);
-                // Puedes añadir aquí lógica adicional si el tipo de tx lo requiere
-                // Por ejemplo, si tx.type === 'USDT_SWEEP', podrías marcar la wallet como "barrida"
             } else if (txInfo && (txInfo.status === 0 || (txInfo.receipt && txInfo.receipt.result === 'FAILED'))) {
-                 // Si hay info pero el status es de fallo
                  tx.status = 'FAILED';
                  console.log(`[Monitor PendingTx] ❌ Transacción ${tx.txHash} (${tx.chain}) FALLIDA en blockchain.`);
             }
@@ -368,16 +401,15 @@ async function processPendingTransactionsStatus() {
 
         } catch (error) {
             console.error(`[Monitor PendingTx] Error al verificar tx ${tx.txHash}:`, error.message);
-            // Si el error es, por ejemplo, "tx not found", significa que quizás el nodo no la ha propagado aún.
-            // No cambiamos el estado, y se reintentará en el siguiente ciclo.
         }
         await sleep(200); // Pausa entre verificaciones para no saturar los nodos
     }
     console.log('[Monitor PendingTx] Verificación de transacciones pendientes finalizada.');
 }
-// =======================================================================
 
-
+/**
+ * Inicia el servicio principal de monitoreo.
+ */
 const startMonitoring = () => {
   console.log('✅ Iniciando servicio de monitoreo de transacciones COMPLETO (BSC + TRON)...');
   
@@ -385,8 +417,8 @@ const startMonitoring = () => {
     console.log("--- [Monitor] Iniciando ciclo de monitoreo de ambas cadenas ---");
     await Promise.all([
         checkBscTransactions(),
-        checkTronTransactions(),
-        processPendingTransactionsStatus() // NUEVO: Llamar a la función de verificación de estados
+        checkTronTransactions(), // <<<<< AQUÍ SE LLAMA A checkTronTransactions
+        processPendingTransactionsStatus() 
     ]);
     console.log("--- [Monitor] Ciclo de monitoreo finalizado. Esperando al siguiente. ---");
   };
