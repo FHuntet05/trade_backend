@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (CORREGIDO v21.1 - ESTABILIDAD TRON)
+// RUTA: backend/controllers/adminController.js (ACTUALIZADO v35.1 - GAS DINÁMICO)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -8,14 +8,14 @@ const CryptoWallet = require('../models/cryptoWalletModel');
 const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
-const { getTemporaryPhotoUrl } = require('./userController'); 
-
-// ================== LÍNEA CORREGIDA ==================
-const asyncHandler = require('express-async-handler'); // <-- CORRECCIÓN: Se usa require() en lugar de una cadena de texto.
-// ======================================================
-
+const { getTemporaryPhotoUrl } = require('./userController');
+const asyncHandler = require('express-async-handler');
 const { sendTelegramMessage } = require('../services/notificationService');
 const transactionService = require('../services/transactionService');
+// --- INICIO DE MODIFICACIÓN v35.1 ---
+// 1. Se importa el nuevo servicio de estimación de gas.
+const gasEstimatorService = require('../services/gasEstimatorService');
+// --- FIN DE MODIFICACIÓN v35.1 ---
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
 const PendingTx = require('../models/pendingTxModel');
@@ -27,16 +27,11 @@ const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
 const USDT_ABI = ['function balanceOf(address) view returns (uint256)'];
 
 function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió el tiempo de espera.') {
-  const timeout = new Promise((_, reject) => {
-    const id = setTimeout(() => { clearTimeout(id); reject(new Error(timeoutMessage)); }, ms);
-  });
-  return Promise.race([promise, timeout]);
+    const timeout = new Promise((_, reject) => {
+        const id = setTimeout(() => { clearTimeout(id); reject(new Error(timeoutMessage)); }, ms);
+    });
+    return Promise.race([promise, timeout]);
 }
-
-// =======================================================================================
-// El resto de las funciones ya estaban correctas, solo el require inicial fallaba.
-// No se realizan cambios lógicos, solo se corrige el error de arranque.
-// =======================================================================================
 
 const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
     const pendingTxs = await PendingTx.find()
@@ -45,8 +40,7 @@ const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
     res.json(pendingTxs);
 });
 
-// ... [Otras funciones del controlador permanecen idénticas] ...
-
+// ... [Otras funciones del controlador sin cambios] ...
 const getPendingWithdrawals = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -264,7 +258,6 @@ const createManualTransaction = asyncHandler(async (req, res) => {
     }
 });
 
-
 const getDashboardStats = asyncHandler(async (req, res) => {
     const [
         totalUsers, 
@@ -341,9 +334,6 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
     else { res.status(400).json({ message: 'Token inválido.' }); }
 });
 
-// ================== INICIO DE LA CORRECCIÓN #1 ==================
-// Esta función era la causa del error "InvalidParameterException" en la Tesorería.
-// --- CORRECCIÓN #2: ERROR InvalidParameterException EN TESORERÍA ---
 async function _getBalancesForAddress(address, chain) {
     const TIMEOUT_MS = 15000;
     try {
@@ -360,7 +350,7 @@ async function _getBalancesForAddress(address, chain) {
                 fullHost: 'https://api.trongrid.io',
                 headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
             });
-            tempTronWeb.setAddress(address); // ¡Paso clave para blindar la instancia!
+            tempTronWeb.setAddress(address);
 
             const usdtTronContract = await tempTronWeb.contract().at(USDT_TRON_ADDRESS);
             const [usdtBalanceRaw, trxBalanceRaw] = await Promise.all([
@@ -375,25 +365,14 @@ async function _getBalancesForAddress(address, chain) {
     }
 }
 
-
 const getTreasuryWalletsList = asyncHandler(async (req, res) => {
     const wallets = await CryptoWallet.find({}).select('address chain user').populate('user', 'username').lean();
     res.json(wallets);
 });
 
-async function _getEstimatedSweepFee(chain) {
-    if (chain === 'BSC') {
-        const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
-        const USDT_SWEEP_GAS_LIMIT = 80000;
-        const gasPrice = await bscProvider.getGasPrice();
-        const estimatedFee = gasPrice.mul(USDT_SWEEP_GAS_LIMIT);
-        const feeWithBuffer = estimatedFee.mul(125).div(100);
-        return parseFloat(ethers.utils.formatEther(feeWithBuffer));
-    } else if (chain === 'TRON') {
-        return 30 * 1.01;
-    }
-    return 0;
-}
+// --- INICIO DE MODIFICACIÓN v35.1 ---
+// 2. Se elimina la función _getEstimatedSweepFee. Ya no es necesaria.
+// --- FIN DE MODIFICACIÓN v35.1 ---
 
 const getWalletBalance = asyncHandler(async (req, res) => {
     const { address, chain } = req.body;
@@ -424,7 +403,7 @@ const sweepFunds = asyncHandler(async (req, res) => {
             const balances = await _getBalancesForAddress(wallet.address, chain);
             const tokenBalance = balances.usdt;
             const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
-            const gasThreshold = chain === 'BSC' ? 0.0015 : 25;
+            const gasThreshold = chain === 'BSC' ? 0.0015 : 25; // Este umbral sigue siendo útil como una primera barrera.
             const sweepFunction = chain === 'BSC' ? transactionService.sweepUsdtOnBscFromDerivedWallet : transactionService.sweepUsdtOnTronFromDerivedWallet;
             if (tokenBalance <= 0.000001) { report.summary.skippedForNoToken++; report.details.push({ address: wallet.address, status: 'SKIPPED_NO_TOKEN', reason: 'Saldo de USDT es cero.' }); continue; }
             if (gasBalance < gasThreshold) { report.summary.skippedForNoGas++; report.details.push({ address: wallet.address, status: 'SKIPPED_NO_GAS', reason: `Gas insuficiente. Tienes ${gasBalance.toFixed(4)}, se requiere > ${gasThreshold}` }); continue; }
@@ -440,9 +419,15 @@ const sweepFunds = asyncHandler(async (req, res) => {
     res.json(report);
 });
 
+// --- INICIO DE MODIFICACIÓN v35.1 ---
+// 3. Se reconstruye la función analyzeGasNeeds para usar el nuevo servicio.
 const analyzeGasNeeds = asyncHandler(async (req, res) => {
     const { chain } = req.body;
-    if (!['BSC', 'TRON'].includes(chain)) { res.status(400); throw new Error("Cadena no válida."); }
+    if (!['BSC', 'TRON'].includes(chain)) {
+        res.status(400);
+        throw new Error("Cadena no válida.");
+    }
+
     let centralWalletBalance = 0;
     try {
         const { bscWallet, tronWallet } = transactionService.getCentralWallets();
@@ -454,43 +439,55 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
                 fullHost: 'https://api.trongrid.io',
                 headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
             });
-            tronWebInstance.setPrivateKey(tronWallet.privateKey);
             centralWalletBalance = parseFloat(tronWebInstance.fromSun(await tronWebInstance.trx.getBalance(tronWallet.address)));
         }
     } catch (error) {
-        console.error("CRITICAL ERROR: Fallo al procesar la billetera central.", error);
+        console.error("CRITICAL ERROR: Fallo al obtener el balance de la billetera central.", error);
         res.status(500);
         throw new Error(`Fallo al obtener balance de billetera central: ${error.message}`);
     }
-    const requiredGasForSweep = await _getEstimatedSweepFee(chain);
+    
     const walletsInChain = await CryptoWallet.find({ chain }).lean();
     const walletsNeedingGas = [];
+    
     for (const wallet of walletsInChain) {
         try {
             const balances = await _getBalancesForAddress(wallet.address, chain);
             const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
-            if (balances.usdt > 0.1 && gasBalance < requiredGasForSweep) {
-                walletsNeedingGas.push({ 
-                    address: wallet.address, 
-                    usdtBalance: balances.usdt, 
-                    gasBalance: gasBalance,
-                    requiredGas: requiredGasForSweep
-                });
+
+            // Solo procedemos a estimar si la wallet tiene un saldo de USDT significativo.
+            if (balances.usdt > 0.1) {
+                let requiredGas = 0;
+                if (chain === 'BSC') {
+                    requiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt);
+                } else { // TRON
+                    requiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt);
+                }
+
+                // Si el gas que tiene es menor que el requerido (calculado dinámicamente)...
+                if (gasBalance < requiredGas) {
+                    walletsNeedingGas.push({ 
+                        address: wallet.address, 
+                        usdtBalance: balances.usdt, 
+                        gasBalance: gasBalance,
+                        requiredGas: requiredGas // Se asigna el valor dinámico.
+                    });
+                }
             }
         } catch (error) {
             console.error(`No se pudo analizar la wallet ${wallet.address}: ${error.message}`);
         }
     }
+    
     res.json({ centralWalletBalance, walletsNeedingGas });
 });
+// --- FIN DE MODIFICACIÓN v35.1 ---
 
 const dispatchGas = asyncHandler(async (req, res) => {
     const { chain, targets } = req.body;
     if (!chain || !Array.isArray(targets) || targets.length === 0) { res.status(400); throw new Error("Petición inválida."); }
     const report = { summary: { success: 0, failed: 0, totalDispatched: 0 }, details: [] };
-    // ================== LÍNEA CORREGIDA ==================
-    const sendFunction = chain === 'BSC' ? transactionService.sendBscGas : transactionService.sendTronTrx; // <-- CORRECCIÓN: Se corrigió el typo 'transactionSertranvice'.
-    // ======================================================
+    const sendFunction = chain === 'BSC' ? transactionService.sendBscGas : transactionService.sendTronTrx;
     for (const target of targets) {
         try {
             const txHash = await sendFunction(target.address, target.amount);
@@ -531,18 +528,12 @@ const sendBroadcastNotification = asyncHandler(async (req, res) => {
         console.log(`[Broadcast] Notificación completada. ${successCount}/${usersToNotify.length} envíos exitosos.`);
     })();
 });
-// =======================================================================================
-// ================ INICIO DE LA CORRECCIÓN: FUNCIONES DE RESCATE RESTAURADAS ============
-// =======================================================================================
-// Estas funciones se reintroducen como placeholders para evitar el crash del servidor.
-// Su lógica real dependerá del 'rescueService' que se implementará en el futuro.
 
 const cancelTransaction = asyncHandler(async (req, res) => {
     const { txHash } = req.body;
     if (!txHash) {
         res.status(400); throw new Error("Se requiere el hash de la transacción.");
     }
-    // Lógica placeholder:
     res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash });
 });
 
@@ -551,13 +542,9 @@ const speedUpTransaction = asyncHandler(async (req, res) => {
     if (!txHash) {
         res.status(400); throw new Error("Se requiere el hash de la transacción.");
     }
-    // Lógica placeholder:
     res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash });
 });
 
-// =======================================================================================
-// ========================== INICIO DE LA CORRECCIÓN: EXPORTS FINALES ===================
-// =======================================================================================
 module.exports = {
   getPendingWithdrawals,
   processWithdrawal,
