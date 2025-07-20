@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (ACTUALIZADO v35.1 - GAS DINÁMICO)
+// RUTA: backend/controllers/adminController.js (ACTUALIZADO v35.9 - LÓGICA DE GAS CONSISTENTE)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -12,13 +12,10 @@ const { getTemporaryPhotoUrl } = require('./userController');
 const asyncHandler = require('express-async-handler');
 const { sendTelegramMessage } = require('../services/notificationService');
 const transactionService = require('../services/transactionService');
-// --- INICIO DE MODIFICACIÓN v35.1 ---
-// 1. Se importa el nuevo servicio de estimación de gas.
-const gasEstimatorService = require('../services/gasEstimatorService');
-// --- FIN DE MODIFICACIÓN v35.1 ---
+const gasEstimatorService = require('../services/gasEstimatorService'); // Asegúrate de importar esto
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
-const PendingTx = require('../models/pendingTxModel');
+const PendingTx = require('../models/pendingTxModel'); // Asegúrate de importar esto
 const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const PLACEHOLDER_AVATAR_URL = 'https://i.postimg.cc/mD21B6r7/user-avatar-placeholder.png';
 
@@ -40,7 +37,6 @@ const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
     res.json(pendingTxs);
 });
 
-// ... [Otras funciones del controlador sin cambios] ...
 const getPendingWithdrawals = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -48,7 +44,7 @@ const getPendingWithdrawals = asyncHandler(async (req, res) => {
     const total = await Transaction.countDocuments(filter);
     const withdrawals = await Transaction.find(filter).sort({ createdAt: 'desc' }).limit(limit).skip(limit * (page - 1)).lean();
     if (withdrawals.length === 0) return res.json({ withdrawals: [], page: 1, pages: 0, total: 0 });
-    const userIds = [...new Set(withdrawals.map(w => w.user.toString()))];
+    const userIds = [...new Set(withdrawals.map(w => w.user.toString()) )];
     const users = await User.find({ '_id': { $in: userIds } }).select('username telegramId photoFileId').lean();
     const userMap = users.reduce((acc, user) => { acc[user._id.toString()] = user; return acc; }, {});
     const withdrawalsWithDetails = await Promise.all(withdrawals.map(async (w) => {
@@ -258,6 +254,7 @@ const createManualTransaction = asyncHandler(async (req, res) => {
     }
 });
 
+
 const getDashboardStats = asyncHandler(async (req, res) => {
     const [
         totalUsers, 
@@ -370,10 +367,6 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
     res.json(wallets);
 });
 
-// --- INICIO DE MODIFICACIÓN v35.1 ---
-// 2. Se elimina la función _getEstimatedSweepFee. Ya no es necesaria.
-// --- FIN DE MODIFICACIÓN v35.1 ---
-
 const getWalletBalance = asyncHandler(async (req, res) => {
     const { address, chain } = req.body;
     if (!address || !chain) { res.status(400); throw new Error('Se requiere address y chain'); }
@@ -385,6 +378,7 @@ const getWalletBalance = asyncHandler(async (req, res) => {
     }
 });
 
+// --- INICIO DE MODIFICACIÓN v35.9 ---
 const sweepFunds = asyncHandler(async (req, res) => {
     const { chain, token, recipientAddress, walletsToSweep } = req.body;
     if (!chain || !token || !recipientAddress || !walletsToSweep || !Array.isArray(walletsToSweep)) {
@@ -397,16 +391,39 @@ const sweepFunds = asyncHandler(async (req, res) => {
     if (wallets.length === 0) {
         return res.json({ message: "Wallets candidatas no encontradas.", summary: {}, details: [] });
     }
+    
     const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, skippedForNoGas: 0, skippedForNoToken: 0, failedTxs: 0, totalSwept: 0 }, details: [] };
+    
     for (const wallet of wallets) {
         try {
             const balances = await _getBalancesForAddress(wallet.address, chain);
             const tokenBalance = balances.usdt;
             const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
-            const gasThreshold = chain === 'BSC' ? 0.0015 : 25; // Este umbral sigue siendo útil como una primera barrera.
+
+            // 1. Re-estimar el gas necesario para este barrido específico.
+            let estimatedRequiredGas = 0;
+            if (tokenBalance > 0.000001) { // Solo estimar si hay USDT para barrer
+                if (chain === 'BSC') {
+                    estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, tokenBalance);
+                } else if (chain === 'TRON') {
+                    estimatedRequiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, tokenBalance);
+                }
+            }
+            
             const sweepFunction = chain === 'BSC' ? transactionService.sweepUsdtOnBscFromDerivedWallet : transactionService.sweepUsdtOnTronFromDerivedWallet;
-            if (tokenBalance <= 0.000001) { report.summary.skippedForNoToken++; report.details.push({ address: wallet.address, status: 'SKIPPED_NO_TOKEN', reason: 'Saldo de USDT es cero.' }); continue; }
-            if (gasBalance < gasThreshold) { report.summary.skippedForNoGas++; report.details.push({ address: wallet.address, status: 'SKIPPED_NO_GAS', reason: `Gas insuficiente. Tienes ${gasBalance.toFixed(4)}, se requiere > ${gasThreshold}` }); continue; }
+
+            if (tokenBalance <= 0.000001) { 
+                report.summary.skippedForNoToken++; 
+                report.details.push({ address: wallet.address, status: 'SKIPPED_NO_TOKEN', reason: 'Saldo de USDT es cero o insignificante.' }); 
+                continue; 
+            }
+            // 2. Usar la estimación dinámica para el umbral de gas.
+            if (gasBalance < estimatedRequiredGas) { 
+                report.summary.skippedForNoGas++; 
+                report.details.push({ address: wallet.address, status: 'SKIPPED_NO_GAS', reason: `Gas insuficiente. Tienes ${gasBalance.toFixed(6)}, se requiere ~${estimatedRequiredGas.toFixed(6)}` }); 
+                continue; 
+            }
+            
             const txHash = await sweepFunction(wallet.derivationIndex, recipientAddress);
             report.summary.successfulSweeps++;
             report.summary.totalSwept += tokenBalance;
@@ -418,9 +435,8 @@ const sweepFunds = asyncHandler(async (req, res) => {
     }
     res.json(report);
 });
+// --- FIN DE MODIFICACIÓN v35.9 ---
 
-// --- INICIO DE MODIFICACIÓN v35.1 ---
-// 3. Se reconstruye la función analyzeGasNeeds para usar el nuevo servicio.
 const analyzeGasNeeds = asyncHandler(async (req, res) => {
     const { chain } = req.body;
     if (!['BSC', 'TRON'].includes(chain)) {
@@ -455,7 +471,6 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
             const balances = await _getBalancesForAddress(wallet.address, chain);
             const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
 
-            // Solo procedemos a estimar si la wallet tiene un saldo de USDT significativo.
             if (balances.usdt > 0.1) {
                 let requiredGas = 0;
                 if (chain === 'BSC') {
@@ -464,13 +479,12 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
                     requiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt);
                 }
 
-                // Si el gas que tiene es menor que el requerido (calculado dinámicamente)...
                 if (gasBalance < requiredGas) {
                     walletsNeedingGas.push({ 
                         address: wallet.address, 
                         usdtBalance: balances.usdt, 
                         gasBalance: gasBalance,
-                        requiredGas: requiredGas // Se asigna el valor dinámico.
+                        requiredGas: requiredGas
                     });
                 }
             }
@@ -481,7 +495,6 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
     
     res.json({ centralWalletBalance, walletsNeedingGas });
 });
-// --- FIN DE MODIFICACIÓN v35.1 ---
 
 const dispatchGas = asyncHandler(async (req, res) => {
     const { chain, targets } = req.body;
