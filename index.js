@@ -137,7 +137,7 @@ bot.command('start', async (ctx) => {
         
         // 1. Define la URL de la imagen que quieres mostrar.
         //    Asegúrate de que sea un enlace directo a una imagen (ej. .jpg, .png).
-        const imageUrl = 'https://i.ibb.co/6r02zQ9/photo-2024-07-20-00-09-51.jpg'; // <-- CAMBIA ESTA URL POR LA TUYA
+        const imageUrl = 'https://i.postimg.cc/x8LsR9fC/NEURO-LINK.jpg'; // <-- CAMBIA ESTA URL POR LA TUYA
 
         // 2. La URL de la web app sigue siendo limpia.
         const webAppUrl = process.env.FRONTEND_URL;
