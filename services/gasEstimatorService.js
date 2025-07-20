@@ -18,7 +18,7 @@ const USDT_BSC_ABI = [
 const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
 
 // --- NUEVA CONSTANTE: PRECIO MÍNIMO DE GAS EN GWEI PARA BSC ---
-const MIN_BSC_GAS_PRICE_GWEI = 2; // Un precio de gas realista para BSC (5 Gwei)
+const MIN_BSC_GAS_PRICE_GWEI = 5; // Un precio de gas realista para BSC (5 Gwei)
 const MIN_BSC_GAS_PRICE_WEI = ethers.BigNumber.from(MIN_BSC_GAS_PRICE_GWEI).mul(ethers.BigNumber.from(10).pow(9)); // Convertir a WEI
 
 async function estimateBscSweepCost(fromAddress, usdtAmountToSweep) {
