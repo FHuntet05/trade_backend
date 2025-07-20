@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (ACTUALIZADO v35.13 - PRECISIÓN EN DISPENSADOR)
+// RUTA: backend/controllers/adminController.js (ACTUALIZADO v35.14 - TOLERANCIA GAS)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -29,6 +29,10 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
     });
     return Promise.race([promise, timeout]);
 }
+
+// --- NUEVA CONSTANTE: PEQUEÑA TOLERANCIA PARA COMPARACIONES DE GAS ---
+// Esto ayuda con problemas de punto flotante y permite un pequeño margen para dispensar si está "casi" bien
+const GAS_COMPARISON_EPSILON = 0.000000001; // 1 Gwei en términos de Wei para BNB. Ajustable.
 
 const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
     const pendingTxs = await PendingTx.find()
@@ -393,15 +397,12 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
                 }
             }
             
-            // --- INICIO DE MODIFICACIÓN v35.13 ---
-            // Aseguramos que los valores sean flotantes, la precisión se maneja en el formateo de la UI.
             return {
                 ...wallet,
                 usdtBalance: balances.usdt,
                 gasBalance: wallet.chain === 'BSC' ? balances.bnb : balances.trx,
-                estimatedRequiredGas: estimatedRequiredGas // Este ya es un float
+                estimatedRequiredGas: estimatedRequiredGas
             };
-            // --- FIN DE MODIFICACIÓN v35.13 ---
         } catch (error) {
             console.error(`Error al obtener detalles para la wallet ${wallet.address}: ${error.message}`);
             return { ...wallet, usdtBalance: 0, gasBalance: 0, estimatedRequiredGas: 0 };
@@ -460,7 +461,7 @@ const sweepFunds = asyncHandler(async (req, res) => {
                 continue; 
             }
             
-            // La comparación se realiza con los valores flotantes que se obtuvieron.
+            // La comparación debe ser estricta para el barrido.
             if (gasBalance < estimatedRequiredGas) { 
                 report.summary.skippedForNoGas++; 
                 report.details.push({ address: wallet.address, status: 'SKIPPED_NO_GAS', reason: `Gas insuficiente. Tienes ${gasBalance.toFixed(8)}, se requiere ~${estimatedRequiredGas.toFixed(8)}` }); 
@@ -513,7 +514,7 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
             const balances = await _getBalancesForAddress(wallet.address, chain);
             const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
 
-            if (balances.usdt > 0.1) {
+            if (balances.usdt > 0.1) { // Wallets con USDT
                 let requiredGas = 0;
                 if (chain === 'BSC') {
                     requiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt);
@@ -521,16 +522,21 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
                     requiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt);
                 }
 
-                if (gasBalance < requiredGas) {
+                // --- INICIO DE MODIFICACIÓN v35.14 ---
+                // Aquí, la condición es que el gas sea INSUFICIENTE para que aparezca en la lista
+                // Usamos la tolerancia para asegurar que incluso diferencias mínimas lo incluyan.
+                if (gasBalance < (requiredGas - GAS_COMPARISON_EPSILON)) { 
                     walletsNeedingGas.push({ 
                         address: wallet.address, 
                         usdtBalance: balances.usdt, 
-                        // --- INICIO DE MODIFICACIÓN v35.13 ---
-                        gasBalance: gasBalance, // Envío como float sin toFixed para máxima precisión
-                        requiredGas: requiredGas // Envío como float sin toFixed para máxima precisión
-                        // --- FIN DE MODIFICACIÓN v35.13 ---
+                        gasBalance: gasBalance, 
+                        requiredGas: requiredGas 
                     });
+                } else {
+                    // Log para depuración: por qué una wallet con USDT no aparece en la lista de "necesita gas"
+                    console.log(`[analyzeGasNeeds DEBUG] Wallet ${wallet.address} con ${balances.usdt} USDT. Gas: ${gasBalance.toFixed(8)}, Requerido: ${requiredGas.toFixed(8)}. No necesita gas (o la diferencia es mínima).`);
                 }
+                // --- FIN DE MODIFICACIÓN v35.14 ---
             }
         } catch (error) {
             console.error(`No se pudo analizar la wallet ${wallet.address}: ${error.message}`);
@@ -623,7 +629,7 @@ module.exports = {
   getTreasuryWalletsList,
   getWalletBalance,
   sweepFunds,
-  analyzeGasNeeds,
+  analyzeGasNeeds, // Exportar la función modificada
   dispatchGas,
   adjustUserBalance,
   sendBroadcastNotification,
