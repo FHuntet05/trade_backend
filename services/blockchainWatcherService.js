@@ -1,147 +1,268 @@
-// RUTA: backend/services/blockchainWatcherService.js
-// VERSIÓN: v35.2 - "Parche Final"
-// ESTADO: CORREGIDO PERO OBSOLETO. Este servicio ya no debe ser llamado desde index.js.
-
-const { ethers } = require('ethers');
-const TronWeb = require('tronweb');
+// backend/services/transactionMonitor.js (MEJORADO v35.4 - ROBUSTEZ DE ESCANEO INICIAL)
 const axios = require('axios');
-const CryptoWallet = require('../models/cryptoWalletModel');
-const PendingTx = require('../models/pendingTxModel');
 const User = require('../models/userModel');
+const Transaction = require('../models/transactionModel');
+const CryptoWallet = require('../models/cryptoWalletModel');
+const { ethers } = require('ethers');
+const { sendTelegramMessage } = require('./notificationService');
+const { getPrice } = require('./priceService');
 
-const BSCSCAN_API_KEY = process.env.BSCSCAN_API_KEY;
-const TRONGRID_API_KEY = process.env.TRONGRID_API_KEY;
-const BSC_USDT_CONTRACT_ADDRESS = process.env.BSC_USDT_CONTRACT_ADDRESS || '0x55d398326f99059fF775485246999027B3197955';
-const TRON_USDT_CONTRACT_ADDRESS = process.env.TRON_USDT_CONTRACT_ADDRESS || 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+// --- CONFIGURACIÓN DE CONSTANTES ---
+const USDT_CONTRACT_BSC = '0x55d398326f99059fF775485246999027B3197955';
+const USDT_CONTRACT_TRON = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+const BSC_API_KEY = process.env.BSCSCAN_API_KEY;
+const TRON_API_KEY = process.env.TRONGRID_API_KEY;
 
-const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
+// --- CONFIGURACIÓN DE SINCRONIZACIÓN (BSC) ---
+const BATCH_SIZE_BSC = 5000; // Escanear en lotes de 5000 bloques
+const SYNC_THRESHOLD_BSC = 50000; // Si la diferencia es mayor a esto, activa el modo batch
 
-const scanAddressForDeposits = async (wallet) => {
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifier) {
+    const existingTx = await Transaction.findOne({ 'metadata.txid': txid });
+    if (existingTx) {
+        return;
+    }
+
+    console.log(`[ProcessDeposit] Procesando nuevo depósito: ${amount} ${currency} para usuario ${wallet.user} (TXID: ${txid})`);
+    
+    const price = currency === 'USDT' ? 1 : await getPrice(currency);
+    
+    if (!price) {
+        console.error(`[ProcessDeposit] PRECIO NO ENCONTRADO para ${currency}. Saltando transacción ${txid}.`);
+        return;
+    }
+
+    const amountInUSDT = amount * price;
+    const user = await User.findByIdAndUpdate(wallet.user, { $inc: { 'balance.usdt': amountInUSDT } }, { new: true });
+    
+    if (!user) {
+        console.error(`[ProcessDeposit] Usuario no encontrado para wallet ${wallet._id}. Abortando depósito.`);
+        return;
+    }
+
+    const fromAddress = tx.from || (tx.owner_address);
+    const toAddress = tx.to || (tx.transfer_to_address);
+
+    await Transaction.create({
+        user: wallet.user,
+        type: 'deposit',
+        amount: amountInUSDT,
+        currency: 'USDT',
+        description: `Depósito de ${amount.toFixed(6)} ${currency} acreditado como ${amountInUSDT.toFixed(2)} USDT`,
+        metadata: {
+            txid: txid,
+            chain: wallet.chain,
+            fromAddress: fromAddress,
+            toAddress: toAddress,
+            originalAmount: amount.toString(),
+            originalCurrency: currency,
+            priceUsed: price.toString(),
+            blockIdentifier: blockIdentifier.toString(),
+        }
+    });
+
+    console.log(`[ProcessDeposit] ÉXITO: Usuario ${user.username} acreditado con ${amountInUSDT.toFixed(2)} USDT.`);
+    
+    if (user.telegramId) {
+        const message = `✅ <b>¡Depósito confirmado!</b>\n\nSe han acreditado <b>${amountInUSDT.toFixed(2)} USDT</b> a tu saldo.`;
+        await sendTelegramMessage(user.telegramId, message);
+    }
+}
+
+// =====================================================================================
+// ========================== MONITOR DE LA RED BSC (MEJORADO) =========================
+// =====================================================================================
+
+async function getCurrentBscBlock() {
     try {
-        if (wallet.chain === 'BSC') {
-            const apiUrl = `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${BSC_USDT_CONTRACT_ADDRESS}&address=${wallet.address}&page=1&offset=50&sort=desc&apikey=${BSCSCAN_API_KEY}`;
-            const response = await axios.get(apiUrl);
+        const url = `https://api.bscscan.com/api?module=proxy&action=eth_blockNumber&apikey=${BSC_API_KEY}`;
+        const response = await axios.get(url);
+        return parseInt(response.data.result, 16);
+    } catch (error) {
+        console.error("[Monitor BSC] Error obteniendo el bloque actual:", error.message);
+        return null;
+    }
+}
 
-            if (response.data.status === '1' && response.data.result.length > 0) {
-                for (const tx of response.data.result) {
-                    if (tx.to.toLowerCase() === wallet.address.toLowerCase()) {
-                        const txExists = await PendingTx.findOne({ txHash: tx.hash });
-                        if (!txExists) {
-                            const amount = parseFloat(ethers.utils.formatUnits(tx.value, 18));
-                            console.log(`[Detector OBSOLETO] Nuevo depósito BSC detectado para ${wallet.address}: ${amount} USDT. Hash: ${tx.hash}`);
-                            await PendingTx.create({
-                                user: wallet.user,
-                                chain: 'BSC',
-                                txHash: tx.hash,
-                                fromAddress: tx.from,
-                                toAddress: tx.to,
-                                amount: amount,
-                                status: 'PENDING',
-                                type: 'USDT_DEPOSIT', // Campo 'type' añadido para corregir error de validación.
-                            });
-                        }
-                    }
+async function scanBscBlockRange(wallet, startBlock, endBlock) {
+    let latestBlockInScan = startBlock;
+    try {
+        // 1. Escanear transacciones de Tokens BEP-20 (USDT)
+        const usdtUrl = `https://api.bscscan.com/api?module=account&action=tokentx&address=${wallet.address}&contractaddress=${USDT_CONTRACT_BSC}&startblock=${startBlock}&endblock=${endBlock}&sort=asc&apikey=${BSC_API_KEY}`;
+        const usdtResponse = await axios.get(usdtUrl);
+        if (usdtResponse.data.status === '1' && Array.isArray(usdtResponse.data.result)) {
+            for (const tx of usdtResponse.data.result) {
+                if (tx.to.toLowerCase() === wallet.address.toLowerCase()) {
+                    const amount = parseFloat(ethers.utils.formatUnits(tx.value, tx.tokenDecimal));
+                    await processDeposit(tx, wallet, amount, 'USDT', tx.hash, tx.blockNumber);
+                    latestBlockInScan = Math.max(latestBlockInScan, parseInt(tx.blockNumber));
                 }
             }
-        } else if (wallet.chain === 'TRON') {
-            const apiUrl = `https://api.trongrid.io/v1/accounts/${wallet.address}/transactions/trc20?only_to=true&contract_address=${TRON_USDT_CONTRACT_ADDRESS}&limit=50`;
-            const response = await axios.get(apiUrl, { headers: { 'TRON-PRO-API-KEY': TRONGRID_API_KEY } });
+        }
+        await sleep(300);
 
-            if (response.data.success && response.data.data.length > 0) {
-                for (const tx of response.data.data) {
-                     const txExists = await PendingTx.findOne({ txHash: tx.transaction_id });
-                     if (!txExists) {
-                        if (tx.token_info.symbol === 'USDT' && tx.type === 'Transfer') {
-                           const amount = parseFloat(ethers.utils.formatUnits(tx.value, 6));
-                           console.log(`[Detector OBSOLETO] Nuevo depósito TRON detectado para ${wallet.address}: ${amount} USDT. Hash: ${tx.transaction_id}`);
-                           await PendingTx.create({
-                               user: wallet.user,
-                               chain: 'TRON',
-                               txHash: tx.transaction_id,
-                               fromAddress: tx.from,
-                               toAddress: tx.to,
-                               amount: amount,
-                               status: 'PENDING',
-                               type: 'USDT_DEPOSIT', // Campo 'type' añadido.
-                           });
-                        }
-                     }
+        // 2. Escanear transacciones nativas (BNB)
+        const bnbUrl = `https://api.bscscan.com/api?module=account&action=txlist&address=${wallet.address}&startblock=${startBlock}&endblock=${endBlock}&sort=asc&apikey=${BSC_API_KEY}`;
+        const bnbResponse = await axios.get(bnbUrl);
+        if (bnbResponse.data.status === '1' && Array.isArray(bnbResponse.data.result)) {
+            for (const tx of bnbResponse.data.result) {
+                if (tx.to.toLowerCase() === wallet.address.toLowerCase() && tx.value !== "0") {
+                    const amount = parseFloat(ethers.utils.formatEther(tx.value));
+                    await processDeposit(tx, wallet, amount, 'BNB', tx.hash, tx.blockNumber);
+                    latestBlockInScan = Math.max(latestBlockInScan, parseInt(tx.blockNumber));
                 }
             }
         }
     } catch (error) {
-        console.error(`[Detector OBSOLETO] Error al escanear la dirección ${wallet.address} en ${wallet.chain}:`, error.message);
+        console.error(`[Monitor BSC] Error escaneando el rango ${startBlock}-${endBlock} para ${wallet.address}:`, error.message);
+        // NO relanzamos el error aquí para que el ciclo continúe con otras wallets.
     }
-};
+    return latestBlockInScan;
+}
 
-const scanForAllWallets = async () => {
-    console.log('[Watcher OBSOLETO - Fase 1] Iniciando escaneo de todas las billeteras...');
-    const allWallets = await CryptoWallet.find();
-    if (allWallets.length === 0) {
+async function checkBscTransactions() {
+    console.log("[Monitor BSC] Iniciando ciclo de escaneo STATEFUL para BSC.");
+    const wallets = await CryptoWallet.find({ chain: 'BSC' });
+    if (wallets.length === 0) {
+        console.log("[Monitor BSC] No hay billeteras BSC en el sistema para escanear.");
         return;
     }
-    await Promise.all(allWallets.map(wallet => scanAddressForDeposits(wallet)));
-    console.log('[Watcher OBSOLETO - Fase 1] Escaneo de detección completado.');
-};
 
-const processTransactions = async () => {
-    console.log('[Watcher OBSOLETO - Fase 2/3] Verificando y acreditando...');
-    const txsToProcess = await PendingTx.find({ status: { $in: ['PENDING', 'CONFIRMED'] } });
+    const currentNetworkBlock = await getCurrentBscBlock();
+    if (!currentNetworkBlock) {
+        console.error("[Monitor BSC] No se pudo obtener el bloque de red actual. Saltando ciclo.");
+        return;
+    }
+    console.log(`[Monitor BSC] Encontradas ${wallets.length} wallets BSC. Bloque de red actual: ${currentNetworkBlock}`);
 
-    for (const tx of txsToProcess) {
-        try {
-            if (tx.status === 'PENDING') {
-                let isConfirmed = false;
-                if (tx.chain === 'BSC') {
-                    const receipt = await bscProvider.getTransactionReceipt(tx.txHash);
-                    if (receipt && receipt.status === 1) isConfirmed = true;
-                } else if (tx.chain === 'TRON') {
-                    const localTronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': TRONGRID_API_KEY } });
-                    const txInfo = await localTronWeb.trx.getTransactionInfo(tx.txHash);
-                    if (txInfo && txInfo.receipt && txInfo.receipt.result === 'SUCCESS') isConfirmed = true;
-                }
+    for (const wallet of wallets) {
+        // --- INICIO DE MODIFICACIÓN v35.4 ---
+        // Se asegura que lastScannedBlock siempre comience desde 0 si es nulo o indefinido.
+        let lastScanned = wallet.lastScannedBlock || 0; 
+        if (lastScanned === 0) {
+            console.log(`[Monitor BSC] Wallet ${wallet.address} (UserID: ${wallet.user}) se escaneará desde el bloque 0 para su primera sincronización.`);
+        }
+        // --- FIN DE MODIFICACIÓN v35.4 ---
+        
+        const blocksBehind = currentNetworkBlock - lastScanned;
 
-                if (isConfirmed) {
-                    tx.status = 'CONFIRMED';
-                    console.log(`[Verifier OBSOLETO] Transacción ${tx.txHash} (${tx.chain}) confirmada.`);
-                    tx.lastChecked = new Date();
-                    await tx.save();
-                }
+        if (blocksBehind > SYNC_THRESHOLD_BSC) {
+            console.log(`[Monitor BSC] Sincronización en lotes iniciada para ${wallet.address}. ${blocksBehind} bloques de diferencia.`);
+            let fromBlock = lastScanned + 1;
+            while (fromBlock < currentNetworkBlock) {
+                const toBlock = Math.min(fromBlock + BATCH_SIZE_BSC - 1, currentNetworkBlock);
+                console.log(`[Monitor BSC] Escaneando lote: ${fromBlock} -> ${toBlock} para wallet ${wallet.address}`);
+                await scanBscBlockRange(wallet, fromBlock, toBlock);
+                // Aseguramos que el progreso se guarde después de cada lote para evitar re-escaneos masivos en caso de fallo.
+                await CryptoWallet.findByIdAndUpdate(wallet._id, { lastScannedBlock: toBlock });
+                fromBlock = toBlock + 1;
+                await sleep(550);
+            }
+            // Después del batch, se asegura que el lastScannedBlock esté al día.
+            await CryptoWallet.findByIdAndUpdate(wallet._id, { lastScannedBlock: currentNetworkBlock });
+            console.log(`[Monitor BSC] Sincronización en lotes completada para ${wallet.address}.`);
+        } else if (blocksBehind > 0) {
+            const startBlock = lastScanned + 1;
+            console.log(`[Monitor BSC] Monitoreo normal para ${wallet.address} desde el bloque ${startBlock} hasta ${currentNetworkBlock}.`);
+            const latestBlockFound = await scanBscBlockRange(wallet, startBlock, currentNetworkBlock);
+            if (latestBlockFound > lastScanned) {
+                 await CryptoWallet.findByIdAndUpdate(wallet._id, { lastScannedBlock: latestBlockFound });
+                 console.log(`[Monitor BSC] Wallet ${wallet.address} actualizada al bloque ${latestBlockFound}.`);
+            } else {
+                 // Si no se encontraron nuevas transacciones, actualizamos para indicar que se llegó al bloque actual
+                 await CryptoWallet.findByIdAndUpdate(wallet._id, { lastScannedBlock: currentNetworkBlock });
+                 console.log(`[Monitor BSC] Wallet ${wallet.address} ya está al día en el bloque ${currentNetworkBlock}.`);
+            }
+        } else {
+            console.log(`[Monitor BSC] Wallet ${wallet.address} (UserID: ${wallet.user}) ya está al día en el bloque ${currentNetworkBlock}.`);
+        }
+        await sleep(550); // Pausa después de procesar cada wallet para no saturar la API
+    }
+}
 
-            } else if (tx.status === 'CONFIRMED') {
-                const user = await User.findById(tx.user);
-                if (user) {
-                    // Esta lógica de acreditación es muy simple y fue mejorada en transactionMonitor.js
-                    user.balance.usdt = (user.balance.usdt || 0) + Number(tx.amount);
-                    await user.save();
-                    tx.status = 'CREDITED';
-                    await tx.save();
-                    console.log(`[Accreditor OBSOLETO] Acreditados ${tx.amount} USDT al usuario ${user._id}.`);
-                } else {
-                    console.error(`[Accreditor OBSOLETO] ERROR CRÍTICO: No se encontró al usuario con ID ${tx.user} para la tx ${tx.txHash}.`);
-                    tx.status = 'ERROR_NO_USER';
-                    await tx.save();
+// =====================================================================================
+// ==================== MONITOR DE LA RED TRON (SIN CAMBIOS) ===========================
+// =====================================================================================
+
+async function scanTronAddress(wallet) {
+    const minTimestamp = wallet.lastScannedTimestamp ? wallet.lastScannedTimestamp + 1 : 0;
+    let latestTimestampInScan = wallet.lastScannedTimestamp || 0;
+
+    try {
+        // 1. Escanear transacciones de Tokens TRC-20 (USDT)
+        const usdtUrl = `https://api.trongrid.io/v1/accounts/${wallet.address}/transactions/trc20?only_to=true&min_timestamp=${minTimestamp}&contract_address=${USDT_CONTRACT_TRON}&limit=200`;
+        const usdtResponse = await axios.get(usdtUrl, { headers: { 'TRON-PRO-API-KEY': TRON_API_KEY } });
+
+        if (usdtResponse.data.success && Array.isArray(usdtResponse.data.data)) {
+            for (const tx of usdtResponse.data.data) {
+                const amount = parseFloat(ethers.utils.formatUnits(tx.value, tx.token_info.decimals || 6));
+                await processDeposit(tx, wallet, amount, 'USDT', tx.transaction_id, tx.block_timestamp);
+                latestTimestampInScan = Math.max(latestTimestampInScan, tx.block_timestamp);
+            }
+        }
+        await sleep(300);
+
+        // 2. Escanear transacciones nativas (TRX)
+        const trxUrl = `https://api.trongrid.io/v1/accounts/${wallet.address}/transactions?only_to=true&min_timestamp=${minTimestamp}&limit=200`;
+        const trxResponse = await axios.get(trxUrl, { headers: { 'TRON-PRO-API-KEY': TRON_API_KEY } });
+
+        if (trxResponse.data.success && Array.isArray(trxResponse.data.data)) {
+            for (const tx of trxResponse.data.data) {
+                if (tx.raw_data.contract[0].type === 'TransferContract' && tx.ret[0].contractRet === 'SUCCESS') {
+                    const transferData = tx.raw_data.contract[0].parameter.value;
+                    const amountInSun = transferData.amount;
+                    if (amountInSun > 0) {
+                        const amount = parseFloat(ethers.utils.formatUnits(amountInSun, 6));
+                        await processDeposit(transferData, wallet, amount, 'TRX', tx.txID, tx.block_timestamp);
+                        latestTimestampInScan = Math.max(latestTimestampInScan, tx.block_timestamp);
+                    }
                 }
             }
-        } catch (error) {
-            console.error(`[Processor OBSOLETO] Error al procesar tx ${tx.txHash}:`, error.message);
         }
+        
+    } catch (error) {
+        console.error(`[Monitor TRON] Error escaneando ${wallet.address}:`, error.response ? error.response.data : error.message);
     }
+    
+    if (latestTimestampInScan > (wallet.lastScannedTimestamp || 0)) {
+        await CryptoWallet.findByIdAndUpdate(wallet._id, { lastScannedTimestamp: latestTimestampInScan });
+    }
+}
+
+async function checkTronTransactions() {
+    console.log("[Monitor TRON] Iniciando ciclo de escaneo STATEFUL para TRON.");
+    const wallets = await CryptoWallet.find({ chain: 'TRON' });
+    if (wallets.length === 0) {
+        console.log("[Monitor TRON] No hay billeteras TRON en el sistema para escanear.");
+        return;
+    }
+
+    for (const wallet of wallets) {
+        await scanTronAddress(wallet);
+        await sleep(550);
+    }
+}
+
+// =====================================================================================
+// ========================== SERVICIO PRINCIPAL DE INICIO ===========================
+// =====================================================================================
+
+const startMonitoring = () => {
+  console.log('✅ Iniciando servicio de monitoreo de transacciones COMPLETO (BSC + TRON)...');
+  
+  const runChecks = async () => {
+    console.log("--- [Monitor] Iniciando ciclo de monitoreo de ambas cadenas ---");
+    await Promise.all([
+        checkBscTransactions(),
+        checkTronTransactions()
+    ]);
+    console.log("--- [Monitor] Ciclo de monitoreo finalizado. Esperando al siguiente. ---");
+  };
+  
+  runChecks();
+  setInterval(runChecks, 60000); 
 };
 
-const runWatcherCycle = async () => {
-    console.log('--- [Watcher OBSOLETO] Iniciando ciclo de operación ---');
-    await scanForAllWallets();
-    await processTransactions();
-    console.log('--- [Watcher OBSOLETO] Ciclo de operación finalizado. ---');
-};
-
-const startWatcher = () => {
-    const CYCLE_INTERVAL = 60000;
-    console.log(`[Watcher OBSOLETO] Servicio de vigilancia listo pero NO INICIADO.`);
-    // La llamada a setInterval está comentada para prevenir ejecución accidental si este archivo es importado.
-    // runWatcherCycle();
-    // setInterval(runWatcherCycle, CYCLE_INTERVAL);
-};
-
-module.exports = { startWatcher };
+module.exports = { startMonitoring };
