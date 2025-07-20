@@ -1,4 +1,4 @@
-// RUTA: backend/services/transactionService.js (CORREGIDO v21.3 - ESTABILIDAD TRON)
+// RUTA: backend/services/transactionService.js (ELIMINACIÓN UMBRAL FIJO v35.21)
 
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
@@ -17,7 +17,7 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
 }
 
 // =========================================================================================
-// ================ FUNCIÓN CENTRAL DE DERIVACIÓN DE WALLETS (CORREGIDA) ===================
+// ================ FUNCIÓN CENTRAL DE DERIVACIÓN DE WALLETS (SIN CAMBIOS) ===================
 // =========================================================================================
 const getCentralWallets = () => {
     if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
@@ -26,29 +26,25 @@ const getCentralWallets = () => {
     
     const masterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
 
-    // 1. Derivación BSC (sin cambios)
     const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
     const bscNode = masterNode.derivePath(`m/44'/60'/0'/0/0`);
     const bscWallet = new ethers.Wallet(bscNode.privateKey, bscProvider);
 
-    // 2. Derivación TRON (CORREGIDA)
     const tronNode = masterNode.derivePath(`m/44'/195'/0'/0/0`);
-    // --- CORRECCIÓN CLAVE ---
-    // ethers.js devuelve la clave con "0x". TronWeb la quiere sin él.
-    const tronPrivateKey = tronNode.privateKey.slice(2); // Se elimina el prefijo "0x"
+    const tronPrivateKey = tronNode.privateKey.slice(2); 
     const tronAddress = TronWeb.address.fromPrivateKey(tronPrivateKey);
 
     return {
         bscWallet,
         tronWallet: {
-            privateKey: tronPrivateKey, // Clave privada en formato limpio
+            privateKey: tronPrivateKey, 
             address: tronAddress
         }
     };
 };
 
 // =========================================================================================
-// =================== FUNCIONES DE BARRIDO REFACTORIZADAS (CORREGIDA) =====================
+// =================== FUNCIONES DE BARRIDO REFACTORIZADAS (MODIFICADO) =====================
 // =========================================================================================
 const sweepUsdtOnTronFromDerivedWallet = async (derivationIndex, destinationAddress) => {
   if (derivationIndex === undefined || !destinationAddress) throw new Error("Índice de derivación y dirección de destino son requeridos.");
@@ -56,14 +52,13 @@ const sweepUsdtOnTronFromDerivedWallet = async (derivationIndex, destinationAddr
   const masterNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
   const depositWalletNode = masterNode.derivePath(`m/44'/195'/${derivationIndex}'/0/0`);
   
-  // --- CORRECCIÓN CLAVE (APLICADA TAMBIÉN AQUÍ) ---
-  const depositWalletPrivateKey = depositWalletNode.privateKey.slice(2); // Se elimina el prefijo "0x"
+  const depositWalletPrivateKey = depositWalletNode.privateKey.slice(2); 
   const depositWalletAddress = TronWeb.address.fromPrivateKey(depositWalletPrivateKey);
   
   const tempTronWeb = new TronWeb({
     fullHost: 'https://api.trongrid.io',
     headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY },
-    privateKey: depositWalletPrivateKey // Se inyecta la clave limpia
+    privateKey: depositWalletPrivateKey
   });
 
   const usdtContract = await tempTronWeb.contract().at(USDT_TRON_ADDRESS);
@@ -84,9 +79,6 @@ const sweepUsdtOnTronFromDerivedWallet = async (derivationIndex, destinationAddr
   }
 };
 
-// --- EL RESTO DEL ARCHIVO PERMANECE IGUAL ---
-// ... (código idéntico a v21.2) ...
-
 const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddress) => {
     if (derivationIndex === undefined || !destinationAddress) throw new Error("Índice de derivación y dirección de destino son requeridos.");
     
@@ -96,8 +88,12 @@ const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddre
     const depositWallet = new ethers.Wallet(depositWalletNode.privateKey, bscProvider);
     const usdtContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_BSC_ABI, depositWallet);
     
-    const gasBalance = await bscProvider.getBalance(depositWallet.address);
-    if (gasBalance.lt(ethers.utils.parseEther("0.0015"))) throw new Error(`Fondos BNB insuficientes para el fee en la wallet ${depositWallet.address}.`);
+    // --- INICIO DE MODIFICACIÓN v35.21 ---
+    // ELIMINAR LA VERIFICACIÓN DE GAS HARDCODEADA
+    // Ahora dependemos completamente de la estimación dinámica en adminController.js
+    // const gasBalance = await bscProvider.getBalance(depositWallet.address);
+    // if (gasBalance.lt(ethers.utils.parseEther("0.0015"))) throw new Error(`Fondos BNB insuficientes para el fee en la wallet ${depositWallet.address}.`);
+    // --- FIN DE MODIFICACIÓN v35.21 ---
     
     const usdtBalance = await new ethers.Contract(USDT_BSC_ADDRESS, USDT_BSC_ABI, bscProvider).balanceOf(depositWallet.address);
     if (usdtBalance.isZero()) throw new Error(`La wallet ${depositWallet.address} no tiene saldo de USDT (BSC) para barrer.`);
@@ -109,7 +105,7 @@ const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddre
             txHash: tx.hash,
             chain: 'BSC',
             type: 'USDT_SWEEP',
-            metadata: { from: depositWallet.address, to: destinationAddress, amount: ethers.utils.formatUnits(usdtBalance, 18) }
+            metadata: new Map([['from', depositWallet.address], ['to', destinationAddress], ['amount', ethers.utils.formatUnits(usdtBalance, 18)]])
         });
         console.log(`[SweepService] Barrido de ${depositWallet.address} (BSC) iniciado. Hash: ${tx.hash}`);
         return tx.hash;

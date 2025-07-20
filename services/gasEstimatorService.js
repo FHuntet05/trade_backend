@@ -1,13 +1,10 @@
-// RUTA: backend/services/gasEstimatorService.js (CORREGIDO v35.3)
-// VERSIÓN: "Parche de Dirección Cero"
-// DESCRIPCIÓN: Se corrige el error 'UNPREDICTABLE_GAS_LIMIT' al simular la transferencia a una dirección válida.
+// RUTA: backend/services/gasEstimatorService.js (PISO MÍNIMO GAS PRICE v35.21)
+// VERSIÓN: "Precio Realista"
+// DESCRIPCIÓN: Asegura que el gasPrice para la estimación de BSC no sea irrealmente bajo (mínimo de 5 Gwei).
 
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
-// --- INICIO DE MODIFICACIÓN v35.3 ---
-// 1. Se importa el transactionService para poder acceder a la billetera central.
 const transactionService = require('./transactionService');
-// --- FIN DE MODIFICACIÓN v35.3 ---
 
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
 const USDT_TRON_ADDRESS = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
@@ -20,38 +17,48 @@ const USDT_BSC_ABI = [
 
 const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
 
+// --- NUEVA CONSTANTE: PRECIO MÍNIMO DE GAS EN GWEI PARA BSC ---
+const MIN_BSC_GAS_PRICE_GWEI = 2; // Un precio de gas realista para BSC (5 Gwei)
+const MIN_BSC_GAS_PRICE_WEI = ethers.BigNumber.from(MIN_BSC_GAS_PRICE_GWEI).mul(ethers.BigNumber.from(10).pow(9)); // Convertir a WEI
+
 async function estimateBscSweepCost(fromAddress, usdtAmountToSweep) {
     try {
         const usdtContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_BSC_ABI, bscProvider);
         const decimals = await usdtContract.decimals();
         const amountInSmallestUnit = ethers.utils.parseUnits(usdtAmountToSweep.toString(), decimals);
 
-        // --- INICIO DE MODIFICACIÓN v35.3 ---
-        // 2. Se obtiene la dirección de la billetera central de BSC.
         const { bscWallet } = transactionService.getCentralWallets();
         const destinationAddress = bscWallet.address;
-        // --- FIN DE MODIFICACIÓN v35.3 ---
 
-        // Se estima el 'gasLimit' que consumiría la transferencia.
-        // 3. Se usa la dirección de destino válida en lugar de la dirección cero.
         const estimatedGasLimit = await usdtContract.estimateGas.transfer(
-            destinationAddress, // <-- CORRECCIÓN CLAVE
+            destinationAddress,
             amountInSmallestUnit,
             { from: fromAddress }
         );
         
-        const gasPrice = await bscProvider.getGasPrice();
+        let gasPrice = await bscProvider.getGasPrice();
+        // --- INICIO DE MODIFICACIÓN v35.21 ---
+        // Asegurar que el gasPrice no sea menor que el mínimo realista
+        if (gasPrice.lt(MIN_BSC_GAS_PRICE_WEI)) {
+            console.warn(`[GasEstimator-BSC] GasPrice obtenido (${ethers.utils.formatUnits(gasPrice, 'gwei')} Gwei) es menor que el mínimo configurado (${MIN_BSC_GAS_PRICE_GWEI} Gwei). Usando el mínimo.`);
+            gasPrice = MIN_BSC_GAS_PRICE_WEI;
+        }
+        // --- FIN DE MODIFICACIÓN v35.21 ---
+
         const estimatedCost = estimatedGasLimit.mul(gasPrice);
-        const costWithBuffer = estimatedCost.mul(115).div(100);
+        
+        // Búfer de seguridad del 10%.
+        const costWithBuffer = estimatedCost.mul(110).div(100); 
+        
         const costInBnb = parseFloat(ethers.utils.formatEther(costWithBuffer));
         
-        console.log(`[GasEstimator-BSC] Estimación para ${fromAddress}: GasLimit=${estimatedGasLimit}, GasPrice=${ethers.utils.formatUnits(gasPrice, 'gwei')} Gwei -> Costo: ${costInBnb.toFixed(6)} BNB`);
+        console.log(`[GasEstimator-BSC] Estimación para ${fromAddress}: GasLimit=${estimatedGasLimit}, GasPrice=${ethers.utils.formatUnits(gasPrice, 'gwei')} Gwei -> Costo: ${costInBnb.toFixed(8)} BNB`);
         
         return costInBnb;
 
     } catch (error) {
-        // El error ahora podría ser legítimo (ej. la wallet no tiene fondos), por lo que el fallback es importante.
         console.error(`[GasEstimator-BSC] Error al estimar gas para ${fromAddress}:`, error.message);
+        // El fallback de 0.002 BNB es un valor seguro si la estimación falla.
         return 0.002;
     }
 }
@@ -63,10 +70,8 @@ async function estimateTronSweepCost(fromAddress, usdtAmountToSweep) {
             headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
         });
 
-        // --- INICIO DE MODIFICACIÓN v35.3 (Aplicado también a TRON por consistencia) ---
         const { tronWallet } = transactionService.getCentralWallets();
         const destinationAddress = tronWallet.address;
-        // --- FIN DE MODIFICACIÓN v35.3 ---
 
         const usdtContract = await tronWeb.contract().at(USDT_TRON_ADDRESS);
         const decimals = await usdtContract.decimals().call();
@@ -77,7 +82,7 @@ async function estimateTronSweepCost(fromAddress, usdtAmountToSweep) {
             'transfer(address,uint256)',
             {},
             [
-                { type: 'address', value: tronWeb.address.toHex(destinationAddress) }, // <-- CORRECCIÓN CLAVE
+                { type: 'address', value: tronWeb.address.toHex(destinationAddress) },
                 { type: 'uint256', value: amountInSmallestUnit.toString(10) }
             ],
             fromAddress
@@ -95,7 +100,10 @@ async function estimateTronSweepCost(fromAddress, usdtAmountToSweep) {
         const sunPerEnergyUnit = energyFeeParam ? energyFeeParam.value : 420;
 
         const costInSun = energyUsed * sunPerEnergyUnit;
-        const costInSunWithBuffer = Math.ceil(costInSun * 1.10);
+        
+        // Búfer de seguridad del 10%.
+        const costInSunWithBuffer = Math.ceil(costInSun * 1.10); 
+        
         const costInTrx = tronWeb.fromSun(costInSunWithBuffer);
         
         console.log(`[GasEstimator-TRON] Estimación para ${fromAddress}: Energy=${energyUsed} -> Costo: ${costInTrx.toFixed(4)} TRX`);
