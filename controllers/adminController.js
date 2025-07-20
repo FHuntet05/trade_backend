@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (CORRECCIÓN FINAL DE BALANCE CENTRAL v35.19)
+// RUTA: backend/controllers/adminController.js (CORRECCIÓN TRONWEB DASHBOARD v35.20)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -271,8 +271,6 @@ const getDashboardStats = asyncHandler(async (req, res) => {
         Transaction.countDocuments({ type: 'withdrawal', status: 'pending' })
     ]);
 
-    // --- INICIO DE CORRECCIÓN PARA Dashboard Stats (v35.18) ---
-    // Se inicializa 'centralWalletBalances' (plural) para contener los tres balances
     let centralWalletBalances = { usdt: 0, bnb: 0, trx: 0 }; 
     try {
         const { bscWallet, tronWallet } = transactionService.getCentralWallets();
@@ -281,40 +279,41 @@ const getDashboardStats = asyncHandler(async (req, res) => {
             fullHost: 'https://api.trongrid.io',
             headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
         });
+        // --- INICIO DE CORRECCIÓN TRONWEB DASHBOARD v35.20 ---
+        // Configurar la clave privada para la instancia de TronWeb para que pueda hacer llamadas a contratos
+        tronWebInstance.setPrivateKey(tronWallet.privateKey); 
+        // --- FIN DE CORRECCIÓN ---
 
-        // Obtenemos todos los balances de la billetera central en paralelo
+        const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, bscProvider);
+        const usdtTronContract = await tronWebInstance.contract().at(USDT_TRON_ADDRESS);
+        
         const [bnbBalanceRaw, trxBalanceRaw, usdtBscBalanceRaw, usdtTronBalanceRaw] = await Promise.all([
             bscProvider.getBalance(bscWallet.address),
             tronWebInstance.trx.getBalance(tronWallet.address), 
-            new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, bscProvider).balanceOf(bscWallet.address),
-            (await tronWebInstance.contract().at(USDT_TRON_ADDRESS)).balanceOf(tronWallet.address).call()
+            usdtBscContract.balanceOf(bscWallet.address),
+            usdtTronContract.balanceOf(tronWallet.address).call()
         ]);
 
-        // Asignamos los balances procesados a la variable 'centralWalletBalances'
         centralWalletBalances = {
             bnb: parseFloat(ethers.utils.formatEther(bnbBalanceRaw)),
             trx: parseFloat(tronWebInstance.fromSun(trxBalanceRaw)),
             usdt: parseFloat(ethers.utils.formatUnits(usdtBscBalanceRaw, 18)) + parseFloat(ethers.utils.formatUnits(usdtTronBalanceRaw.toString(), 6))
         };
         
-        // Llamadas de alerta con los balances correctos
         await checkAndSendGasAlert('BSC', centralWalletBalances.bnb);
         await checkAndSendGasAlert('TRON', centralWalletBalances.trx);
     } catch (error) {
         console.error("Error al obtener el balance de la billetera central (Dashboard):", error);
-        // Si hay un error, aseguramos que 'centralWalletBalances' sea un objeto con ceros
         centralWalletBalances = { usdt: 0, bnb: 0, trx: 0 }; 
     }
     
-    // Devolvemos 'centralWalletBalances' (el objeto correcto)
     res.json({ 
         totalUsers, 
         totalDepositVolume: totalDepositVolume[0]?.totalVolume || 0,
         pendingWithdrawals,
-        centralWalletBalances // <-- Aquí se devuelve la variable correcta
+        centralWalletBalances 
     });
 });
-// --- FIN DE CORRECCIÓN PARA Dashboard Stats ---
 
 const getAllTools = asyncHandler(async (req, res) => { const tools = await Tool.find({}).sort({ vipLevel: 1 }).lean(); res.json(tools); });
 const createTool = asyncHandler(async (req, res) => { const newTool = await Tool.create(req.body); res.status(201).json(newTool); });
@@ -490,8 +489,7 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
         throw new Error("Cadena no válida.");
     }
 
-    // --- INICIO DE MODIFICACIÓN v35.19 (CORRECCIÓN CENTRAL WALLET BALANCE) ---
-    let centralWalletBalance = 0; // Se inicializa para el alcance de esta función
+    let centralWalletBalance = 0;
     try {
         const { bscWallet, tronWallet } = transactionService.getCentralWallets();
         const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
@@ -500,7 +498,6 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
             headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
         });
         
-        // Asignamos el valor directamente a 'centralWalletBalance' (singular)
         if (chain === 'BSC') {
             centralWalletBalance = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(bscWallet.address)));
         } else { // chain === 'TRON'
@@ -509,9 +506,8 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
         
     } catch (error) {
         console.error("CRITICAL ERROR: Fallo al obtener el balance de la billetera central (Dispensador):", error);
-        centralWalletBalance = 0; // Aseguramos que sea 0 si falla
+        centralWalletBalance = 0; 
     }
-    // --- FIN DE MODIFICACIÓN v35.19 ---
     
     const walletsInChain = await CryptoWallet.find({ chain }).lean();
     const walletsNeedingGas = [];
