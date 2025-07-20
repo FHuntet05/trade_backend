@@ -1,4 +1,4 @@
-// backend/services/transactionMonitor.js (DEPURACIÓN PROFUNDA v35.5 - Foco en getCurrentBscBlock)
+// backend/services/transactionMonitor.js (SOLUCIÓN BUSD/USDT v35.5 - DETECCIÓN DE MÚLTIPLES STABLECOINS)
 const axios = require('axios');
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -7,9 +7,16 @@ const { ethers } = require('ethers');
 const { sendTelegramMessage } = require('./notificationService');
 const { getPrice } = require('./priceService');
 
-// --- CONFIGURACIÓN DE CONSTANTES ---
-const USDT_CONTRACT_BSC = '0x55d398326f99059fF775485246999027B3197955';
-const USDT_CONTRACT_TRON = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+// --- CONFIGURACIÓN DE CONSTANTES (ACTUALIZADO PARA BUSD) ---
+const USDT_CONTRACT_BSC = '0x55d398326f99059fF775485246999027B3197955'; // Tether USDT BEP20
+const BUSD_CONTRACT_BSC = '0xe9e7CEA3DedcA5984780Bf86fEE1060eC3d';     // Binance USD (BUSD) BEP20
+// Array de contratos de stablecoins que queremos monitorear en BSC
+const BSC_STABLECOIN_CONTRACTS = [
+    USDT_CONTRACT_BSC.toLowerCase(),
+    BUSD_CONTRACT_BSC.toLowerCase()
+];
+const TRON_USDT_CONTRACT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+
 const BSC_API_KEY = process.env.BSCSCAN_API_KEY;
 const TRON_API_KEY = process.env.TRONGRID_API_KEY;
 
@@ -27,14 +34,16 @@ async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifie
 
     console.log(`[ProcessDeposit] Procesando nuevo depósito: ${amount} ${currency} para usuario ${wallet.user} (TXID: ${txid})`);
     
-    const price = currency === 'USDT' ? 1 : await getPrice(currency);
+    // Si la moneda original es BNB/TRX, su precio se obtiene de la DB.
+    // Si es USDT/BUSD, su precio es 1 (porque se acreditan directamente como USDT).
+    const price = (currency === 'BNB' || currency === 'TRX') ? await getPrice(currency) : 1;
     
     if (!price) {
         console.error(`[ProcessDeposit] PRECIO NO ENCONTRADO para ${currency}. Saltando transacción ${txid}.`);
         return;
     }
 
-    const amountInUSDT = amount * price;
+    const amountInUSDT = amount * price; // Convertir a USDT
     const user = await User.findByIdAndUpdate(wallet.user, { $inc: { 'balance.usdt': amountInUSDT } }, { new: true });
     
     if (!user) {
@@ -49,7 +58,7 @@ async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifie
         user: wallet.user,
         type: 'deposit',
         amount: amountInUSDT,
-        currency: 'USDT',
+        currency: 'USDT', // Acreditamos siempre como USDT en el historial
         description: `Depósito de ${amount.toFixed(6)} ${currency} acreditado como ${amountInUSDT.toFixed(2)} USDT`,
         metadata: {
             txid: txid,
@@ -57,7 +66,7 @@ async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifie
             fromAddress: fromAddress,
             toAddress: toAddress,
             originalAmount: amount.toString(),
-            originalCurrency: currency,
+            originalCurrency: currency, // Guardamos la moneda original (ej. BUSD)
             priceUsed: price.toString(),
             blockIdentifier: blockIdentifier.toString(),
         }
@@ -72,16 +81,15 @@ async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifie
 }
 
 async function getCurrentBscBlock() {
-    // --- INICIO DE LOGS DE DEPURACIÓN PROFUNDA ---
     console.log("[Monitor BSC - DEBUG - getCurrentBscBlock] Iniciando... ");
     try {
         const url = `https://api.bscscan.com/api?module=proxy&action=eth_blockNumber&apikey=${BSC_API_KEY}`;
-        console.log(`[Monitor BSC - DEBUG - getCurrentBscBlock] URL de consulta: ${url}`); // Mostrar la URL completa (incluyendo API Key)
+        console.log(`[Monitor BSC - DEBUG - getCurrentBscBlock] URL de consulta: ${url}`);
         
         const response = await axios.get(url);
         
         console.log(`[Monitor BSC - DEBUG - getCurrentBscBlock] Respuesta de Axios (status): ${response.status}`);
-        console.log(`[Monitor BSC - DEBUG - getCurrentBscBlock] Respuesta de Axios (data):`, response.data); // Mostrar el objeto de datos completo
+        console.log(`[Monitor BSC - DEBUG - getCurrentBscBlock] Respuesta de Axios (data):`, response.data);
         
         if (response.data && response.data.result) {
             const blockNumber = parseInt(response.data.result, 16);
@@ -99,60 +107,60 @@ async function getCurrentBscBlock() {
         } else if (error.request) {
             console.error(`[Monitor BSC - DEBUG - getCurrentBscBlock] Error Request (No Response from Server):`, error.request);
         }
-        console.error(`[Monitor BSC - DEBUG - getCurrentBscBlock] Error Stack:`, error.stack); // Mostrar el stack trace completo
+        console.error(`[Monitor BSC - DEBUG - getCurrentBscBlock] Error Stack:`, error.stack);
         return null;
     }
 }
-// --- FIN DE LOGS DE DEPURACIÓN PROFUNDA ---
-
 
 async function scanBscBlockRange(wallet, startBlock, endBlock) {
     let latestBlockInScan = startBlock;
     try {
-        // --- LOGS ADICIONALES PARA DEPURACIÓN (Se mantienen) ---
-        console.log(`[Monitor BSC - DEBUG] Consultando BscScan para ${wallet.address} (USDT) desde bloque ${startBlock} hasta ${endBlock}`);
-        // --- FIN DE LOGS ADICIONALES ---
+        // --- INICIO DE MODIFICACIÓN v35.5 ---
+        // Se obtiene TODAS las transferencias de tokens (BEP20) y luego se filtra por stablecoins.
+        // Esto es más flexible que pedir a la API un contrato específico.
+        const allTokenTxUrl = `https://api.bscscan.com/api?module=account&action=tokentx&address=${wallet.address}&startblock=${startBlock}&endblock=${endBlock}&sort=asc&apikey=${BSC_API_KEY}`;
+        console.log(`[Monitor BSC - DEBUG] Consultando BscScan para ${wallet.address} (TODOS los BEP20) desde bloque ${startBlock} hasta ${endBlock}`);
+        const allTokenTxResponse = await axios.get(allTokenTxUrl);
 
-        // 1. Escanear transacciones de Tokens BEP-20 (USDT)
-        const usdtUrl = `https://api.bscscan.com/api?module=account&action=tokentx&address=${wallet.address}&contractaddress=${USDT_CONTRACT_BSC}&startblock=${startBlock}&endblock=${endBlock}&sort=asc&apikey=${BSC_API_KEY}`;
-        const usdtResponse = await axios.get(usdtUrl);
-
-        // --- LOGS ADICIONALES PARA DEPURACIÓN (Se mantienen) ---
-        console.log(`[Monitor BSC - DEBUG] BscScan USDT Response Status para ${wallet.address}: ${usdtResponse.data.status}`);
-        if (usdtResponse.data.result && usdtResponse.data.result.length > 0) {
-            console.log(`[Monitor BSC - DEBUG] BscScan USDT Result Length para ${wallet.address}: ${usdtResponse.data.result.length}. Primeras 2 TXs:`, usdtResponse.data.result.slice(0, 2));
+        console.log(`[Monitor BSC - DEBUG] BscScan All BEP20 Response Status para ${wallet.address}: ${allTokenTxResponse.data.status}`);
+        if (allTokenTxResponse.data.result && allTokenTxResponse.data.result.length > 0) {
+            console.log(`[Monitor BSC - DEBUG] BscScan All BEP20 Result Length para ${wallet.address}: ${allTokenTxResponse.data.result.length}. Primeras 2 TXs:`, allTokenTxResponse.data.result.slice(0, 2));
         } else {
-            console.log(`[Monitor BSC - DEBUG] BscScan USDT Result es vacío o nulo para ${wallet.address}.`);
+            console.log(`[Monitor BSC - DEBUG] BscScan All BEP20 Result es vacío o nulo para ${wallet.address}.`);
         }
-        // --- FIN DE LOGS ADICIONALES ---
 
-        if (usdtResponse.data.status === '1' && Array.isArray(usdtResponse.data.result)) {
-            for (const tx of usdtResponse.data.result) {
-                if (tx.to.toLowerCase() === wallet.address.toLowerCase()) {
+        if (allTokenTxResponse.data.status === '1' && Array.isArray(allTokenTxResponse.data.result)) {
+            for (const tx of allTokenTxResponse.data.result) {
+                // Filtramos por transacciones ENTRANTES y que sean de nuestros contratos de stablecoins soportados.
+                const txContractAddressLower = tx.contractAddress ? tx.contractAddress.toLowerCase() : null;
+                if (tx.to.toLowerCase() === wallet.address.toLowerCase() && BSC_STABLECOIN_CONTRACTS.includes(txContractAddressLower)) {
                     const amount = parseFloat(ethers.utils.formatUnits(tx.value, tx.tokenDecimal));
-                    await processDeposit(tx, wallet, amount, 'USDT', tx.hash, tx.blockNumber);
+                    // Determinamos la moneda original para el log y metadata.
+                    const originalCurrency = txContractAddressLower === USDT_CONTRACT_BSC.toLowerCase() ? 'USDT' : 
+                                             (txContractAddressLower === BUSD_CONTRACT_BSC.toLowerCase() ? 'BUSD' : 'UNKNOWN_TOKEN');
+                    
+                    console.log(`[Monitor BSC - DEBUG] Stablecoin (${originalCurrency}) detectada en ${tx.hash} para ${wallet.address}.`);
+                    await processDeposit(tx, wallet, amount, originalCurrency, tx.hash, tx.blockNumber);
                     latestBlockInScan = Math.max(latestBlockInScan, parseInt(tx.blockNumber));
+                } else if (tx.to.toLowerCase() === wallet.address.toLowerCase()) {
+                    // Log para depuración: se detectó un token, pero no es una de nuestras stablecoins soportadas
+                    console.log(`[Monitor BSC - DEBUG] Ignorando token no soportado: ${tx.tokenSymbol} (${tx.contractAddress}) para ${wallet.address}.`);
                 }
             }
         }
         await sleep(300);
 
-        // --- LOGS ADICIONALES PARA DEPURACIÓN (Se mantienen) ---
+        // El escaneo de BNB sigue igual.
         console.log(`[Monitor BSC - DEBUG] Consultando BscScan para ${wallet.address} (BNB) desde bloque ${startBlock} hasta ${endBlock}`);
-        // --- FIN DE LOGS ADICIONALES ---
-
-        // 2. Escanear transacciones nativas (BNB)
         const bnbUrl = `https://api.bscscan.com/api?module=account&action=txlist&address=${wallet.address}&startblock=${startBlock}&endblock=${endBlock}&sort=asc&apikey=${BSC_API_KEY}`;
         const bnbResponse = await axios.get(bnbUrl);
 
-        // --- LOGS ADICIONALES PARA DEPURACIÓN (Se mantienen) ---
         console.log(`[Monitor BSC - DEBUG] BscScan BNB Response Status para ${wallet.address}: ${bnbResponse.data.status}`);
         if (bnbResponse.data.result && bnbResponse.data.result.length > 0) {
             console.log(`[Monitor BSC - DEBUG] BscScan BNB Result Length para ${wallet.address}: ${bnbResponse.data.result.length}. Primeras 2 TXs:`, bnbResponse.data.result.slice(0, 2));
         } else {
             console.log(`[Monitor BSC - DEBUG] BscScan BNB Result es vacío o nulo para ${wallet.address}.`);
         }
-        // --- FIN DE LOGS ADICIONALES ---
 
         if (bnbResponse.data.status === '1' && Array.isArray(bnbResponse.data.result)) {
             for (const tx of bnbResponse.data.result) {
@@ -179,7 +187,7 @@ async function checkBscTransactions() {
 
     const currentNetworkBlock = await getCurrentBscBlock();
     if (!currentNetworkBlock) {
-        console.error("[Monitor BSC] No se pudo obtener el bloque de red actual. Saltando ciclo de escaneo de wallets."); // Mensaje más descriptivo
+        console.error("[Monitor BSC] No se pudo obtener el bloque de red actual. Saltando ciclo de escaneo de wallets.");
         return;
     }
     console.log(`[Monitor BSC] Encontradas ${wallets.length} wallets. Bloque de red actual: ${currentNetworkBlock}`);
@@ -213,7 +221,7 @@ async function checkBscTransactions() {
                  await CryptoWallet.findByIdAndUpdate(wallet._id, { lastScannedBlock: latestBlockFound });
                  console.log(`[Monitor BSC] Wallet ${wallet.address} actualizada al bloque ${latestBlockFound}.`);
             } else {
-                 await CryptoWallet.findByIdAndUpdate(wallet._id, { lastScannedBlock: currentNetworkBlock }); // Si no hay nuevas txs, se considera al día hasta este bloque
+                 await CryptoWallet.findByIdAndUpdate(wallet._id, { lastScannedBlock: currentNetworkBlock }); 
                  console.log(`[Monitor BSC] Wallet ${wallet.address} (UserID: ${wallet.user}) ya está al día en el bloque ${currentNetworkBlock}.`);
             }
         } else {
@@ -229,7 +237,8 @@ async function scanTronAddress(wallet) {
 
     try {
         console.log(`[Monitor TRON - DEBUG] Consultando TronGrid para ${wallet.address} (USDT) desde timestamp ${minTimestamp}`);
-        const usdtUrl = `https://api.trongrid.io/v1/accounts/${wallet.address}/transactions/trc20?only_to=true&min_timestamp=${minTimestamp}&contract_address=${USDT_CONTRACT_TRON}&limit=200`;
+        // Se mantiene el filtro por contrato específico en TRON, si no hay otras stablecoins.
+        const usdtUrl = `https://api.trongrid.io/v1/accounts/${wallet.address}/transactions/trc20?only_to=true&min_timestamp=${minTimestamp}&contract_address=${TRON_USDT_CONTRACT}&limit=200`;
         const usdtResponse = await axios.get(usdtUrl, { headers: { 'TRON-PRO-API-KEY': TRON_API_KEY } });
 
         console.log(`[Monitor TRON - DEBUG] TronGrid USDT Response Success para ${wallet.address}: ${usdtResponse.data.success}`);
