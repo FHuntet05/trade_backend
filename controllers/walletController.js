@@ -1,4 +1,4 @@
-// backend/controllers/walletController.js (VERSIÓN v17.0 - ESTABILIZADA)
+// backend/controllers/walletController.js (VERSIÓN v17.1 - SOLUCIÓN EQUIPO)
 
 const axios = require('axios');
 const crypto = require('crypto');
@@ -103,8 +103,6 @@ const purchaseWithBalance = async (req, res) => {
   if (!toolId || !quantity || quantity <= 0) {
     return res.status(400).json({ message: 'Datos de compra inválidos.' });
   }
-  // NOTA: Esta función también debería usar una transacción o la lógica de mitigación.
-  // Se abordará en la Prioridad 2 para mantener el enfoque.
   try {
     const tool = await Tool.findById(toolId);
     if (!tool) return res.status(404).json({ message: 'La herramienta no existe.' });
@@ -202,8 +200,6 @@ const claim = async (req, res) => {
 };
 
 const swapNtxToUsdt = async (req, res) => {
-    // Esta función ya usa una transacción. Mantenemos este código asumiendo que
-    // el problema del replica set se resolverá. Si no, necesitará la misma refactorización.
   const { ntxAmount } = req.body;
   const userId = req.user.id;
   const SWAP_RATE = 10000;
@@ -246,17 +242,12 @@ const requestWithdrawal = async (req, res) => {
   const { amount, walletAddress } = req.body;
   const userId = req.user.id;
 
-  // Ya no usamos session, ya que no podemos garantizar que el entorno la soporte.
-  // const session = await mongoose.startSession();
-
   let withdrawalTransaction; // La declaramos fuera para poder acceder a ella en el catch
 
   try {
     // --- PASO 1: VALIDACIONES PREVIAS ---
-    // Hacemos todas las lecturas y validaciones antes de cualquier escritura.
     const settings = await Setting.findOne({ singleton: 'global_settings' });
     if (!settings) {
-      // Usamos `throw new Error` para que el catch general lo maneje y loguee.
       throw new Error('La configuración del sistema no está disponible.');
     }
 
@@ -278,7 +269,6 @@ const requestWithdrawal = async (req, res) => {
     }
 
     // --- PASO 2: CREAR EL REGISTRO DE LA TRANSACCIÓN PRIMERO (NUESTRO "SEGURO") ---
-    // Si esta operación falla, no se descuenta nada al usuario.
     const feeAmount = numericAmount * (settings.withdrawalFeePercent / 100);
     const netAmount = numericAmount - feeAmount;
 
@@ -299,11 +289,14 @@ const requestWithdrawal = async (req, res) => {
     });
     await withdrawalTransaction.save(); // Guardamos el registro
 
-    // --- PASO 3: DESCONTAR EL SALDO DEL USUARIO ---
-    // Esta es la segunda operación. Si falla, tenemos el registro para auditar.
+    // --- PASO 3: DESCONTAR EL SALDO Y ACTUALIZAR CONTADOR ---
     try {
+      // [SOLUCIÓN EQUIPO] - INICIO DE LA MODIFICACIÓN
+      // Actualizamos el saldo y el contador de retiros totales atómicamente.
       user.balance.usdt -= numericAmount;
+      user.totalWithdrawal += numericAmount;
       await user.save();
+      // [SOLUCIÓN EQUIPO] - FIN DE LA MODIFICACIÓN
     } catch (userSaveError) {
       // ¡CRÍTICO! Si falla el guardado del usuario, marcamos la transacción como fallida.
       console.error('Error al guardar el usuario después de crear la transacción de retiro. Revirtiendo estado de transacción.', userSaveError);
@@ -312,31 +305,20 @@ const requestWithdrawal = async (req, res) => {
       withdrawalTransaction.metadata.set('error', 'Fallo al actualizar el saldo del usuario post-creación.');
       await withdrawalTransaction.save();
       
-      // Lanzamos el error para que el catch principal lo maneje.
       throw new Error('No se pudo actualizar el saldo del usuario. La solicitud de retiro fue anulada.');
     }
-// ===================================================================================
-    // =================== INICIO DEL BLOQUE CORREGIDO (v17.0.1) =========================
-    // ===================================================================================
     
-    // En lugar de re-fetch, poblamos el objeto 'user' que ya tenemos en memoria.
-    // Es la fuente de verdad más fiable en este punto.
     await user.populate('activeTools.tool');
 
     res.status(201).json({ 
       message: 'Tu solicitud de retiro ha sido enviada con éxito y está pendiente de revisión.', 
-      user: user.toObject() // Enviamos el objeto 'user' actualizado y poblado.
+      user: user.toObject()
     });
-    // ===================================================================================
-    // ==================== FIN DEL BLOQUE CORREGIDO (v17.0.1) ===========================
-    // ===================================================================================
 
   } catch (error) {
-    // Catch general para cualquier otro error (ej: fallo de conexión a DB, error en `settings`, etc.)
     console.error('Error catastrófico en requestWithdrawal:', error);
     res.status(500).json({ message: error.message || 'Error interno al procesar la solicitud.' });
   }
-  // No necesitamos `finally` porque ya no manejamos la sesión.
 };
 // ===================================================================================
 // ==================== FIN DE LA FUNCIÓN CORREGIDA Y ESTABILIZADA =====================

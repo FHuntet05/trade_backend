@@ -1,4 +1,4 @@
-// backend/models/userModel.js (VERSIÓN FÉNIX v23.1 - RECONSTRUCCIÓN FINAL)
+// backend/models/userModel.js (VERSIÓN FÉNIX v23.2 - SOLUCIÓN EQUIPO)
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
@@ -22,6 +22,14 @@ const userSchema = new mongoose.Schema({
     ntx: { type: Number, default: 0 }, 
     usdt: { type: Number, default: 0 } 
   },
+  
+  // [SOLUCIÓN EQUIPO] - INICIO DE LA MODIFICACIÓN
+  // Añadimos los campos para llevar el registro acumulado de recargas y retiros.
+  // Estos son la fuente de datos para las estadísticas de "Recargas del Equipo" y "Retiros del Equipo".
+  totalRecharge: { type: Number, default: 0 },
+  totalWithdrawal: { type: Number, default: 0 },
+  // [SOLUCIÓN EQUIPO] - FIN DE LA MODIFICACIÓN
+
   baseMiningRate: { type: Number, default: 500.00 },
   effectiveMiningRate: { type: Number, default: 500.00 },
   claimedTasks: { 
@@ -30,14 +38,7 @@ const userSchema = new mongoose.Schema({
     joinedTelegram: { type: Boolean, default: false } 
   },
 
-  // =======================================================================
-  // === INICIO DE LA CORRECCIÓN CRÍTICA DE PERSISTENCIA (OPERACIÓN FÉNIX) ===
-  // Este campo es el eslabón perdido. Es ESENCIAL para el ciclo "Ir -> Reclamar".
-  // Sin él, el estado "visitado" no puede guardarse y el botón de reclamar
-  // nunca se activará tras hacer clic en "Ir".
   telegramVisited: { type: Boolean, default: false },
-  // === FIN DE LA CORRECCIÓN CRÍTICA DE PERSISTENCIA ===
-  // =======================================================================
 
   activeTools: [{ 
     tool: { type: mongoose.Schema.Types.ObjectId, ref: 'Tool', required: true }, 

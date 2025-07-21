@@ -1,4 +1,4 @@
-// backend/services/transactionMonitor.js (VERIFICACIÓN FINAL DE INTEGRIDAD v35.10 - INCLUYE TODAS LAS FUNCIONES)
+// backend/services/transactionMonitor.js (VERIFICACIÓN FINAL DE INTEGRIDAD v35.11 - SOLUCIÓN EQUIPO)
 // DESCRIPCIÓN: Versión consolidada con verificación de PENDING_TX, robustez y todas las funciones.
 
 const axios = require('axios');
@@ -70,7 +70,21 @@ async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifie
     }
 
     const amountInUSDT = amount * price;
-    const user = await User.findByIdAndUpdate(wallet.user, { $inc: { 'balance.usdt': amountInUSDT } }, { new: true });
+    
+    // [SOLUCIÓN EQUIPO] - INICIO DE LA MODIFICACIÓN
+    // Modificamos la actualización del usuario para que incremente tanto el balance
+    // como el contador de recargas totales en una sola operación atómica.
+    const user = await User.findByIdAndUpdate(
+        wallet.user, 
+        { 
+            $inc: { 
+                'balance.usdt': amountInUSDT,
+                'totalRecharge': amountInUSDT 
+            } 
+        }, 
+        { new: true }
+    );
+    // [SOLUCIÓN EQUIPO] - FIN DE LA MODIFICACIÓN
     
     if (!user) {
         console.error(`[ProcessDeposit] Usuario no encontrado para wallet ${wallet._id}. Abortando depósito.`);
@@ -98,7 +112,7 @@ async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifie
         }
     });
 
-    console.log(`[ProcessDeposit] ÉXITO: Usuario ${user.username} acreditado con ${amountInUSDT.toFixed(2)} USDT.`);
+    console.log(`[ProcessDeposit] ÉXITO: Usuario ${user.username} acreditado con ${amountInUSDT.toFixed(2)} USDT. Recarga total actualizada.`);
     
     if (user.telegramId) {
         const message = `✅ <b>¡Depósito confirmado!</b>\n\nSe han acreditado <b>${amountInUSDT.toFixed(2)} USDT</b> a tu saldo.`;
@@ -335,7 +349,7 @@ async function scanTronAddress(wallet) {
 /**
  * Función principal para verificar transacciones en la red TRON.
  */
-async function checkTronTransactions() { // <<< ESTA ES LA FUNCIÓN QUE DEBE ESTAR DEFINIDA
+async function checkTronTransactions() {
     console.log("[Monitor TRON] Iniciando ciclo de escaneo STATEFUL para TRON.");
     const wallets = await CryptoWallet.find({ chain: 'TRON' });
     if (wallets.length === 0) {
@@ -378,7 +392,6 @@ async function processPendingTransactionsStatus() {
                 }
             } else if (tx.chain === 'TRON') {
                 console.log(`[Monitor PendingTx] TRON: Verificando hash ${tx.txHash}`);
-                // Asegúrate de usar 'new TronWeb.default' si tu importación de TronWeb es solo 'TronWeb'
                 const localTronWeb = new TronWeb.default({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': TRON_API_KEY } });
                 const tronTxInfo = await localTronWeb.trx.getTransactionInfo(tx.txHash);
                 if (tronTxInfo && tronTxInfo.receipt && tronTxInfo.receipt.result === 'SUCCESS') {
@@ -417,7 +430,7 @@ const startMonitoring = () => {
     console.log("--- [Monitor] Iniciando ciclo de monitoreo de ambas cadenas ---");
     await Promise.all([
         checkBscTransactions(),
-        checkTronTransactions(), // <<<<< AQUÍ SE LLAMA A checkTronTransactions
+        checkTronTransactions(),
         processPendingTransactionsStatus() 
     ]);
     console.log("--- [Monitor] Ciclo de monitoreo finalizado. Esperando al siguiente. ---");
