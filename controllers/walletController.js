@@ -1,4 +1,4 @@
-// backend/controllers/walletController.js (VERSIÓN v17.1 - SOLUCIÓN EQUIPO)
+// backend/controllers/walletController.js (VERSIÓN v17.2 - SOLUCIÓN EQUIPO v2)
 
 const axios = require('axios');
 const crypto = require('crypto');
@@ -235,17 +235,13 @@ const swapNtxToUsdt = async (req, res) => {
   }
 };
 
-// ===================================================================================
-// =================== INICIO DE LA FUNCIÓN CORREGIDA Y ESTABILIZADA ===================
-// ===================================================================================
 const requestWithdrawal = async (req, res) => {
   const { amount, walletAddress } = req.body;
   const userId = req.user.id;
 
-  let withdrawalTransaction; // La declaramos fuera para poder acceder a ella en el catch
+  let withdrawalTransaction;
 
   try {
-    // --- PASO 1: VALIDACIONES PREVIAS ---
     const settings = await Setting.findOne({ singleton: 'global_settings' });
     if (!settings) {
       throw new Error('La configuración del sistema no está disponible.');
@@ -255,11 +251,9 @@ const requestWithdrawal = async (req, res) => {
     if (!numericAmount || numericAmount < settings.minimumWithdrawal) {
       return res.status(400).json({ message: `El retiro mínimo es ${settings.minimumWithdrawal} USDT.` });
     }
-
     if (!walletAddress) {
       return res.status(400).json({ message: 'La dirección de billetera es requerida.' });
     }
-
     const user = await User.findById(userId);
     if (!user) {
         return res.status(404).json({ message: 'Usuario no encontrado.' });
@@ -267,44 +261,38 @@ const requestWithdrawal = async (req, res) => {
     if (user.balance.usdt < numericAmount) {
       return res.status(400).json({ message: 'Saldo USDT insuficiente.' });
     }
-
-    // --- PASO 2: CREAR EL REGISTRO DE LA TRANSACCIÓN PRIMERO (NUESTRO "SEGURO") ---
+    
     const feeAmount = numericAmount * (settings.withdrawalFeePercent / 100);
     const netAmount = numericAmount - feeAmount;
 
     withdrawalTransaction = new Transaction({
       user: userId,
       type: 'withdrawal',
-      status: 'pending', // Nace como 'pending'
+      status: 'pending',
       amount: numericAmount,
       currency: 'USDT',
       description: `Solicitud de retiro a ${walletAddress}`,
       metadata: {
         walletAddress,
-        network: 'USDT-BEP20', // Como lo envía el frontend
+        network: 'USDT-BEP20',
         feePercent: settings.withdrawalFeePercent.toString(),
         feeAmount: feeAmount.toFixed(4),
         netAmount: netAmount.toFixed(4),
       }
     });
-    await withdrawalTransaction.save(); // Guardamos el registro
+    await withdrawalTransaction.save();
 
-    // --- PASO 3: DESCONTAR EL SALDO Y ACTUALIZAR CONTADOR ---
     try {
-      // [SOLUCIÓN EQUIPO] - INICIO DE LA MODIFICACIÓN
-      // Actualizamos el saldo y el contador de retiros totales atómicamente.
+      // [SOLUCIÓN EQUIPO v2] - REVERSIÓN DE CAMBIO
+      // Ya no se incrementa el `totalWithdrawal` en el momento de la solicitud.
+      // Se descuenta únicamente el balance. La lógica se ha movido a `adminController.js`.
       user.balance.usdt -= numericAmount;
-      user.totalWithdrawal += numericAmount;
       await user.save();
-      // [SOLUCIÓN EQUIPO] - FIN DE LA MODIFICACIÓN
     } catch (userSaveError) {
-      // ¡CRÍTICO! Si falla el guardado del usuario, marcamos la transacción como fallida.
       console.error('Error al guardar el usuario después de crear la transacción de retiro. Revirtiendo estado de transacción.', userSaveError);
-      
       withdrawalTransaction.status = 'failed';
       withdrawalTransaction.metadata.set('error', 'Fallo al actualizar el saldo del usuario post-creación.');
       await withdrawalTransaction.save();
-      
       throw new Error('No se pudo actualizar el saldo del usuario. La solicitud de retiro fue anulada.');
     }
     
@@ -320,9 +308,6 @@ const requestWithdrawal = async (req, res) => {
     res.status(500).json({ message: error.message || 'Error interno al procesar la solicitud.' });
   }
 };
-// ===================================================================================
-// ==================== FIN DE LA FUNCIÓN CORREGIDA Y ESTABILIZADA =====================
-// ===================================================================================
 
 const getHistory = async (req, res) => {
   try {

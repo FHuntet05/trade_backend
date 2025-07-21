@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (CORRECCIÓN TRONWEB DASHBOARD v35.20)
+// RUTA: backend/controllers/adminController.js (SOLUCIÓN EQUIPO v2)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -64,16 +64,26 @@ const processWithdrawal = asyncHandler(async (req, res) => {
     const { status, adminNotes } = req.body;
     const { id } = req.params;
     if (!['completed', 'rejected'].includes(status)) { res.status(400); throw new Error("El estado debe ser 'completed' o 'rejected'."); }
-    const withdrawal = await Transaction.findById(id).populate('user', 'telegramId');
+    
+    // [SOLUCIÓN EQUIPO v2] - No poblamos aquí para evitar problemas en la sesión. Se obtiene el ID.
+    const withdrawal = await Transaction.findById(id); 
+    
     if (!withdrawal || withdrawal.type !== 'withdrawal' || withdrawal.status !== 'pending') { res.status(404); throw new Error('Retiro no encontrado o ya ha sido procesado.'); }
-    const userToNotify = withdrawal.user;
-    if (!userToNotify || !userToNotify.telegramId) { console.warn(`No se pudo encontrar el telegramId para el usuario ${withdrawal.user._id}. No se enviará notificación.`); }
+    
+    // [SOLUCIÓN EQUIPO v2] - Obtenemos el ID del usuario directamente desde la transacción.
+    const userId = withdrawal.user;
+    const userToNotify = await User.findById(userId).select('telegramId');
+
+    if (!userToNotify || !userToNotify.telegramId) { console.warn(`No se pudo encontrar el telegramId para el usuario ${userId}. No se enviará notificación.`); }
+    
     const session = await mongoose.startSession();
     try {
         session.startTransaction();
+        
         withdrawal.metadata.set('adminNotes', adminNotes || 'N/A');
         withdrawal.metadata.set('processedBy', req.user.username);
         let notificationMessage = '';
+        
         if (status === 'completed') {
             const recipientAddress = withdrawal.metadata.get('walletAddress');
             const amount = withdrawal.amount;
@@ -81,11 +91,17 @@ const processWithdrawal = asyncHandler(async (req, res) => {
             if (!recipientAddress || !amount || !currency) throw new Error('Datos de retiro incompletos.');
             const txHash = `simulated_tx_${Date.now()}`; 
             withdrawal.status = 'completed';
-            withdrawal.metadata.set('transactionHash', txHash);
             withdrawal.description = `Retiro completado. Hash: ${txHash.substring(0, 15)}...`;
             notificationMessage = `✅ <b>¡Retiro Aprobado!</b>\n\nTu solicitud de retiro por <b>${amount.toFixed(2)} ${currency}</b> ha sido procesada.\n\n<b>Dirección:</b> <code>${recipientAddress}</code>`;
-        } else {
-            const userForRefund = await User.findById(withdrawal.user._id).session(session);
+            
+            // [SOLUCIÓN EQUIPO v2] - INICIO DE LA MODIFICACIÓN
+            // En este punto, el retiro se considera definitivo. Incrementamos el contador totalWithdrawal del usuario.
+            // Usamos $inc para una operación atómica segura.
+            await User.findByIdAndUpdate(userId, { $inc: { totalWithdrawal: amount } }, { session });
+            // [SOLUCIÓN EQUIPO v2] - FIN DE LA MODIFICACIÓN
+
+        } else { // status === 'rejected'
+            const userForRefund = await User.findById(withdrawal.user).session(session);
             if (!userForRefund) throw new Error('Usuario del retiro no encontrado para el reembolso.');
             userForRefund.balance.usdt += withdrawal.amount;
             await userForRefund.save({ session });
@@ -93,11 +109,14 @@ const processWithdrawal = asyncHandler(async (req, res) => {
             withdrawal.description = `Retiro rechazado por admin. Fondos devueltos al saldo.`;
             notificationMessage = `❌ <b>Retiro Rechazado</b>\n\nTu solicitud de retiro por <b>${withdrawal.amount.toFixed(2)} USDT</b> ha sido rechazada.\n\n<b>Motivo:</b> ${adminNotes || 'Contacta a soporte.'}\n\nLos fondos han sido devueltos a tu saldo.`;
         }
+        
         const updatedWithdrawal = await withdrawal.save({ session });
         await session.commitTransaction();
+        
         if (userToNotify && userToNotify.telegramId && notificationMessage) {
             await sendTelegramMessage(userToNotify.telegramId, notificationMessage);
         }
+        
         res.json({ message: `Retiro marcado como '${status}' exitosamente.`, withdrawal: updatedWithdrawal });
     } catch (error) {
         await session.abortTransaction();
@@ -107,6 +126,7 @@ const processWithdrawal = asyncHandler(async (req, res) => {
         session.endSession();
     }
 });
+
 
 const checkAndSendGasAlert = async (chain, currentBalance) => {
     try {
@@ -165,25 +185,46 @@ const adjustUserBalance = asyncHandler(async (req, res) => {
     if (!['admin_credit', 'admin_debit'].includes(type) || !['USDT', 'NTX'].includes(currency) || !amount || !reason) {
         res.status(400); throw new Error("Parámetros inválidos.");
     }
+
     const session = await mongoose.startSession();
     try {
         session.startTransaction();
-        const user = await User.findById(id).session(session);
-        if (!user) throw new Error('Usuario no encontrado.');
+
         const currencyKey = currency.toLowerCase();
+        let updateOperation = {};
+
+        // [SOLUCIÓN EQUIPO v2] - INICIO DE LA MODIFICACIÓN
+        // Construimos la operación de actualización dinámicamente.
         if (type === 'admin_credit') {
-            user.balance[currencyKey] = (user.balance[currencyKey] || 0) + amount;
-        } else {
-            if ((user.balance[currencyKey] || 0) < amount) throw new Error('Saldo insuficiente para realizar el débito.');
-            user.balance[currencyKey] -= amount;
+            updateOperation = { $inc: { [`balance.${currencyKey}`]: amount } };
+            // Si el crédito es en USDT, también incrementamos el contador de recarga total.
+            if (currency === 'USDT') {
+                updateOperation.$inc.totalRecharge = amount;
+            }
+        } else { // type === 'admin_debit'
+            // Para el débito, primero verificamos el saldo para no dejarlo en negativo.
+            const userCheck = await User.findById(id).select(`balance.${currencyKey}`).session(session);
+            if (!userCheck || (userCheck.balance[currencyKey] || 0) < amount) {
+                throw new Error('Saldo insuficiente para realizar el débito.');
+            }
+            updateOperation = { $inc: { [`balance.${currencyKey}`]: -amount } };
+            // Nota: Un débito administrativo NO afecta el contador totalWithdrawal.
+            // totalWithdrawal solo se afecta por retiros aprobados.
         }
+        
+        // Ejecutamos la actualización atómica y obtenemos el usuario actualizado.
+        const user = await User.findByIdAndUpdate(id, updateOperation, { new: true, session });
+        if (!user) throw new Error('Usuario no encontrado.');
+        // [SOLUCIÓN EQUIPO v2] - FIN DE LA MODIFICACIÓN
+
         const transaction = new Transaction({
             user: id, type, currency, amount, status: 'completed', description: reason,
             metadata: { adminUsername: req.user.username }
         });
-        await user.save({ session });
+
         await transaction.save({ session });
         await session.commitTransaction();
+
         res.status(200).json({ message: 'Saldo ajustado exitosamente.', user });
     } catch (error) {
         await session.abortTransaction();
@@ -192,6 +233,7 @@ const adjustUserBalance = asyncHandler(async (req, res) => {
         session.endSession();
     }
 });
+
 
 const getAllUsers = asyncHandler(async (req, res) => {
     const pageSize = 10; const page = Number(req.query.page) || 1;
@@ -279,34 +321,26 @@ const getDashboardStats = asyncHandler(async (req, res) => {
             fullHost: 'https://api.trongrid.io',
             headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
         });
-        // --- INICIO DE CORRECCIÓN TRONWEB DASHBOARD v35.20 ---
-        // Configurar la clave privada para la instancia de TronWeb para que pueda hacer llamadas a contratos
         tronWebInstance.setPrivateKey(tronWallet.privateKey); 
-        // --- FIN DE CORRECCIÓN ---
-
         const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, bscProvider);
         const usdtTronContract = await tronWebInstance.contract().at(USDT_TRON_ADDRESS);
-        
         const [bnbBalanceRaw, trxBalanceRaw, usdtBscBalanceRaw, usdtTronBalanceRaw] = await Promise.all([
             bscProvider.getBalance(bscWallet.address),
             tronWebInstance.trx.getBalance(tronWallet.address), 
             usdtBscContract.balanceOf(bscWallet.address),
             usdtTronContract.balanceOf(tronWallet.address).call()
         ]);
-
         centralWalletBalances = {
             bnb: parseFloat(ethers.utils.formatEther(bnbBalanceRaw)),
             trx: parseFloat(tronWebInstance.fromSun(trxBalanceRaw)),
             usdt: parseFloat(ethers.utils.formatUnits(usdtBscBalanceRaw, 18)) + parseFloat(ethers.utils.formatUnits(usdtTronBalanceRaw.toString(), 6))
         };
-        
         await checkAndSendGasAlert('BSC', centralWalletBalances.bnb);
         await checkAndSendGasAlert('TRON', centralWalletBalances.trx);
     } catch (error) {
         console.error("Error al obtener el balance de la billetera central (Dashboard):", error);
         centralWalletBalances = { usdt: 0, bnb: 0, trx: 0 }; 
     }
-    
     res.json({ 
         totalUsers, 
         totalDepositVolume: totalDepositVolume[0]?.totalVolume || 0,
@@ -321,292 +355,17 @@ const updateTool = asyncHandler(async (req, res) => { const tool = await Tool.fi
 const deleteTool = asyncHandler(async (req, res) => { const tool = await Tool.findById(req.params.id); if (!tool) return res.status(404).json({ message: 'Herramienta no encontrada.' }); await tool.deleteOne(); res.json({ message: 'Herramienta eliminada.' }); });
 const getSettings = asyncHandler(async (req, res) => { const settings = await Setting.findOneAndUpdate({ singleton: 'global_settings' }, { $setOnInsert: { singleton: 'global_settings' } }, { upsert: true, new: true, setDefaultsOnInsert: true }).lean(); res.json(settings); });
 const updateSettings = asyncHandler(async (req, res) => { const updatedSettings = await Setting.findOneAndUpdate({ singleton: 'global_settings' }, req.body, { new: true }); res.json(updatedSettings); });
-
-const generateTwoFactorSecret = asyncHandler(async (req, res) => {
-    const secret = speakeasy.generateSecret({ name: `NeuroLink Admin (${req.user.username})` });
-    await User.findByIdAndUpdate(req.user.id, { twoFactorSecret: secret.base32 });
-    const data_url = await qrCodeToDataURLPromise(secret.otpauth_url);
-    res.json({ secret: secret.base32, qrCodeUrl: data_url });
-});
-
-const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
-    const { token } = req.body;
-    const user = await User.findById(req.user.id).select('+twoFactorSecret');
-    if (!user || !user.twoFactorSecret) return res.status(400).json({ message: 'No se ha generado un secreto 2FA.' });
-    const verified = speakeasy.totp.verify({ secret: user.twoFactorSecret, encoding: 'base32', token });
-    if (verified) { user.isTwoFactorEnabled = true; await user.save(); res.json({ message: '¡2FA habilitado!' }); }
-    else { res.status(400).json({ message: 'Token inválido.' }); }
-});
-
-async function _getBalancesForAddress(address, chain) {
-    const TIMEOUT_MS = 15000;
-    try {
-        if (chain === 'BSC') {
-            const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
-            const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, bscProvider);
-            const [usdtBalanceRaw, bnbBalanceRaw] = await Promise.all([
-                promiseWithTimeout(usdtBscContract.balanceOf(address), TIMEOUT_MS),
-                promiseWithTimeout(bscProvider.getBalance(address), TIMEOUT_MS)
-            ]);
-            
-            console.log(`[_getBalancesForAddress DEBUG] Wallet: ${address}, Raw BNB: ${bnbBalanceRaw.toString()}, Formatted BNB: ${ethers.utils.formatEther(bnbBalanceRaw)}`);
-
-            const bnbFormatted = ethers.utils.formatEther(bnbBalanceRaw);
-            return { 
-                usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw, 18)), 
-                bnb: parseFloat(bnbFormatted),
-                trx: 0 
-            };
-        } else if (chain === 'TRON') {
-            const tempTronWeb = new TronWeb({
-                fullHost: 'https://api.trongrid.io',
-                headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
-            });
-            tempTronWeb.setAddress(address);
-
-            const usdtTronContract = await tempTronWeb.contract().at(USDT_TRON_ADDRESS);
-            const [usdtBalanceRaw, trxBalanceRaw] = await Promise.all([
-                promiseWithTimeout(usdtTronContract.balanceOf(address).call(), TIMEOUT_MS),
-                promiseWithTimeout(tempTronWeb.trx.getBalance(address), TIMEOUT_MS)
-            ]);
-
-            console.log(`[_getBalancesForAddress DEBUG] Wallet: ${address}, Raw TRX: ${trxBalanceRaw.toString()}, Formatted TRX: ${tempTronWeb.fromSun(trxBalanceRaw)}`);
-
-            const trxFormatted = tempTronWeb.fromSun(trxBalanceRaw);
-            return { 
-                usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6)), 
-                trx: parseFloat(trxFormatted),
-                bnb: 0 
-            };
-        }
-    } catch (error) {
-        console.error(`Error al obtener saldo para ${address} en ${chain}:`, error);
-        throw new Error(`Fallo al escanear ${address}. Causa: ${error.message}`);
-    }
-}
-
-const getTreasuryWalletsList = asyncHandler(async (req, res) => {
-    const wallets = await CryptoWallet.find({}).select('address chain user').populate('user', 'username').lean();
-    
-    const walletsWithDetails = await Promise.all(wallets.map(async (wallet) => {
-        try {
-            const balances = await _getBalancesForAddress(wallet.address, wallet.chain);
-            let estimatedRequiredGas = 0;
-            if (balances.usdt > 0.000001) {
-                if (wallet.chain === 'BSC') {
-                    estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt);
-                } else if (wallet.chain === 'TRON') {
-                    estimatedRequiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt);
-                }
-            }
-            
-            return {
-                ...wallet,
-                usdtBalance: balances.usdt,
-                gasBalance: wallet.chain === 'BSC' ? balances.bnb : balances.trx,
-                estimatedRequiredGas: estimatedRequiredGas
-            };
-        } catch (error) {
-            console.error(`Error al obtener detalles para la wallet ${wallet.address}: ${error.message}`);
-            return { ...wallet, usdtBalance: 0, gasBalance: 0, estimatedRequiredGas: 0 };
-        }
-    }));
-
-    res.json(walletsWithDetails);
-});
-
-const getWalletBalance = asyncHandler(async (req, res) => {
-    const { address, chain } = req.body;
-    if (!address || !chain) { res.status(400); throw new Error('Se requiere address y chain'); }
-    try {
-        const balances = await _getBalancesForAddress(address, chain);
-        res.json({ success: true, balances });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-});
-
-const sweepFunds = asyncHandler(async (req, res) => {
-    const { chain, token, recipientAddress, walletsToSweep } = req.body;
-    if (!chain || !token || !recipientAddress || !walletsToSweep || !Array.isArray(walletsToSweep)) {
-        res.status(400); throw new Error("Parámetros de barrido inválidos.");
-    }
-    if (token.toUpperCase() !== 'USDT') {
-        res.status(400); throw new Error("Solo se puede barrer USDT.");
-    }
-    const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: chain }).lean();
-    if (wallets.length === 0) {
-        return res.json({ message: "Wallets candidatas no encontradas.", summary: {}, details: [] });
-    }
-    
-    const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, skippedForNoGas: 0, skippedForNoToken: 0, failedTxs: 0, totalSwept: 0 }, details: [] };
-    
-    for (const wallet of wallets) {
-        try {
-            const balances = await _getBalancesForAddress(wallet.address, chain);
-            const tokenBalance = balances.usdt;
-            const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
-
-            let estimatedRequiredGas = 0;
-            if (tokenBalance > 0.000001) {
-                if (chain === 'BSC') {
-                    estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, tokenBalance);
-                } else if (chain === 'TRON') {
-                    estimatedRequiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, tokenBalance);
-                }
-            }
-            
-            const sweepFunction = chain === 'BSC' ? transactionService.sweepUsdtOnBscFromDerivedWallet : transactionService.sweepUsdtOnTronFromDerivedWallet;
-
-            if (tokenBalance <= 0.000001) { 
-                report.summary.skippedForNoToken++; 
-                report.details.push({ address: wallet.address, status: 'SKIPPED_NO_TOKEN', reason: 'Saldo de USDT es cero o insignificante.' }); 
-                continue; 
-            }
-            
-            if (gasBalance < estimatedRequiredGas) { 
-                report.summary.skippedForNoGas++; 
-                report.details.push({ address: wallet.address, status: 'SKIPPED_NO_GAS', reason: `Gas insuficiente. Tienes ${gasBalance.toFixed(8)}, se requiere ~${estimatedRequiredGas.toFixed(8)}` }); 
-                continue; 
-            }
-            
-            const txHash = await sweepFunction(wallet.derivationIndex, recipientAddress);
-            report.summary.successfulSweeps++;
-            report.summary.totalSwept += tokenBalance;
-            report.details.push({ address: wallet.address, status: 'SUCCESS', txHash, amount: tokenBalance });
-        } catch (error) {
-            report.summary.failedTxs++;
-            report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message });
-        }
-    }
-    res.json(report);
-});
-
-const analyzeGasNeeds = asyncHandler(async (req, res) => {
-    const { chain } = req.body;
-    if (!['BSC', 'TRON'].includes(chain)) {
-        res.status(400);
-        throw new Error("Cadena no válida.");
-    }
-
-    let centralWalletBalance = 0;
-    try {
-        const { bscWallet, tronWallet } = transactionService.getCentralWallets();
-        const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
-        const tronWebInstance = new TronWeb({
-            fullHost: 'https://api.trongrid.io',
-            headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY }
-        });
-        
-        if (chain === 'BSC') {
-            centralWalletBalance = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(bscWallet.address)));
-        } else { // chain === 'TRON'
-            centralWalletBalance = parseFloat(tronWebInstance.fromSun(await tronWebInstance.trx.getBalance(tronWallet.address)));
-        }
-        
-    } catch (error) {
-        console.error("CRITICAL ERROR: Fallo al obtener el balance de la billetera central (Dispensador):", error);
-        centralWalletBalance = 0; 
-    }
-    
-    const walletsInChain = await CryptoWallet.find({ chain }).lean();
-    const walletsNeedingGas = [];
-    
-    for (const wallet of walletsInChain) {
-        try {
-            const balances = await _getBalancesForAddress(wallet.address, chain);
-            const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
-
-            if (balances.usdt > 0.000001) { 
-                let requiredGas = 0;
-                if (chain === 'BSC') {
-                    requiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt);
-                } else { 
-                    requiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt);
-                }
-
-                const gasMissing = requiredGas - gasBalance;
-                
-                if (gasBalance < requiredGas - GAS_SUFFICIENT_TOLERANCE || gasBalance === 0) { 
-                    walletsNeedingGas.push({ 
-                        address: wallet.address, 
-                        usdtBalance: balances.usdt, 
-                        gasBalance: gasBalance, 
-                        requiredGas: requiredGas 
-                    });
-                } else {
-                    console.log(`[analyzeGasNeeds DEBUG] Wallet ${wallet.address} con ${balances.usdt} USDT. Gas: ${gasBalance.toFixed(8)}, Requerido: ${requiredGas.toFixed(8)}. Gas Faltante: ${gasMissing.toFixed(8)}. No necesita gas (ya tiene suficiente).`);
-                }
-            }
-        } catch (error) {
-            console.error(`No se pudo analizar la wallet ${wallet.address}: ${error.message}`);
-        }
-    }
-    
-    res.json({ centralWalletBalance, walletsNeedingGas });
-});
-
-const dispatchGas = asyncHandler(async (req, res) => {
-    const { chain, targets } = req.body;
-    if (!chain || !Array.isArray(targets) || targets.length === 0) { res.status(400); throw new Error("Petición inválida."); }
-    const report = { summary: { success: 0, failed: 0, totalDispatched: 0 }, details: [] };
-    const sendFunction = chain === 'BSC' ? transactionService.sendBscGas : transactionService.sendTronTrx;
-    for (const target of targets) {
-        try {
-            const txHash = await sendFunction(target.address, target.amount);
-            report.summary.success++;
-            report.summary.totalDispatched += parseFloat(target.amount);
-            report.details.push({ address: target.address, status: 'SUCCESS', txHash, amount: target.amount });
-        } catch (error) {
-            report.summary.failed++;
-            report.details.push({ address: target.address, status: 'FAILED', reason: error.message, amount: target.amount });
-        }
-    }
-    res.json(report);
-});
-
-const sendBroadcastNotification = asyncHandler(async (req, res) => {
-    const { message, target, imageUrl, buttons } = req.body;
-    if (!message || !target) {
-        res.status(400); throw new Error("Mensaje y público objetivo son requeridos.");
-    }
-    let usersToNotify = [];
-    if (target.type === 'all') {
-        usersToNotify = await User.find({ status: 'active' }).select('telegramId').lean();
-    } else if (target.type === 'id' && target.value) {
-        const user = await User.findOne({ telegramId: target.value }).select('telegramId').lean();
-        if (user) usersToNotify.push(user);
-    }
-    if (usersToNotify.length === 0) {
-        return res.json({ message: "No se encontraron usuarios para notificar." });
-    }
-    res.status(202).json({ message: `Enviando notificación a ${usersToNotify.length} usuarios. Este proceso puede tardar.` });
-    (async () => {
-        let successCount = 0;
-        for (const user of usersToNotify) {
-            const result = await sendTelegramMessage(user.telegramId, message, { imageUrl, buttons });
-            if(result.success) successCount++;
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        console.log(`[Broadcast] Notificación completada. ${successCount}/${usersToNotify.length} envíos exitosos.`);
-    })();
-});
-
-const cancelTransaction = asyncHandler(async (req, res) => {
-    const { txHash } = req.body;
-    if (!txHash) {
-        res.status(400); throw new Error("Se requiere el hash de la transacción.");
-    }
-    res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash });
-});
-
-const speedUpTransaction = asyncHandler(async (req, res) => {
-    const { txHash } = req.body;
-    if (!txHash) {
-        res.status(400); throw new Error("Se requiere el hash de la transacción.");
-    }
-    res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash });
-});
+const generateTwoFactorSecret = asyncHandler(async (req, res) => { const secret = speakeasy.generateSecret({ name: `NeuroLink Admin (${req.user.username})` }); await User.findByIdAndUpdate(req.user.id, { twoFactorSecret: secret.base32 }); const data_url = await qrCodeToDataURLPromise(secret.otpauth_url); res.json({ secret: secret.base32, qrCodeUrl: data_url }); });
+const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => { const { token } = req.body; const user = await User.findById(req.user.id).select('+twoFactorSecret'); if (!user || !user.twoFactorSecret) return res.status(400).json({ message: 'No se ha generado un secreto 2FA.' }); const verified = speakeasy.totp.verify({ secret: user.twoFactorSecret, encoding: 'base32', token }); if (verified) { user.isTwoFactorEnabled = true; await user.save(); res.json({ message: '¡2FA habilitado!' }); } else { res.status(400).json({ message: 'Token inválido.' }); }});
+async function _getBalancesForAddress(address, chain) { const TIMEOUT_MS = 15000; try { if (chain === 'BSC') { const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/'); const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, bscProvider); const [usdtBalanceRaw, bnbBalanceRaw] = await Promise.all([ promiseWithTimeout(usdtBscContract.balanceOf(address), TIMEOUT_MS), promiseWithTimeout(bscProvider.getBalance(address), TIMEOUT_MS) ]); const bnbFormatted = ethers.utils.formatEther(bnbBalanceRaw); return { usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw, 18)), bnb: parseFloat(bnbFormatted), trx: 0 }; } else if (chain === 'TRON') { const tempTronWeb = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY } }); tempTronWeb.setAddress(address); const usdtTronContract = await tempTronWeb.contract().at(USDT_TRON_ADDRESS); const [usdtBalanceRaw, trxBalanceRaw] = await Promise.all([ promiseWithTimeout(usdtTronContract.balanceOf(address).call(), TIMEOUT_MS), promiseWithTimeout(tempTronWeb.trx.getBalance(address), TIMEOUT_MS) ]); const trxFormatted = tempTronWeb.fromSun(trxBalanceRaw); return { usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw.toString(), 6)), trx: parseFloat(trxFormatted), bnb: 0 }; } } catch (error) { console.error(`Error al obtener saldo para ${address} en ${chain}:`, error); throw new Error(`Fallo al escanear ${address}. Causa: ${error.message}`); }}
+const getTreasuryWalletsList = asyncHandler(async (req, res) => { const wallets = await CryptoWallet.find({}).select('address chain user').populate('user', 'username').lean(); const walletsWithDetails = await Promise.all(wallets.map(async (wallet) => { try { const balances = await _getBalancesForAddress(wallet.address, wallet.chain); let estimatedRequiredGas = 0; if (balances.usdt > 0.000001) { if (wallet.chain === 'BSC') { estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt); } else if (wallet.chain === 'TRON') { estimatedRequiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt); } } return { ...wallet, usdtBalance: balances.usdt, gasBalance: wallet.chain === 'BSC' ? balances.bnb : balances.trx, estimatedRequiredGas: estimatedRequiredGas }; } catch (error) { console.error(`Error al obtener detalles para la wallet ${wallet.address}: ${error.message}`); return { ...wallet, usdtBalance: 0, gasBalance: 0, estimatedRequiredGas: 0 }; } })); res.json(walletsWithDetails); });
+const getWalletBalance = asyncHandler(async (req, res) => { const { address, chain } = req.body; if (!address || !chain) { res.status(400); throw new Error('Se requiere address y chain'); } try { const balances = await _getBalancesForAddress(address, chain); res.json({ success: true, balances }); } catch (error) { res.status(500).json({ success: false, message: error.message }); }});
+const sweepFunds = asyncHandler(async (req, res) => { const { chain, token, recipientAddress, walletsToSweep } = req.body; if (!chain || !token || !recipientAddress || !walletsToSweep || !Array.isArray(walletsToSweep)) { res.status(400); throw new Error("Parámetros de barrido inválidos."); } if (token.toUpperCase() !== 'USDT') { res.status(400); throw new Error("Solo se puede barrer USDT."); } const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: chain }).lean(); if (wallets.length === 0) { return res.json({ message: "Wallets candidatas no encontradas.", summary: {}, details: [] }); } const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, skippedForNoGas: 0, skippedForNoToken: 0, failedTxs: 0, totalSwept: 0 }, details: [] }; for (const wallet of wallets) { try { const balances = await _getBalancesForAddress(wallet.address, chain); const tokenBalance = balances.usdt; const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx; let estimatedRequiredGas = 0; if (tokenBalance > 0.000001) { if (chain === 'BSC') { estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, tokenBalance); } else if (chain === 'TRON') { estimatedRequiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, tokenBalance); } } const sweepFunction = chain === 'BSC' ? transactionService.sweepUsdtOnBscFromDerivedWallet : transactionService.sweepUsdtOnTronFromDerivedWallet; if (tokenBalance <= 0.000001) { report.summary.skippedForNoToken++; report.details.push({ address: wallet.address, status: 'SKIPPED_NO_TOKEN', reason: 'Saldo de USDT es cero o insignificante.' }); continue; } if (gasBalance < estimatedRequiredGas) { report.summary.skippedForNoGas++; report.details.push({ address: wallet.address, status: 'SKIPPED_NO_GAS', reason: `Gas insuficiente. Tienes ${gasBalance.toFixed(8)}, se requiere ~${estimatedRequiredGas.toFixed(8)}` }); continue; } const txHash = await sweepFunction(wallet.derivationIndex, recipientAddress); report.summary.successfulSweeps++; report.summary.totalSwept += tokenBalance; report.details.push({ address: wallet.address, status: 'SUCCESS', txHash, amount: tokenBalance }); } catch (error) { report.summary.failedTxs++; report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message }); } } res.json(report); });
+const analyzeGasNeeds = asyncHandler(async (req, res) => { const { chain } = req.body; if (!['BSC', 'TRON'].includes(chain)) { res.status(400); throw new Error("Cadena no válida."); } let centralWalletBalance = 0; try { const { bscWallet, tronWallet } = transactionService.getCentralWallets(); const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/'); const tronWebInstance = new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY } }); if (chain === 'BSC') { centralWalletBalance = parseFloat(ethers.utils.formatEther(await bscProvider.getBalance(bscWallet.address))); } else { centralWalletBalance = parseFloat(tronWebInstance.fromSun(await tronWebInstance.trx.getBalance(tronWallet.address))); } } catch (error) { console.error("CRITICAL ERROR: Fallo al obtener el balance de la billetera central (Dispensador):", error); centralWalletBalance = 0; } const walletsInChain = await CryptoWallet.find({ chain }).lean(); const walletsNeedingGas = []; for (const wallet of walletsInChain) { try { const balances = await _getBalancesForAddress(wallet.address, chain); const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx; if (balances.usdt > 0.000001) { let requiredGas = 0; if (chain === 'BSC') { requiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt); } else { requiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt); } const gasMissing = requiredGas - gasBalance; if (gasBalance < requiredGas - GAS_SUFFICIENT_TOLERANCE || gasBalance === 0) { walletsNeedingGas.push({ address: wallet.address, usdtBalance: balances.usdt, gasBalance: gasBalance, requiredGas: requiredGas }); } else { console.log(`[analyzeGasNeeds DEBUG] Wallet ${wallet.address} con ${balances.usdt} USDT. Gas: ${gasBalance.toFixed(8)}, Requerido: ${requiredGas.toFixed(8)}. Gas Faltante: ${gasMissing.toFixed(8)}. No necesita gas (ya tiene suficiente).`); } } } catch (error) { console.error(`No se pudo analizar la wallet ${wallet.address}: ${error.message}`); } } res.json({ centralWalletBalance, walletsNeedingGas }); });
+const dispatchGas = asyncHandler(async (req, res) => { const { chain, targets } = req.body; if (!chain || !Array.isArray(targets) || targets.length === 0) { res.status(400); throw new Error("Petición inválida."); } const report = { summary: { success: 0, failed: 0, totalDispatched: 0 }, details: [] }; const sendFunction = chain === 'BSC' ? transactionService.sendBscGas : transactionService.sendTronTrx; for (const target of targets) { try { const txHash = await sendFunction(target.address, target.amount); report.summary.success++; report.summary.totalDispatched += parseFloat(target.amount); report.details.push({ address: target.address, status: 'SUCCESS', txHash, amount: target.amount }); } catch (error) { report.summary.failed++; report.details.push({ address: target.address, status: 'FAILED', reason: error.message, amount: target.amount }); } } res.json(report); });
+const sendBroadcastNotification = asyncHandler(async (req, res) => { const { message, target, imageUrl, buttons } = req.body; if (!message || !target) { res.status(400); throw new Error("Mensaje y público objetivo son requeridos."); } let usersToNotify = []; if (target.type === 'all') { usersToNotify = await User.find({ status: 'active' }).select('telegramId').lean(); } else if (target.type === 'id' && target.value) { const user = await User.findOne({ telegramId: target.value }).select('telegramId').lean(); if (user) usersToNotify.push(user); } if (usersToNotify.length === 0) { return res.json({ message: "No se encontraron usuarios para notificar." }); } res.status(202).json({ message: `Enviando notificación a ${usersToNotify.length} usuarios. Este proceso puede tardar.` }); (async () => { let successCount = 0; for (const user of usersToNotify) { const result = await sendTelegramMessage(user.telegramId, message, { imageUrl, buttons }); if(result.success) successCount++; await new Promise(resolve => setTimeout(resolve, 100)); } console.log(`[Broadcast] Notificación completada. ${successCount}/${usersToNotify.length} envíos exitosos.`); })(); });
+const cancelTransaction = asyncHandler(async (req, res) => { const { txHash } = req.body; if (!txHash) { res.status(400); throw new Error("Se requiere el hash de la transacción."); } res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash }); });
+const speedUpTransaction = asyncHandler(async (req, res) => { const { txHash } = req.body; if (!txHash) { res.status(400); throw new Error("Se requiere el hash de la transacción."); } res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash }); });
 
 module.exports = {
   getPendingWithdrawals,
