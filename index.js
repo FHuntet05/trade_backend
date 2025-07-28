@@ -90,15 +90,19 @@ app.use('/api/users', userRoutes);
 // =========================================================================
 
 const WELCOME_MESSAGE = `
-👋 ¡Bienvenido a NEURO LINK!\n\n
-🔐 Tu acceso privilegiado al universo de la minería digital avanzada. Aquí, cada acción te acerca a recompensas exclusivas en *NTX*.\n\n
-📘 ¿Cómo funciona?\n
-1️⃣ Activa tu Minería: ⛏️ Inicia tu sesión cada 24 horas para comenzar a generar NTX, el token neural del ecosistema.\n
-2️⃣ Optimiza tu Potencia: ⚙️ Accede a la tienda y adquiere herramientas con USDT, TRX o BNB. Aumenta tu velocidad de minería y maximiza tus beneficios.\n
-3️⃣ Expande tu Red: 🧠 Invita a tus aliados con tu enlace personal. Obtén recompensas por su actividad y construye un flujo de ingresos pasivo.\n
-4️⃣ Reclama y Evoluciona: 💎 Recupera tus NTX minados y fortalece tu saldo para futuras estrategias.\n\n
-✨ Estás listo para comenzar tu travesía. Pulsa el botón inferior y desata el poder de la minería inteligente 🚀
-`;
+🤖 ¡Bienvenido a Nice Bot!\n\n
+🔐 Tu acceso privilegiado al universo de la minería digital inteligente. Conecta con el sistema NTX y transforma tu actividad en recompensas exclusivas.\n
+📘 ¿Cómo funciona tu experiencia?\n
+🔹 1. Activa tu Minería Diaria\n\n
+⚒️ Inicia sesión cada 24 horas y comienza a generar NTX, el token neural de la red Nice Bot.\n
+🔹 2. Optimiza tu Potencia\n\n
+🛠️ Accede a la tienda y mejora tu rig con herramientas compradas en USDT / TRX / BNB. Velocidad y rentabilidad 🔥\n
+🔹 3. Expande tu Red Inteligente\n\n
+🧠 Invita aliados con tu enlace personal y multiplica tu influencia. Cada invitado te acerca al próximo nivel 💸\n
+🔹 4. Reclama y Evoluciona\n\n
+💎 Recupera tus NTX minados y potencia tus estrategias en el ecosistema tecnológico.\n
+🚀 ¿Listo para comenzar tu travesía digital con Nice Bot?
+🔘 Pulsa el botón inferior y libera el poder de la minería inteligente.`;
 
 bot.command('start', async (ctx) => {
     try {
@@ -135,7 +139,7 @@ bot.command('start', async (ctx) => {
         await referredUser.save();
         console.log(`[Bot /start] Perfil del usuario ${referredId} guardado/actualizado en la BD.`);
         
-        const imageUrl = 'https://i.postimg.cc/x8LsR9fC/NEURO-LINK.jpg';
+        const imageUrl = 'https://i.postimg.cc/8PqYj4zR/nicebot.jpg';
         const webAppUrl = process.env.FRONTEND_URL;
         
         await ctx.replyWithPhoto(imageUrl, {
