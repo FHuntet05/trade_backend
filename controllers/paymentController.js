@@ -1,14 +1,12 @@
-// backend/controllers/paymentController.js (VERSIÓN FINAL CON LÓGICA ASÍNCRONA PARA PRECIOS)
+// backend/controllers/paymentController.js (VERSIÓN CON INICIALIZACIÓN DE BLOQUE INTELIGENTE)
 
 const { ethers } = require('ethers');
 const { TronWeb } = require('tronweb'); 
 const CryptoWallet = require('../models/cryptoWalletModel');
-// Importamos la función getPrice de nuestro servicio de precios.
-// Ahora sabemos que esta función es asíncrona porque consulta la base de datos.
 const { getPrice } = require('../services/priceService');
 
-// El nodo HD se crea exitosamente a partir de la variable de entorno.
 const hdNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
+const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
 
 /**
  * Controlador para generar o recuperar una dirección de depósito para un usuario.
@@ -22,19 +20,36 @@ const generateAddress = async (req, res) => {
   }
 
   try {
+    // 1. Buscamos si la wallet ya existe.
     let wallet = await CryptoWallet.findOne({ user: userId, chain });
     if (wallet) {
       return res.status(200).json({ address: wallet.address });
     }
 
+    // --- Si la wallet no existe, procedemos a crearla ---
+    console.log(`[WalletGen] Creando nueva wallet ${chain} para el usuario ${userId}`);
     const lastWallet = await CryptoWallet.findOne().sort({ derivationIndex: -1 });
     const newIndex = lastWallet ? lastWallet.derivationIndex + 1 : 0;
     
     let newAddress;
-    
+    const walletData = {
+        user: userId,
+        chain,
+        derivationIndex: newIndex,
+    };
+
     if (chain === 'BSC') {
       const derivedNode = hdNode.derivePath(`m/44'/60'/0'/0/${newIndex}`);
       newAddress = derivedNode.address;
+      walletData.address = newAddress;
+
+      // [SOLUCIÓN PERMANENTE] - INICIO DE LA MODIFICACIÓN
+      // Obtenemos el bloque actual de la red para que el monitor no empiece desde cero.
+      const currentBlock = await bscProvider.getBlockNumber();
+      walletData.lastScannedBlock = currentBlock;
+      console.log(`[WalletGen] Nueva wallet BSC inicializada en el bloque: ${currentBlock}`);
+      // [SOLUCIÓN PERMANENTE] - FIN DE LA MODIFICACIÓN
+
     } else if (chain === 'TRON') {
       const tronMainPrivateKey = hdNode.derivePath(`m/44'/195'/0'/0/0`).privateKey.substring(2);
       const tronWeb = new TronWeb({
@@ -45,16 +60,21 @@ const generateAddress = async (req, res) => {
       const childNode = hdNode.derivePath(`m/44'/195'/0'/0/${newIndex}`);
       const privateKeyWithoutPrefix = childNode.privateKey.substring(2);
       newAddress = await tronWeb.address.fromPrivateKey(privateKeyWithoutPrefix);
+      walletData.address = newAddress;
+
+      // [SOLUCIÓN PERMANENTE] - INICIO DE LA MODIFICACIÓN
+      // Para TRON, usamos el timestamp actual.
+      const currentTimestamp = Date.now();
+      walletData.lastScannedTimestamp = currentTimestamp;
+      console.log(`[WalletGen] Nueva wallet TRON inicializada en el timestamp: ${currentTimestamp}`);
+      // [SOLUCIÓN PERMANENTE] - FIN DE LA MODIFICACIÓN
+
     } else {
       return res.status(400).json({ message: 'Cadena no soportada.' });
     }
     
-    wallet = new CryptoWallet({
-      user: userId,
-      chain,
-      address: newAddress,
-      derivationIndex: newIndex,
-    });
+    // Creamos y guardamos la nueva wallet con todos los datos, incluyendo el bloque/timestamp inicial.
+    wallet = new CryptoWallet(walletData);
     await wallet.save();
     
     res.status(201).json({ address: newAddress });
@@ -66,11 +86,9 @@ const generateAddress = async (req, res) => {
 
 /**
  * Devuelve los precios actuales de las criptomonedas soportadas.
- * Esta función ahora es ASÍNCRONA porque 'getPrice' consulta la base de datos.
  */
 const getPrices = async (req, res) => {
     try {
-        // Hacemos las llamadas a la base de datos en paralelo para mayor eficiencia.
         const [bnbPrice, trxPrice] = await Promise.all([
             getPrice('BNB'),
             getPrice('TRX')
@@ -79,10 +97,9 @@ const getPrices = async (req, res) => {
         const prices = {
             BNB: bnbPrice,
             TRX: trxPrice,
-            USDT: 1, // USDT siempre es 1
+            USDT: 1,
         };
 
-        // Verificamos que los precios se hayan cargado desde la base de datos.
         if (!prices.BNB || !prices.TRX) {
             console.warn("[API] Solicitud de precios mientras el servicio aún no los ha guardado en la DB.");
             return res.status(503).json({ message: 'El servicio de precios no está disponible temporalmente. Intente de nuevo en un minuto.' });
