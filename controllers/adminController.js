@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (v40.0 - VERSIÓN ESTABLE FINAL)
+// RUTA: backend/controllers/adminController.js (v40.1 - VERSIÓN COMPLETA Y ESTABLE)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -210,9 +210,217 @@ const updateSettings = asyncHandler(async (req, res) => { const updatedSettings 
 const generateTwoFactorSecret = asyncHandler(async (req, res) => { const secret = speakeasy.generateSecret({ name: `NeuroLink Admin (${req.user.username})` }); await User.findByIdAndUpdate(req.user.id, { twoFactorSecret: secret.base32 }); const data_url = await qrCodeToDataURLPromise(secret.otpauth_url); res.json({ secret: secret.base32, qrCodeUrl: data_url }); });
 const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => { const { token } = req.body; const user = await User.findById(req.user.id).select('+twoFactorSecret'); if (!user || !user.twoFactorSecret) return res.status(400).json({ message: 'No se ha generado un secreto 2FA.' }); const verified = speakeasy.totp.verify({ secret: user.twoFactorSecret, encoding: 'base32', token }); if (verified) { user.isTwoFactorEnabled = true; await user.save(); res.json({ message: '¡2FA habilitado!' }); } else { res.status(400).json({ message: 'Token inválido.' }); }});
 const getWalletBalance = asyncHandler(async (req, res) => { const { address, chain } = req.body; if (!address || !chain) { res.status(400); throw new Error('Se requiere address y chain'); } try { const balances = await _getBalancesForAddress(address, chain); res.json({ success: true, balances }); } catch (error) { res.status(500).json({ success: false, message: error.message }); }});
-const cancelTransaction = asyncHandler(async (req, res) => { const { txHash } = req.body; if (!txHash) { res.status(400); throw new Error("Se requiere el hash de la transacción."); } res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash }); });
-const speedUpTransaction = asyncHandler(async (req, res) => { const { txHash } = req.body; if (!txHash) { res.status(400); throw new Error("Se requiere el hash de la transacción."); } res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash }); });
-const sendBroadcastNotification = asyncHandler(async (req, res) => { const { message, target, imageUrl, buttons } = req.body; if (!message || !target) { res.status(400); throw new Error("Mensaje y público objetivo son requeridos."); } let usersToNotify = []; if (target.type === 'all') { usersToNotify = await User.find({ status: 'active' }).select('telegramId').lean(); } else if (target.type === 'id' && target.value) { const user = await User.findOne({ telegramId: target.value }).select('telegramId').lean(); if (user) usersToNotify.push(user); } if (usersToNotify.length === 0) { return res.json({ message: "No se encontraron usuarios para notificar." }); } res.status(202).json({ message: `Enviando notificación a ${usersToNotify.length} usuarios. Este proceso puede tardar.` }); (async () => { let successCount = 0; for (const user of usersToNotify) { const result = await sendTelegramMessage(user.telegramId, message, { imageUrl, buttons }); if(result.success) successCount++; await new Promise(resolve => setTimeout(resolve, 100)); } console.log(`[Broadcast] Notificación completada. ${successCount}/${usersToNotify.length} envíos exitosos.`); })(); });
+
+const getTreasuryWalletsList = asyncHandler(async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 15;
+    const chain = req.query.chain || null;
+    const search = req.query.search || '';
+    let query = {};
+    if (chain) query.chain = chain;
+    if (search) {
+        const userQuery = { username: { $regex: search, $options: 'i' } };
+        const users = await User.find(userQuery).select('_id');
+        const userIds = users.map(u => u._id);
+        query.$or = [{ address: { $regex: search, $options: 'i' } }, { user: { $in: userIds } }];
+    }
+    const [totalWallets, wallets] = await Promise.all([
+        CryptoWallet.countDocuments(query),
+        CryptoWallet.find(query).populate('user', 'username').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean()
+    ]);
+    if (totalWallets === 0) {
+        return res.json({ wallets: [], pagination: { currentPage: 1, totalPages: 0, totalWallets: 0 }, summary: { usdt: 0, bnb: 0, trx: 0 } });
+    }
+    const walletsWithDetails = await Promise.all(wallets.map(async (wallet) => {
+        try {
+            const balances = await _getBalancesForAddress(wallet.address, wallet.chain);
+            let estimatedRequiredGas = 0;
+            if (balances.usdt > 0.000001) {
+                try {
+                    if (wallet.chain === 'BSC') { estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt); } 
+                    else if (wallet.chain === 'TRON') { estimatedRequiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt); }
+                } catch (gasError) {
+                    console.error(`Error estimando gas para ${wallet.address}: ${gasError.message}`);
+                    estimatedRequiredGas = 0;
+                }
+            }
+            return { ...wallet, usdtBalance: balances.usdt, gasBalance: wallet.chain === 'BSC' ? balances.bnb : balances.trx, estimatedRequiredGas };
+        } catch (error) {
+            return { ...wallet, usdtBalance: 0, gasBalance: 0, estimatedRequiredGas: 0, error: `Fallo al obtener balance: ${error.message}` };
+        }
+    }));
+    const summary = walletsWithDetails.reduce((acc, wallet) => {
+        acc.usdt += wallet.usdtBalance || 0;
+        if (wallet.chain === 'BSC') acc.bnb += wallet.gasBalance || 0;
+        else if (wallet.chain === 'TRON') acc.trx += wallet.gasBalance || 0;
+        return acc;
+    }, { usdt: 0, bnb: 0, trx: 0 });
+    res.json({
+        wallets: walletsWithDetails,
+        pagination: { currentPage: page, totalPages: Math.ceil(totalWallets / limit), totalWallets },
+        summary
+    });
+});
+
+const sweepFunds = asyncHandler(async (req, res) => {
+    const { chain, token, recipientAddress, walletsToSweep } = req.body;
+    if (!chain || !token || !recipientAddress || !walletsToSweep || !Array.isArray(walletsToSweep)) {
+        res.status(400); throw new Error("Parámetros de barrido inválidos.");
+    }
+    if (token.toUpperCase() !== 'USDT') {
+        res.status(400); throw new Error("Solo se puede barrer USDT.");
+    }
+    const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: chain }).lean();
+    if (wallets.length === 0) {
+        return res.json({ message: "Wallets candidatas no encontradas.", summary: {}, details: [] });
+    }
+    const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedTxs: 0, totalSwept: 0 }, details: [] };
+    const sweepFunction = chain === 'BSC' ? transactionService.sweepUsdtOnBscFromDerivedWallet : transactionService.sweepUsdtOnTronFromDerivedWallet;
+    for (const wallet of wallets) {
+        try {
+            const { txHash, amountSwept } = await sweepFunction(wallet.derivationIndex, recipientAddress);
+            report.summary.successfulSweeps++;
+            report.summary.totalSwept += amountSwept;
+            report.details.push({ address: wallet.address, status: 'SUCCESS', txHash, amount: amountSwept });
+        } catch (error) {
+            report.summary.failedTxs++;
+            report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message });
+        }
+    }
+    res.json(report);
+});
+
+const sweepGas = asyncHandler(async (req, res) => {
+    const { chain, recipientAddress, walletsToSweep } = req.body;
+    if (!['BSC', 'TRON'].includes(chain)) {
+        res.status(400); throw new Error("Cadena no soportada para barrido de gas. Debe ser BSC o TRON.");
+    }
+    if (!recipientAddress || !walletsToSweep || !Array.isArray(walletsToSweep)) {
+        res.status(400); throw new Error("Parámetros de barrido de gas inválidos.");
+    }
+    const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: chain }).lean();
+    if (wallets.length === 0) {
+        return res.json({ message: "Wallets candidatas no encontradas.", summary: {}, details: [] });
+    }
+    const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedTxs: 0 }, details: [] };
+    const sweepFunction = chain === 'BSC' ? transactionService.sweepBnbFromDerivedWallet : transactionService.sweepTrxFromDerivedWallet;
+    for (const wallet of wallets) {
+        try {
+            const txHash = await sweepFunction(wallet.derivationIndex, recipientAddress);
+            await new Promise(resolve => setTimeout(resolve, 200));
+            report.summary.successfulSweeps++;
+            report.details.push({ address: wallet.address, status: 'SUCCESS', txHash });
+        } catch (error) {
+            report.summary.failedTxs++;
+            report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message });
+        }
+    }
+    res.json(report);
+});
+
+const analyzeGasNeeds = asyncHandler(async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 15;
+    const chain = req.query.chain;
+    if (!['BSC', 'TRON'].includes(chain)) {
+        res.status(400); throw new Error("Cadena no válida. Debe ser BSC o TRON.");
+    }
+    let centralWalletBalance = 0;
+    const { bscWallet, tronWallet } = transactionService.getCentralWallets();
+    const centralAddress = chain === 'BSC' ? bscWallet.address : tronWallet.address;
+    const [totalWalletsInChain, balanceRaw] = await Promise.all([
+        CryptoWallet.countDocuments({ chain }),
+        chain === 'BSC' 
+            ? new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/').getBalance(centralAddress) 
+            : new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY } }).trx.getBalance(centralAddress)
+    ]).catch(err => {
+        console.error("Fallo al obtener datos iniciales (Dispensador):", err);
+        throw new Error("Error de red al contactar nodo Blockchain.");
+    });
+    centralWalletBalance = parseFloat(chain === 'BSC' ? ethers.utils.formatEther(balanceRaw) : TronWeb.fromSun(balanceRaw));
+    const walletsOnPage = await CryptoWallet.find({ chain }).populate('user', 'username').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean();
+    const walletsNeedingGasPromises = walletsOnPage.map(async (wallet) => {
+        try {
+            const balances = await _getBalancesForAddress(wallet.address, chain);
+            if (!balances || balances.usdt <= 0.000001) return null;
+            const requiredGas = chain === 'BSC' 
+                ? await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt) 
+                : await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt);
+            const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
+            if (gasBalance < requiredGas - GAS_SUFFICIENT_TOLERANCE) {
+                return { address: wallet.address, user: wallet.user, usdtBalance: balances.usdt, gasBalance, requiredGas };
+            }
+            return null;
+        } catch (error) {
+            console.error(`Error analizando gas para wallet ${wallet.address}: ${error.message}`);
+            return null;
+        }
+    });
+    const filteredWallets = (await Promise.all(walletsNeedingGasPromises)).filter(Boolean);
+    res.json({
+        centralWalletBalance,
+        wallets: filteredWallets,
+        pagination: { currentPage: page, totalPages: Math.ceil(totalWalletsInChain / limit), totalWallets: filteredWallets.length }
+    });
+});
+
+const dispatchGas = asyncHandler(async (req, res) => {
+    const { chain, targets } = req.body;
+    if (!chain || !Array.isArray(targets) || targets.length === 0) {
+        res.status(400); throw new Error("Petición inválida.");
+    }
+    const report = { summary: { success: 0, failed: 0, totalDispatched: 0 }, details: [] };
+    const sendFunction = chain === 'BSC' ? transactionService.sendBscGas : transactionService.sendTronTrx;
+    for (const target of targets) {
+        try {
+            const txHash = await sendFunction(target.address, target.amount);
+            report.summary.success++;
+            report.summary.totalDispatched += parseFloat(target.amount);
+            report.details.push({ address: target.address, status: 'SUCCESS', txHash, amount: target.amount });
+        } catch (error) {
+            report.summary.failed++;
+            report.details.push({ address: target.address, status: 'FAILED', reason: error.message, amount: target.amount });
+        }
+    }
+    res.json(report);
+});
+
+const sendBroadcastNotification = asyncHandler(async (req, res) => {
+    const { message, target, imageUrl, buttons } = req.body;
+    if (!message || !target) { res.status(400); throw new Error("Mensaje y público objetivo son requeridos."); }
+    let usersToNotify = [];
+    if (target.type === 'all') {
+        usersToNotify = await User.find({ status: 'active' }).select('telegramId').lean();
+    } else if (target.type === 'id' && target.value) {
+        const user = await User.findOne({ telegramId: target.value }).select('telegramId').lean();
+        if (user) usersToNotify.push(user);
+    }
+    if (usersToNotify.length === 0) {
+        return res.json({ message: "No se encontraron usuarios para notificar." });
+    }
+    res.status(202).json({ message: `Enviando notificación a ${usersToNotify.length} usuarios. Este proceso puede tardar.` });
+    (async () => {
+        let successCount = 0;
+        for (const user of usersToNotify) {
+            const result = await sendTelegramMessage(user.telegramId, message, { imageUrl, buttons });
+            if(result.success) successCount++;
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        console.log(`[Broadcast] Notificación completada. ${successCount}/${usersToNotify.length} envíos exitosos.`);
+    })();
+});
+
+const cancelTransaction = asyncHandler(async (req, res) => {
+    const { txHash } = req.body;
+    if (!txHash) { res.status(400); throw new Error("Se requiere el hash de la transacción."); }
+    res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash });
+});
+
+const speedUpTransaction = asyncHandler(async (req, res) => {
+    const { txHash } = req.body;
+    if (!txHash) { res.status(400); throw new Error("Se requiere el hash de la transacción."); }
+    res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash });
+});
 
 module.exports = {
   getPendingWithdrawals,
