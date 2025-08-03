@@ -1,4 +1,4 @@
-// RUTA: backend/services/transactionService.js (ELIMINACIÓN UMBRAL FIJO v35.21)
+// RUTA: backend/services/transactionService.js (v37.0 - INCLUYE BARRIDO DE GAS BNB)
 
 const { ethers } = require('ethers');
 const TronWeb = require('tronweb').default.TronWeb;
@@ -16,9 +16,6 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
   return Promise.race([promise, timeout]);
 }
 
-// =========================================================================================
-// ================ FUNCIÓN CENTRAL DE DERIVACIÓN DE WALLETS (SIN CAMBIOS) ===================
-// =========================================================================================
 const getCentralWallets = () => {
     if (!process.env.MASTER_SEED_PHRASE || !ethers.utils.isValidMnemonic(process.env.MASTER_SEED_PHRASE)) {
         throw new Error("CRITICAL: MASTER_SEED_PHRASE no está definida o es inválida.");
@@ -43,9 +40,6 @@ const getCentralWallets = () => {
     };
 };
 
-// =========================================================================================
-// =================== FUNCIONES DE BARRIDO REFACTORIZADAS (MODIFICADO) =====================
-// =========================================================================================
 const sweepUsdtOnTronFromDerivedWallet = async (derivationIndex, destinationAddress) => {
   if (derivationIndex === undefined || !destinationAddress) throw new Error("Índice de derivación y dirección de destino son requeridos.");
 
@@ -88,13 +82,6 @@ const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddre
     const depositWallet = new ethers.Wallet(depositWalletNode.privateKey, bscProvider);
     const usdtContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_BSC_ABI, depositWallet);
     
-    // --- INICIO DE MODIFICACIÓN v35.21 ---
-    // ELIMINAR LA VERIFICACIÓN DE GAS HARDCODEADA
-    // Ahora dependemos completamente de la estimación dinámica en adminController.js
-    // const gasBalance = await bscProvider.getBalance(depositWallet.address);
-    // if (gasBalance.lt(ethers.utils.parseEther("0.0015"))) throw new Error(`Fondos BNB insuficientes para el fee en la wallet ${depositWallet.address}.`);
-    // --- FIN DE MODIFICACIÓN v35.21 ---
-    
     const usdtBalance = await new ethers.Contract(USDT_BSC_ADDRESS, USDT_BSC_ABI, bscProvider).balanceOf(depositWallet.address);
     if (usdtBalance.isZero()) throw new Error(`La wallet ${depositWallet.address} no tiene saldo de USDT (BSC) para barrer.`);
     
@@ -112,6 +99,51 @@ const sweepUsdtOnBscFromDerivedWallet = async (derivationIndex, destinationAddre
     } catch(error) {
         console.error(`[SweepService] ERROR al barrer ${depositWallet.address} (BSC):`, error);
         throw new Error(`Fallo en la transacción de barrido BSC. Detalles: ${error.message}`);
+    }
+};
+
+const sweepBnbFromDerivedWallet = async (derivationIndex, recipientAddress) => {
+    try {
+        const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
+        const centralMnemonic = process.env.MASTER_SEED_PHRASE;
+        if (!centralMnemonic) {
+            throw new Error('El mnemónico de la billetera central no está configurado.');
+        }
+
+        const derivedWalletPath = `m/44'/60'/0'/0/${derivationIndex}`;
+        const derivedWallet = ethers.Wallet.fromMnemonic(centralMnemonic, derivedWalletPath).connect(bscProvider);
+
+        const balance = await bscProvider.getBalance(derivedWallet.address);
+        if (balance.isZero()) {
+            throw new Error('No hay BNB para barrer en esta wallet.');
+        }
+        
+        const gasPrice = await bscProvider.getGasPrice();
+        const gasLimit = ethers.BigNumber.from(21000);
+        const txFee = gasPrice.mul(gasLimit);
+
+        if (balance.lte(txFee)) {
+            throw new Error(`Saldo insuficiente para cubrir la tarifa de gas. Saldo: ${ethers.utils.formatEther(balance)}, Tarifa: ${ethers.utils.formatEther(txFee)}`);
+        }
+        
+        const amountToSend = balance.sub(txFee);
+
+        const tx = await derivedWallet.sendTransaction({
+            to: recipientAddress,
+            value: amountToSend,
+            gasPrice: gasPrice,
+            gasLimit: gasLimit
+        });
+
+        console.log(`[Sweep BNB] Iniciando barrido de ${ethers.utils.formatEther(amountToSend)} BNB desde wallet ${derivedWallet.address} (índice ${derivationIndex})`);
+        
+        const receipt = await tx.wait();
+        console.log(`[Sweep BNB] Barrido completado. Hash: ${receipt.transactionHash}`);
+        
+        return receipt.transactionHash;
+    } catch (error) {
+        console.error(`Error barriendo BNB desde índice ${derivationIndex}:`, error);
+        throw new Error(error.message || 'Error desconocido durante el barrido de BNB.');
     }
 };
 
@@ -172,5 +204,6 @@ module.exports = {
   sweepUsdtOnBscFromDerivedWallet,
   sendBscGas,
   sendTronTrx,
-  getCentralWallets
+  getCentralWallets,
+  sweepBnbFromDerivedWallet
 };
