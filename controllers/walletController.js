@@ -1,4 +1,4 @@
-// backend/controllers/walletController.js (VERSIÓN v17.2 - SOLUCIÓN EQUIPO v2)
+// backend/controllers/walletController.js (VERSIÓN v17.3 - CORRECCIÓN DE LOGGER)
 
 const axios = require('axios');
 const crypto = require('crypto');
@@ -16,7 +16,6 @@ const SHOP_ID = process.env.CRYPTO_CLOUD_SHOP_ID;
 const API_KEY = process.env.CRYPTO_CLOUD_API_KEY;
 const SECRET_KEY = process.env.CRYPTO_CLOUD_SECRET_KEY;
 
-// --- FUNCIONES EXISTENTES (SIN CAMBIOS) ---
 const startMining = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -221,7 +220,18 @@ const swapNtxToUsdt = async (req, res) => {
     const usdtToReceive = amountAfterFee / SWAP_RATE;
     user.balance.ntx -= numericNtxAmount;
     user.balance.usdt += usdtToReceive;
-    await createTransaction(userId, 'swap_ntx_to_usdt', numericNtxAmount, 'NTX', `Intercambio a ${usdtToReceive.toFixed(4)} USDT`, session);
+    
+    // [CORRECCIÓN] - Se pasa un objeto vacío para metadata y la sesión como último argumento.
+    await createTransaction(
+        userId, 
+        'swap_ntx_to_usdt', 
+        numericNtxAmount, 
+        'NTX', 
+        `Intercambio a ${usdtToReceive.toFixed(4)} USDT`, 
+        {}, // Metadata vacío
+        session
+    );
+
     await user.save({ session });
     await session.commitTransaction();
     const updatedUser = await User.findById(userId).populate('activeTools.tool');
@@ -238,15 +248,12 @@ const swapNtxToUsdt = async (req, res) => {
 const requestWithdrawal = async (req, res) => {
   const { amount, walletAddress } = req.body;
   const userId = req.user.id;
-
   let withdrawalTransaction;
-
   try {
     const settings = await Setting.findOne({ singleton: 'global_settings' });
     if (!settings) {
       throw new Error('La configuración del sistema no está disponible.');
     }
-
     const numericAmount = parseFloat(amount);
     if (!numericAmount || numericAmount < settings.minimumWithdrawal) {
       return res.status(400).json({ message: `El retiro mínimo es ${settings.minimumWithdrawal} USDT.` });
@@ -261,10 +268,8 @@ const requestWithdrawal = async (req, res) => {
     if (user.balance.usdt < numericAmount) {
       return res.status(400).json({ message: 'Saldo USDT insuficiente.' });
     }
-    
     const feeAmount = numericAmount * (settings.withdrawalFeePercent / 100);
     const netAmount = numericAmount - feeAmount;
-
     withdrawalTransaction = new Transaction({
       user: userId,
       type: 'withdrawal',
@@ -272,20 +277,10 @@ const requestWithdrawal = async (req, res) => {
       amount: numericAmount,
       currency: 'USDT',
       description: `Solicitud de retiro a ${walletAddress}`,
-      metadata: {
-        walletAddress,
-        network: 'USDT-BEP20',
-        feePercent: settings.withdrawalFeePercent.toString(),
-        feeAmount: feeAmount.toFixed(4),
-        netAmount: netAmount.toFixed(4),
-      }
+      metadata: { walletAddress, network: 'USDT-BEP20', feePercent: settings.withdrawalFeePercent.toString(), feeAmount: feeAmount.toFixed(4), netAmount: netAmount.toFixed(4) }
     });
     await withdrawalTransaction.save();
-
     try {
-      // [SOLUCIÓN EQUIPO v2] - REVERSIÓN DE CAMBIO
-      // Ya no se incrementa el `totalWithdrawal` en el momento de la solicitud.
-      // Se descuenta únicamente el balance. La lógica se ha movido a `adminController.js`.
       user.balance.usdt -= numericAmount;
       await user.save();
     } catch (userSaveError) {
@@ -295,14 +290,11 @@ const requestWithdrawal = async (req, res) => {
       await withdrawalTransaction.save();
       throw new Error('No se pudo actualizar el saldo del usuario. La solicitud de retiro fue anulada.');
     }
-    
     await user.populate('activeTools.tool');
-
     res.status(201).json({ 
       message: 'Tu solicitud de retiro ha sido enviada con éxito y está pendiente de revisión.', 
       user: user.toObject()
     });
-
   } catch (error) {
     console.error('Error catastrófico en requestWithdrawal:', error);
     res.status(500).json({ message: error.message || 'Error interno al procesar la solicitud.' });
