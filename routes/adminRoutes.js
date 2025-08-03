@@ -1,4 +1,4 @@
-// RUTA: backend/routes/adminRoutes.js (v20.2 - CORRECCIÓN DE MÉTODO HTTP)
+// RUTA: backend/routes/adminRoutes.js (v37.2 - AÑADIDA RUTA DE BARRIDO DE GAS)
 
 const express = require('express');
 const router = express.Router();
@@ -27,9 +27,10 @@ router.get('/treasury/wallets-list', protect, isAdmin, adminController.getTreasu
 router.post('/treasury/wallet-balance', protect, isAdmin, adminController.getWalletBalance);
 router.post('/sweep-funds', protect, isAdmin, adminController.sweepFunds);
 
-// [CORRECCIÓN] - Se cambia de POST a GET para soportar parámetros de consulta de paginación.
-router.get('/gas-dispenser/analyze', protect, isAdmin, adminController.analyzeGasNeeds);
+// [CORRECCIÓN] - Se añade la ruta para la nueva funcionalidad de barrido de gas BNB.
+router.post('/sweep-gas', protect, isAdmin, adminController.sweepGas);
 
+router.get('/gas-dispenser/analyze', protect, isAdmin, adminController.analyzeGasNeeds);
 router.post('/gas-dispenser/dispatch', protect, isAdmin, adminController.dispatchGas);
 
 // Rutas de Gestión de Herramientas

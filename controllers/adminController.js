@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (v37.0 - PAGINACIÓN EFICIENTE + BARRIDO DE GAS)
+// RUTA: backend/controllers/adminController.js (v37.2 - CORRECCIONES TESORERÍA Y BARRIDO)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -212,6 +212,7 @@ const updateSettings = asyncHandler(async (req, res) => { const updatedSettings 
 const generateTwoFactorSecret = asyncHandler(async (req, res) => { const secret = speakeasy.generateSecret({ name: `NeuroLink Admin (${req.user.username})` }); await User.findByIdAndUpdate(req.user.id, { twoFactorSecret: secret.base32 }); const data_url = await qrCodeToDataURLPromise(secret.otpauth_url); res.json({ secret: secret.base32, qrCodeUrl: data_url }); });
 const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => { const { token } = req.body; const user = await User.findById(req.user.id).select('+twoFactorSecret'); if (!user || !user.twoFactorSecret) return res.status(400).json({ message: 'No se ha generado un secreto 2FA.' }); const verified = speakeasy.totp.verify({ secret: user.twoFactorSecret, encoding: 'base32', token }); if (verified) { user.isTwoFactorEnabled = true; await user.save(); res.json({ message: '¡2FA habilitado!' }); } else { res.status(400).json({ message: 'Token inválido.' }); }});
 
+// [CORRECCIÓN 1] - Lógica de resumen de página
 const getTreasuryWalletsList = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 15;
@@ -250,7 +251,16 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
         }
     }));
 
-    const summary = { usdt: 0, bnb: 0, trx: 0 }; 
+    // Se calcula el resumen solo para los wallets de la página actual.
+    const summary = walletsWithDetails.reduce((acc, wallet) => {
+        acc.usdt += wallet.usdtBalance || 0;
+        if (wallet.chain === 'BSC') {
+            acc.bnb += wallet.gasBalance || 0;
+        } else if (wallet.chain === 'TRON') {
+            acc.trx += wallet.gasBalance || 0;
+        }
+        return acc;
+    }, { usdt: 0, bnb: 0, trx: 0 });
 
     res.json({
         wallets: walletsWithDetails,
@@ -261,7 +271,45 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
 
 const getWalletBalance = asyncHandler(async (req, res) => { const { address, chain } = req.body; if (!address || !chain) { res.status(400); throw new Error('Se requiere address y chain'); } try { const balances = await _getBalancesForAddress(address, chain); res.json({ success: true, balances }); } catch (error) { res.status(500).json({ success: false, message: error.message }); }});
 
-const sweepFunds = asyncHandler(async (req, res) => { const { chain, token, recipientAddress, walletsToSweep } = req.body; if (!chain || !token || !recipientAddress || !walletsToSweep || !Array.isArray(walletsToSweep)) { res.status(400); throw new Error("Parámetros de barrido inválidos."); } if (token.toUpperCase() !== 'USDT') { res.status(400); throw new Error("Solo se puede barrer USDT."); } const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: chain }).lean(); if (wallets.length === 0) { return res.json({ message: "Wallets candidatas no encontradas.", summary: {}, details: [] }); } const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, skippedForNoGas: 0, skippedForNoToken: 0, failedTxs: 0, totalSwept: 0 }, details: [] }; for (const wallet of wallets) { try { const balances = await _getBalancesForAddress(wallet.address, chain); const tokenBalance = balances.usdt; const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx; let estimatedRequiredGas = 0; if (tokenBalance > 0.000001) { if (chain === 'BSC') { estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, tokenBalance); } else if (chain === 'TRON') { estimatedRequiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, tokenBalance); } } const sweepFunction = chain === 'BSC' ? transactionService.sweepUsdtOnBscFromDerivedWallet : transactionService.sweepUsdtOnTronFromDerivedWallet; if (tokenBalance <= 0.000001) { report.summary.skippedForNoToken++; report.details.push({ address: wallet.address, status: 'SKIPPED_NO_TOKEN', reason: 'Saldo de USDT es cero o insignificante.' }); continue; } if (gasBalance < estimatedRequiredGas) { report.summary.skippedForNoGas++; report.details.push({ address: wallet.address, status: 'SKIPPED_NO_GAS', reason: `Gas insuficiente. Tienes ${gasBalance.toFixed(8)}, se requiere ~${estimatedRequiredGas.toFixed(8)}` }); continue; } const txHash = await sweepFunction(wallet.derivationIndex, recipientAddress); report.summary.successfulSweeps++; report.summary.totalSwept += tokenBalance; report.details.push({ address: wallet.address, status: 'SUCCESS', txHash, amount: tokenBalance }); } catch (error) { report.summary.failedTxs++; report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message }); } } res.json(report); });
+// [CORRECCIÓN 2] - Lógica de barrido robusta
+const sweepFunds = asyncHandler(async (req, res) => {
+    const { chain, token, recipientAddress, walletsToSweep } = req.body;
+    if (!chain || !token || !recipientAddress || !walletsToSweep || !Array.isArray(walletsToSweep)) {
+        res.status(400); throw new Error("Parámetros de barrido inválidos.");
+    }
+    if (token.toUpperCase() !== 'USDT') {
+        res.status(400); throw new Error("Solo se puede barrer USDT.");
+    }
+
+    const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: chain }).lean();
+    if (wallets.length === 0) {
+        return res.json({ message: "Wallets candidatas no encontradas.", summary: {}, details: [] });
+    }
+    
+    const report = {
+        summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedTxs: 0, totalSwept: 0 },
+        details: []
+    };
+
+    const sweepFunction = chain === 'BSC' 
+        ? transactionService.sweepUsdtOnBscFromDerivedWallet 
+        : transactionService.sweepUsdtOnTronFromDerivedWallet;
+
+    for (const wallet of wallets) {
+        try {
+            // Se intenta el barrido directamente. El servicio arrojará un error si no hay fondos o gas.
+            const { txHash, amountSwept } = await sweepFunction(wallet.derivationIndex, recipientAddress);
+            report.summary.successfulSweeps++;
+            report.summary.totalSwept += amountSwept;
+            report.details.push({ address: wallet.address, status: 'SUCCESS', txHash, amount: amountSwept });
+        } catch (error) {
+            // Todos los errores (sin gas, sin token, etc.) se capturan aquí como un fallo.
+            report.summary.failedTxs++;
+            report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message });
+        }
+    }
+    res.json(report);
+});
 
 const sweepGas = asyncHandler(async (req, res) => {
     const { chain, recipientAddress, walletsToSweep } = req.body;
@@ -278,21 +326,16 @@ const sweepGas = asyncHandler(async (req, res) => {
     }
 
     const report = {
-        summary: { walletsScanned: wallets.length, successfulSweeps: 0, skippedForNoGas: 0, failedTxs: 0, totalSwept: 0 },
+        summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedTxs: 0, totalSwept: 0 },
         details: []
     };
 
     for (const wallet of wallets) {
         try {
             const txHash = await transactionService.sweepBnbFromDerivedWallet(wallet.derivationIndex, recipientAddress);
-            // Pequeña pausa para evitar sobrecargar al proveedor de servicios
             await new Promise(resolve => setTimeout(resolve, 200)); 
             
-            // Re-consultar el balance después del barrido para reportar el monto real
-            const balancesAfter = await _getBalancesForAddress(wallet.address, 'BSC');
-            // Asumimos que el barrido fue exitoso, el monto barrido es una aproximación
             report.summary.successfulSweeps++;
-            // El 'amount' en el reporte de gas será 0 ya que no podemos saberlo a priori sin una simulación costosa.
             report.details.push({ address: wallet.address, status: 'SUCCESS', txHash, amount: 0 }); 
         } catch (error) {
             report.summary.failedTxs++;
