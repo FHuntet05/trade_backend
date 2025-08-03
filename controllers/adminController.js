@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (v36.0 - PAGINACIÓN Y RENDIMIENTO)
+// RUTA: backend/controllers/adminController.js (v36.1 - CORRECCIÓN DE OMISIÓN Y PAGINACIÓN)
 
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
@@ -211,40 +211,87 @@ const getSettings = asyncHandler(async (req, res) => { const settings = await Se
 const updateSettings = asyncHandler(async (req, res) => { const updatedSettings = await Setting.findOneAndUpdate({ singleton: 'global_settings' }, req.body, { new: true }); res.json(updatedSettings); });
 const generateTwoFactorSecret = asyncHandler(async (req, res) => { const secret = speakeasy.generateSecret({ name: `NeuroLink Admin (${req.user.username})` }); await User.findByIdAndUpdate(req.user.id, { twoFactorSecret: secret.base32 }); const data_url = await qrCodeToDataURLPromise(secret.otpauth_url); res.json({ secret: secret.base32, qrCodeUrl: data_url }); });
 const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => { const { token } = req.body; const user = await User.findById(req.user.id).select('+twoFactorSecret'); if (!user || !user.twoFactorSecret) return res.status(400).json({ message: 'No se ha generado un secreto 2FA.' }); const verified = speakeasy.totp.verify({ secret: user.twoFactorSecret, encoding: 'base32', token }); if (verified) { user.isTwoFactorEnabled = true; await user.save(); res.json({ message: '¡2FA habilitado!' }); } else { res.status(400).json({ message: 'Token inválido.' }); }});
+
+const getTreasuryWalletsList = asyncHandler(async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 15;
+    const chain = req.query.chain || null;
+    const search = req.query.search || '';
+    let query = {};
+    if (chain) query.chain = chain;
+    if (search) {
+        const userQuery = { username: { $regex: search, $options: 'i' } };
+        const users = await User.find(userQuery).select('_id');
+        const userIds = users.map(u => u._id);
+        query.$or = [ { address: { $regex: search, $options: 'i' } }, { user: { $in: userIds } } ];
+    }
+    const totalWallets = await CryptoWallet.countDocuments(query);
+    if (totalWallets === 0) {
+        return res.json({ wallets: [], pagination: { currentPage: 1, totalPages: 0, totalWallets: 0 }, summary: { usdt: 0, bnb: 0, trx: 0 } });
+    }
+    const wallets = await CryptoWallet.find(query).populate('user', 'username').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean();
+    const walletsWithDetails = await Promise.all(wallets.map(async (wallet) => {
+        try {
+            const balances = await _getBalancesForAddress(wallet.address, wallet.chain);
+            let estimatedRequiredGas = 0;
+            if (balances.usdt > 0.000001) {
+                if (wallet.chain === 'BSC') { estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt); } 
+                else if (wallet.chain === 'TRON') { estimatedRequiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt); }
+            }
+            return { ...wallet, usdtBalance: balances.usdt, gasBalance: wallet.chain === 'BSC' ? balances.bnb : balances.trx, estimatedRequiredGas };
+        } catch (error) {
+            return { ...wallet, usdtBalance: 0, gasBalance: 0, estimatedRequiredGas: 0, error: error.message };
+        }
+    }));
+    const allWalletsForSummary = await CryptoWallet.find({}).lean();
+    const summaryPromises = allWalletsForSummary.map(w => _getBalancesForAddress(w.address, w.chain).catch(() => ({ usdt: 0, bnb: 0, trx: 0 })));
+    const allBalances = await Promise.all(summaryPromises);
+    const summary = allBalances.reduce((acc, bal) => { acc.usdt += bal.usdt; acc.bnb += bal.bnb; acc.trx += bal.trx; return acc; }, { usdt: 0, bnb: 0, trx: 0 });
+    res.json({ wallets: walletsWithDetails, pagination: { currentPage: page, totalPages: Math.ceil(totalWallets / limit), totalWallets }, summary });
+});
+
 const getWalletBalance = asyncHandler(async (req, res) => { const { address, chain } = req.body; if (!address || !chain) { res.status(400); throw new Error('Se requiere address y chain'); } try { const balances = await _getBalancesForAddress(address, chain); res.json({ success: true, balances }); } catch (error) { res.status(500).json({ success: false, message: error.message }); }});
 const sweepFunds = asyncHandler(async (req, res) => { const { chain, token, recipientAddress, walletsToSweep } = req.body; if (!chain || !token || !recipientAddress || !walletsToSweep || !Array.isArray(walletsToSweep)) { res.status(400); throw new Error("Parámetros de barrido inválidos."); } if (token.toUpperCase() !== 'USDT') { res.status(400); throw new Error("Solo se puede barrer USDT."); } const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: chain }).lean(); if (wallets.length === 0) { return res.json({ message: "Wallets candidatas no encontradas.", summary: {}, details: [] }); } const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, skippedForNoGas: 0, skippedForNoToken: 0, failedTxs: 0, totalSwept: 0 }, details: [] }; for (const wallet of wallets) { try { const balances = await _getBalancesForAddress(wallet.address, chain); const tokenBalance = balances.usdt; const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx; let estimatedRequiredGas = 0; if (tokenBalance > 0.000001) { if (chain === 'BSC') { estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, tokenBalance); } else if (chain === 'TRON') { estimatedRequiredGas = await gasEstimatorService.estimateTronSweepCost(wallet.address, tokenBalance); } } const sweepFunction = chain === 'BSC' ? transactionService.sweepUsdtOnBscFromDerivedWallet : transactionService.sweepUsdtOnTronFromDerivedWallet; if (tokenBalance <= 0.000001) { report.summary.skippedForNoToken++; report.details.push({ address: wallet.address, status: 'SKIPPED_NO_TOKEN', reason: 'Saldo de USDT es cero o insignificante.' }); continue; } if (gasBalance < estimatedRequiredGas) { report.summary.skippedForNoGas++; report.details.push({ address: wallet.address, status: 'SKIPPED_NO_GAS', reason: `Gas insuficiente. Tienes ${gasBalance.toFixed(8)}, se requiere ~${estimatedRequiredGas.toFixed(8)}` }); continue; } const txHash = await sweepFunction(wallet.derivationIndex, recipientAddress); report.summary.successfulSweeps++; report.summary.totalSwept += tokenBalance; report.details.push({ address: wallet.address, status: 'SUCCESS', txHash, amount: tokenBalance }); } catch (error) { report.summary.failedTxs++; report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message }); } } res.json(report); });
+
+const analyzeGasNeeds = asyncHandler(async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 15;
+    const chain = req.query.chain;
+    if (!['BSC', 'TRON'].includes(chain)) { res.status(400); throw new Error("Cadena no válida."); }
+    let centralWalletBalance = 0;
+    try {
+        const { bscWallet, tronWallet } = transactionService.getCentralWallets();
+        const provider = chain === 'BSC' ? new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/') : new TronWeb({ fullHost: 'https://api.trongrid.io', headers: { 'TRON-PRO-API-KEY': process.env.TRONGRID_API_KEY } });
+        if (chain === 'BSC') { centralWalletBalance = parseFloat(ethers.utils.formatEther(await provider.getBalance(bscWallet.address)));
+        } else { centralWalletBalance = parseFloat(provider.fromSun(await provider.trx.getBalance(tronWallet.address))); }
+    } catch (error) { console.error("Fallo al obtener balance de wallet central (Dispensador):", error); }
+    const candidateWallets = await CryptoWallet.find({ chain }).lean();
+    const walletsNeedingGasPromises = candidateWallets.map(async (wallet) => {
+        const balances = await _getBalancesForAddress(wallet.address, chain).catch(() => null);
+        if (!balances || balances.usdt <= 0.000001) return null;
+        const requiredGas = chain === 'BSC' ? await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt) : await gasEstimatorService.estimateTronSweepCost(wallet.address, balances.usdt);
+        const gasBalance = chain === 'BSC' ? balances.bnb : balances.trx;
+        if (gasBalance < requiredGas - GAS_SUFFICIENT_TOLERANCE || gasBalance === 0) {
+            return { address: wallet.address, usdtBalance: balances.usdt, gasBalance, requiredGas };
+        }
+        return null;
+    });
+    const allWalletsNeedingGas = (await Promise.all(walletsNeedingGasPromises)).filter(Boolean);
+    const totalWallets = allWalletsNeedingGas.length;
+    const paginatedWallets = allWalletsNeedingGas.slice((page - 1) * limit, page * limit);
+    res.json({ centralWalletBalance, wallets: paginatedWallets, pagination: { currentPage: page, totalPages: Math.ceil(totalWallets / limit), totalWallets } });
+});
+
 const dispatchGas = asyncHandler(async (req, res) => { const { chain, targets } = req.body; if (!chain || !Array.isArray(targets) || targets.length === 0) { res.status(400); throw new Error("Petición inválida."); } const report = { summary: { success: 0, failed: 0, totalDispatched: 0 }, details: [] }; const sendFunction = chain === 'BSC' ? transactionService.sendBscGas : transactionService.sendTronTrx; for (const target of targets) { try { const txHash = await sendFunction(target.address, target.amount); report.summary.success++; report.summary.totalDispatched += parseFloat(target.amount); report.details.push({ address: target.address, status: 'SUCCESS', txHash, amount: target.amount }); } catch (error) { report.summary.failed++; report.details.push({ address: target.address, status: 'FAILED', reason: error.message, amount: target.amount }); } } res.json(report); });
 const sendBroadcastNotification = asyncHandler(async (req, res) => { const { message, target, imageUrl, buttons } = req.body; if (!message || !target) { res.status(400); throw new Error("Mensaje y público objetivo son requeridos."); } let usersToNotify = []; if (target.type === 'all') { usersToNotify = await User.find({ status: 'active' }).select('telegramId').lean(); } else if (target.type === 'id' && target.value) { const user = await User.findOne({ telegramId: target.value }).select('telegramId').lean(); if (user) usersToNotify.push(user); } if (usersToNotify.length === 0) { return res.json({ message: "No se encontraron usuarios para notificar." }); } res.status(202).json({ message: `Enviando notificación a ${usersToNotify.length} usuarios. Este proceso puede tardar.` }); (async () => { let successCount = 0; for (const user of usersToNotify) { const result = await sendTelegramMessage(user.telegramId, message, { imageUrl, buttons }); if(result.success) successCount++; await new Promise(resolve => setTimeout(resolve, 100)); } console.log(`[Broadcast] Notificación completada. ${successCount}/${usersToNotify.length} envíos exitosos.`); })(); });
 const cancelTransaction = asyncHandler(async (req, res) => { const { txHash } = req.body; if (!txHash) { res.status(400); throw new Error("Se requiere el hash de la transacción."); } res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash }); });
 const speedUpTransaction = asyncHandler(async (req, res) => { const { txHash } = req.body; if (!txHash) { res.status(400); throw new Error("Se requiere el hash de la transacción."); } res.status(501).json({ message: 'Funcionalidad no implementada todavía.', requestedTxHash: txHash }); });
 
 module.exports = {
-  getPendingWithdrawals,
-  processWithdrawal,
-  getAllUsers,
-  updateUser,
-  setUserStatus,
-  getDashboardStats,
-  getAllTransactions,
-  createManualTransaction,
-  getAllTools,
-  createTool,
-  updateTool,
-  deleteTool,
-  getUserDetails,
-  getSettings,
-  updateSettings,
-  generateTwoFactorSecret,
-  verifyAndEnableTwoFactor,
-  getTreasuryWalletsList,
-  getWalletBalance,
-  sweepFunds,
-  analyzeGasNeeds,
-  dispatchGas,
-  adjustUserBalance,
-  sendBroadcastNotification,
-  checkAndSendGasAlert,
-  getPendingBlockchainTxs,
-  cancelTransaction,
-  speedUpTransaction
+  getPendingWithdrawals, processWithdrawal, getAllUsers, updateUser, setUserStatus, getDashboardStats,
+  getAllTransactions, createManualTransaction, getAllTools, createTool, updateTool, deleteTool,
+  getUserDetails, getSettings, updateSettings, generateTwoFactorSecret, verifyAndEnableTwoFactor,
+  getTreasuryWalletsList, getWalletBalance, sweepFunds, analyzeGasNeeds, dispatchGas,
+  adjustUserBalance, sendBroadcastNotification, checkAndSendGasAlert, getPendingBlockchainTxs,
+  cancelTransaction, speedUpTransaction
 };
