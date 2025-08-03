@@ -1,4 +1,4 @@
-// RUTA: backend/routes/adminRoutes.js (VERSIÓN LIMPIA DE PRODUCCIÓN v20.1)
+// RUTA: backend/routes/adminRoutes.js (v20.2 - CORRECCIÓN DE MÉTODO HTTP)
 
 const express = require('express');
 const router = express.Router();
@@ -15,6 +15,7 @@ router.get('/users/:id/details', protect, isAdmin, adminController.getUserDetail
 router.put('/users/:id', protect, isAdmin, adminController.updateUser);
 router.put('/users/:id/status', protect, isAdmin, adminController.setUserStatus);
 router.post('/users/:id/adjust-balance', protect, isAdmin, adminController.adjustUserBalance);
+
 // Rutas de Gestión de Transacciones y Retiros
 router.get('/transactions', protect, isAdmin, adminController.getAllTransactions);
 router.post('/transactions/manual', protect, isAdmin, adminController.createManualTransaction);
@@ -25,7 +26,10 @@ router.put('/withdrawals/:id/process', protect, isAdmin, adminController.process
 router.get('/treasury/wallets-list', protect, isAdmin, adminController.getTreasuryWalletsList);
 router.post('/treasury/wallet-balance', protect, isAdmin, adminController.getWalletBalance);
 router.post('/sweep-funds', protect, isAdmin, adminController.sweepFunds);
-router.post('/gas-dispenser/analyze', protect, isAdmin, adminController.analyzeGasNeeds);
+
+// [CORRECCIÓN] - Se cambia de POST a GET para soportar parámetros de consulta de paginación.
+router.get('/gas-dispenser/analyze', protect, isAdmin, adminController.analyzeGasNeeds);
+
 router.post('/gas-dispenser/dispatch', protect, isAdmin, adminController.dispatchGas);
 
 // Rutas de Gestión de Herramientas
@@ -39,8 +43,9 @@ router.post('/2fa/verify', protect, isAdmin, adminController.verifyAndEnableTwoF
 // Ruta de notificaciones 
 router.post('/notifications/send', protect, isAdmin, adminController.sendBroadcastNotification);
 
-
+// Rutas de Monitor Blockchain
 router.get('/blockchain-monitor/pending', protect, isAdmin, adminController.getPendingBlockchainTxs);
 router.post('/blockchain-monitor/cancel-tx', protect, isAdmin, adminController.cancelTransaction);
 router.post('/blockchain-monitor/speedup-tx', protect, isAdmin, adminController.speedUpTransaction);
+
 module.exports = router;
