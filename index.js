@@ -1,4 +1,4 @@
-// backend/index.js (FASE "FORTITUDO" v1.0 - BLINDADO Y OPTIMIZADO PARA DESPLIEGUE)
+// backend/index.js (FASE FINAL - CORS ESTRICTO Y LISTO PARA PRODUCCIÓN)
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -11,8 +11,6 @@ const colors = require('colors');
 const connectDB = require('./config/db');
 const User = require('./models/userModel');
 const { startMonitoring } = require('./services/transactionMonitor.js');
-
-// [FORTITUDO] - Importación de paquetes de seguridad
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
@@ -20,20 +18,20 @@ const { body, validationResult } = require('express-validator');
 console.log('[SISTEMA] Iniciando aplicación BLOCKSPHERE...');
 dotenv.config();
 
-// [FORTITUDO] - Verificación de variables de entorno mejorada
 function checkEnvVariables() {
     console.log('[SISTEMA] Verificando variables de entorno críticas...');
     const requiredVars = [
         'MONGO_URI', 
         'JWT_SECRET', 
-        'JWT_ADMIN_SECRET', // Específico para admins
+        'JWT_ADMIN_SECRET',
         'TELEGRAM_BOT_TOKEN', 
-        'CLIENT_URL', // URL única del frontend
+        'CLIENT_URL',
         'BACKEND_URL',
         'ANKR_RPC_URL',
-        'GAS_DISPENSER_PRIVATE_KEY', // Reemplaza la semilla maestra
-        'TREASURY_WALLET_ADDRESS', // Dirección de recolección harcodeada como variable
-        'SUPER_ADMIN_TELEGRAM_ID'
+        'GAS_DISPENSER_PRIVATE_KEY',
+        'TREASURY_WALLET_ADDRESS',
+        'SUPER_ADMIN_TELEGRAM_ID',
+        'MASTER_SEED_PHRASE' // Verificado que se mantiene por su directiva
     ];
     const missingVars = requiredVars.filter(v => !process.env[v]);
     if (missingVars.length > 0) {
@@ -64,21 +62,20 @@ const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-app.use(express.json()); // Body parser para JSON
-
-// [FORTITUDO] - CAPA 1: Cabeceras de Seguridad con Helmet
-// Establece cabeceras HTTP seguras para proteger contra XSS, clickjacking, etc.
+app.use(express.json());
 app.use(helmet());
 
-// [FORTITUDO] - CAPA 2: Configuración Estricta de CORS
-// Solo permite peticiones desde el dominio del cliente especificado en .env
+// [CORRECCIÓN FINAL Y DEFINITIVA] - CAPA 2: Configuración Estricta de CORS
+const whitelist = [process.env.CLIENT_URL]; // La whitelist ahora es solo su URL de cliente
+
 const corsOptions = {
     origin: (origin, callback) => {
-        // En producción, CLIENT_URL será una URL única. En desarrollo, puede ser localhost.
-        if (process.env.CLIENT_URL.indexOf(origin) !== -1 || !origin) {
+        // Se realiza una comprobación estricta. El 'origin' debe estar en la whitelist.
+        // '!origin' permite peticiones sin origen (ej. Postman, apps móviles).
+        if (whitelist.includes(origin) || !origin) {
             callback(null, true);
         } else {
-            console.error(`[CORS] ❌ Origen RECHAZADO: '${origin}'`.red.bold);
+            console.error(`[CORS] ❌ Origen RECHAZADO: '${origin}' no está en la whitelist.`.red.bold);
             callback(new Error(`Origen no permitido por CORS: ${origin}`));
         }
     },
@@ -87,29 +84,24 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
-// [FORTITUDO] - CAPA 3: Límite de Peticiones (Rate Limiting)
-// Límite global para prevenir DoS básicos
+// --- Rate Limiting ---
 const globalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 200, // Límite de 200 peticiones por IP cada 15 minutos
+    windowMs: 15 * 60 * 1000,
+    max: 200,
     standardHeaders: true,
     legacyHeaders: false,
     message: 'Demasiadas peticiones desde esta IP, por favor intente de nuevo después de 15 minutos.'
 });
 app.use(globalLimiter);
 
-// Límite mucho más estricto para las rutas de autenticación
 const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 10, // Límite de 10 intentos por IP cada 15 minutos
+    windowMs: 15 * 60 * 1000,
+    max: 10,
     message: 'Demasiados intentos de autenticación desde esta IP. Por seguridad, su acceso ha sido bloqueado temporalmente.'
 });
 
 // --- REGISTRO DE RUTAS DE LA API ---
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
-
-// [FORTITUDO] - CAPA 4: Validación de Entradas en Rutas Críticas
-// Se aplica el limiter a las rutas de auth
 app.use('/api/auth', authLimiter, authRoutes); 
 app.use('/api/tools', toolRoutes);
 app.use('/api/ranking', rankingRoutes);
@@ -176,7 +168,7 @@ bot.command('start', async (ctx) => {
         console.log(`[Bot /start] Perfil del usuario ${referredId} guardado/actualizado en la BD.`);
         
         const imageUrl = 'https://i.postimg.cc/8PqYj4zR/nicebot.jpg';
-        const webAppUrl = process.env.CLIENT_URL; // Asegurarse que el bot apunta a la URL del cliente
+        const webAppUrl = process.env.CLIENT_URL;
         
         await ctx.replyWithPhoto(imageUrl, {
             caption: WELCOME_MESSAGE,
