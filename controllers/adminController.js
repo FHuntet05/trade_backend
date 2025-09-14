@@ -1,7 +1,9 @@
-// backend/controllers/adminController.js (FASE "FORTITUDO" - RPC CENTRALIZADO Y CACHÉ INTEGRADA)
+// backend/controllers/adminController.js (FASE "REMEDIATIO" - RUTA DE MODELO CORREGIDA)
 
 const User = require('../models/userModel');
-const Factory = require('../models/factoryModel');
+// [REMEDIATIO - CORRECCIÓN CRÍTICA] Se corrige el nombre del modelo importado.
+// El archivo se llama `toolModel.js` pero se usa como "Factory".
+const Factory = require('../models/toolModel');
 const Setting = require('../models/settingsModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
 const mongoose = require('mongoose');
@@ -16,7 +18,6 @@ const { ethers } = require('ethers');
 const PendingTx = require('../models/pendingTxModel');
 const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const crypto = require('crypto');
-// [FORTITUDO - REFACTOR] Importamos nuestro servicio central de blockchain.
 const blockchainService = require('../services/blockchainService');
 
 // --- Constantes y Helpers ---
@@ -37,15 +38,11 @@ async function _getBalancesForAddress(address, chain) {
         throw new Error(`Cadena no soportada: ${chain}. Solo se procesa BSC.`);
     }
     try {
-        // [FORTITUDO - REFACTOR] Usamos el proveedor RPC único y centralizado.
         const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, blockchainService.provider);
-
         const [usdtBalanceRaw, bnbBalanceRaw] = await Promise.all([
             promiseWithTimeout(usdtBscContract.balanceOf(address), 15000),
-            // [FORTITUDO - CACHÉ] Usamos nuestro método cacheado para el balance de BNB.
             promiseWithTimeout(blockchainService.getBnbBalance(address), 15000)
         ]);
-
         return {
             usdt: parseFloat(ethers.utils.formatUnits(usdtBalanceRaw, 18)),
             bnb: parseFloat(ethers.utils.formatEther(bnbBalanceRaw))
@@ -62,11 +59,9 @@ const getDashboardStats = asyncHandler(async (req, res) => {
     const userGrowthDataPromise = User.aggregate([ { $match: { createdAt: { $gte: new Date(new Date().setDate(new Date().getDate() - 14)) } } }, { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, count: { $sum: 1 } } }, { $sort: { _id: 1 } } ]).then(data => data.map(item => ({ date: item._id, NuevosUsuarios: item.count })));
     const totalUsersPromise = User.countDocuments();
     const pendingWithdrawalsPromise = User.aggregate([ { $unwind: '$transactions' }, { $match: { 'transactions.type': 'withdrawal', 'transactions.status': 'pending' } }, { $count: 'total' } ]);
-    
     const centralWalletBalancesPromise = (async () => {
         try {
             const { bscWallet } = transactionService.getCentralWallets();
-            // Esta función ahora usa internamente el proveedor y la caché optimizados.
             const balances = await _getBalancesForAddress(bscWallet.address, 'BSC');
             return { usdt: balances.usdt, bnb: balances.bnb };
         } catch (error) {
@@ -74,12 +69,9 @@ const getDashboardStats = asyncHandler(async (req, res) => {
             return { usdt: 0, bnb: 0 };
         }
     })();
-    
     const [ totalUsers, totalDepositVolumeResult, pendingWithdrawalsResult, centralWalletBalances, userGrowthData ] = await Promise.all([ totalUsersPromise, totalDepositVolumePromise, pendingWithdrawalsPromise, centralWalletBalancesPromise, userGrowthDataPromise ]);
-    
     const totalDepositVolume = totalDepositVolumeResult.length > 0 ? totalDepositVolumeResult[0].total : 0;
     const pendingWithdrawals = pendingWithdrawalsResult.length > 0 ? pendingWithdrawalsResult[0].total : 0;
-    
     res.json({ totalUsers, totalDepositVolume, pendingWithdrawals, centralWalletBalances, userGrowthData });
 });
 
@@ -106,19 +98,15 @@ const getPendingWithdrawals = asyncHandler(async (req, res) => {
             }
         }
     ];
-
     const countPipeline = [...aggregationPipeline, { $count: 'total' }];
     const paginatedPipeline = [...aggregationPipeline, { $skip: (page - 1) * limit }, { $limit: limit }];
-
     const [totalResult, paginatedItems] = await Promise.all([ User.aggregate(countPipeline), User.aggregate(paginatedPipeline) ]);
     const total = totalResult.length > 0 ? totalResult[0].total : 0;
     if (total === 0) return res.json({ withdrawals: [], page: 1, pages: 0, total: 0 });
-
     const withdrawalsWithDetails = await Promise.all(paginatedItems.map(async (w) => {
         const photoUrl = await getTemporaryPhotoUrl(w.user.photoFileId);
         return { ...w, user: { ...w.user, photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL } };
     }));
-    
     res.json({ withdrawals: withdrawalsWithDetails, page, pages: Math.ceil(total / limit), total });
 });
 
@@ -126,16 +114,13 @@ const processWithdrawal = asyncHandler(async (req, res) => {
     const { status, adminNotes } = req.body;
     const { id: transactionId } = req.params;
     if (!['completed', 'rejected'].includes(status)) { res.status(400); throw new Error("El estado debe ser 'completed' o 'rejected'."); }
-
     const session = await mongoose.startSession();
     try {
         session.startTransaction();
         const user = await User.findOne({ 'transactions._id': transactionId, 'transactions.status': 'pending' }).session(session);
         if (!user) throw new Error('Retiro no encontrado o ya ha sido procesado.');
-
         const withdrawal = user.transactions.id(transactionId);
         let notificationMessage = '';
-
         if (status === 'completed') {
             withdrawal.status = 'completed';
             withdrawal.description = `Retiro completado por el administrador.`;
@@ -150,10 +135,8 @@ const processWithdrawal = asyncHandler(async (req, res) => {
         withdrawal.metadata.processedBy = req.user.username;
         await user.save({ session });
         await session.commitTransaction();
-
         if (user.telegramId && notificationMessage) { await sendTelegramMessage(user.telegramId, notificationMessage); }
         res.json({ message: `Retiro marcado como '${status}' exitosamente.`, withdrawal });
-
     } catch (error) {
         await session.abortTransaction();
         res.status(500).json({ message: error.message || "Error del servidor al procesar el retiro." });
@@ -167,24 +150,19 @@ const sweepFunds = asyncHandler(async (req, res) => {
     console.log('[Sweep] Solicitud de barrido de fondos recibida.');
     const { walletsToSweep } = req.body;
     const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
-    
     if (!SWEEP_DESTINATION_WALLET) {
         console.error('[CRITICAL] SWEEP_DESTINATION_WALLET no está configurada en .env');
         res.status(500);
         throw new Error('Error crítico de configuración de seguridad del servidor.');
     }
-
     if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
         res.status(400); throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array).");
     }
-
     const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
     if (wallets.length === 0) {
         return res.json({ message: "Ninguna de las wallets candidatas fue encontrada...", summary: {}, details: [] });
     }
-
     const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
-    
     for (const wallet of wallets) {
         try {
             const txHash = await transactionService.sweepUsdtOnBscFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET);
@@ -204,23 +182,18 @@ const sweepGas = asyncHandler(async (req, res) => {
     console.log('[SweepGas] Solicitud de barrido de gas (BNB) recibida.');
     const { walletsToSweep } = req.body;
     const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
-
     if (!SWEEP_DESTINATION_WALLET) {
         console.error('[CRITICAL] SWEEP_DESTINATION_WALLET no está configurada en .env');
         res.status(500); throw new Error('Error crítico de configuración de seguridad del servidor.');
     }
-
     if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
         res.status(400); throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array).");
     }
-
     const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
     if (wallets.length === 0) {
         return res.json({ message: "Ninguna wallet candidata encontrada...", summary: {}, details: [] });
     }
-    
     const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
-    
     for (const wallet of wallets) {
         try {
             const txHash = await transactionService.sweepBnbFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET);
@@ -241,17 +214,13 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
     const limit = parseInt(req.query.limit) || 15;
     const search = req.query.search || '';
     let query = { chain: 'BSC' };
-
     if (search) {
         const userQuery = { username: { $regex: search, $options: 'i' } };
         const users = await User.find(userQuery).select('_id');
         query.$or = [{ address: { $regex: search, $options: 'i' } }, { user: { $in: users.map(u => u._id) } }];
     }
-    
     const [totalWallets, wallets] = await Promise.all([ CryptoWallet.countDocuments(query), CryptoWallet.find(query).populate('user', 'username').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean() ]);
-    
     if (totalWallets === 0) { return res.json({ wallets: [], pagination: { currentPage: 1, totalPages: 0, totalWallets: 0 }, summary: { usdt: 0, bnb: 0 } }); }
-
     const walletsWithDetails = await Promise.all(wallets.map(async (wallet) => {
         try {
             const balances = await _getBalancesForAddress(wallet.address, wallet.chain);
@@ -264,13 +233,11 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
             return { ...wallet, usdtBalance: 0, gasBalance: 0, estimatedRequiredGas: 0, error: `Fallo al obtener balance: ${error.message}` };
         }
     }));
-    
     const summary = walletsWithDetails.reduce((acc, wallet) => {
         acc.usdt += wallet.usdtBalance || 0;
         acc.bnb += wallet.gasBalance || 0;
         return acc;
     }, { usdt: 0, bnb: 0 });
-
     res.json({ wallets: walletsWithDetails, pagination: { currentPage: page, totalPages: Math.ceil(totalWallets / limit), totalWallets }, summary });
 });
 
@@ -279,15 +246,12 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 15;
     const { bscWallet } = transactionService.getCentralWallets();
-    
     const [totalWalletsInChain, balanceRaw] = await Promise.all([
         CryptoWallet.countDocuments({ chain: 'BSC' }),
-        // [FORTITUDO - REFACTOR] Usamos nuestro servicio centralizado y cacheado.
         blockchainService.getBnbBalance(bscWallet.address)
     ]);
     const centralWalletBalance = parseFloat(ethers.utils.formatEther(balanceRaw));
     const walletsOnPage = await CryptoWallet.find({ chain: 'BSC' }).populate('user', 'username').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean();
-    
     const walletsNeedingGasPromises = walletsOnPage.map(async (wallet) => {
         try {
             const balances = await _getBalancesForAddress(wallet.address, 'BSC');
@@ -299,7 +263,6 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
             return null;
         } catch (error) { return null; }
     });
-
     const filteredWallets = (await Promise.all(walletsNeedingGasPromises)).filter(Boolean);
     res.json({ centralWalletBalance, wallets: filteredWallets, pagination: { currentPage: page, totalPages: Math.ceil(totalWalletsInChain / limit), totalWallets: totalWalletsInChain } });
 });
@@ -307,7 +270,6 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
 const dispatchGas = asyncHandler(async (req, res) => {
     const { chain, targets } = req.body;
     if (chain !== 'BSC' || !Array.isArray(targets) || targets.length === 0) { res.status(400); throw new Error("Petición inválida."); }
-    
     const report = { summary: { success: 0, failed: 0, totalDispatched: 0 }, details: [] };
     for (const target of targets) {
         try {
