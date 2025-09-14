@@ -1,4 +1,4 @@
-// backend/services/blockchainService.js (FASE "FORTITUDO" - SERVICIO RPC CENTRALIZADO CON CACHÉ)
+// backend/services/blockchainService.js (FASE "REMEDIATIO" - SINTAXIS DE ETHERS v5 CORREGIDA)
 const { ethers } = require('ethers');
 const axios = require('axios');
 const NodeCache = require('node-cache');
@@ -6,8 +6,10 @@ const NodeCache = require('node-cache');
 const RPC_URL = process.env.ANKR_RPC_URL;
 if (!RPC_URL) throw new Error("La variable de entorno ANKR_RPC_URL no está definida.");
 
-// [CENTRALIZACIÓN] - ÚNICA INSTANCIA DEL PROVEEDOR RPC
-const provider = new ethers.JsonRpcProvider(RPC_URL, undefined, { staticNetwork: true });
+// [REMEDIATIO - CORRECCIÓN CRÍTICA]
+// Se cambia la sintaxis a la correcta para Ethers v5.
+// 'new ethers.JsonRpcProvider' -> 'new ethers.providers.JsonRpcProvider'
+const provider = new ethers.providers.JsonRpcProvider(RPC_URL);
 console.log(`[BlockchainService] Conectado al RPC en: ${RPC_URL}`.cyan);
 
 // [CACHÉ] - ÚNICA INSTANCIA DE CACHÉ
@@ -39,12 +41,13 @@ const makeCachedRequest = async (url, ttl = 10) => {
 /**
  * Obtiene el balance de la moneda nativa (BNB) de una wallet.
  * @param {string} address La dirección de la wallet a consultar.
- * @returns {Promise<bigint>} El balance en formato BigInt.
+ * @returns {Promise<ethers.BigNumber>} El balance en formato BigNumber de Ethers v5.
  */
 const getBnbBalance = async (address) => {
     const cacheKey = `balance_bnb_${address}`;
     const cachedBalance = cache.get(cacheKey);
-    if (cachedBalance) return BigInt(cachedBalance);
+    // Para Ethers v5, BigNumber se crea así.
+    if (cachedBalance) return ethers.BigNumber.from(cachedBalance);
 
     const balance = await provider.getBalance(address);
     cache.set(cacheKey, balance.toString());
