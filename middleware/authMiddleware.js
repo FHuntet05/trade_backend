@@ -1,60 +1,94 @@
-// backend/middleware/authMiddleware.js (VERSIÓN v16.0 - ESTABLE)
+// backend/middleware/authMiddleware.js (FASE "INSPECTIO" v1.0 - CORREGIDO CON PROTECCIÓN DE ADMIN)
 
 const jwt = require('jsonwebtoken');
 const User = require('../models/userModel');
 const asyncHandler = require('express-async-handler');
 
+/**
+ * Middleware para proteger rutas de USUARIOS REGULARES.
+ * Verifica un token firmado con JWT_SECRET.
+ */
 const protect = asyncHandler(async (req, res, next) => {
   let token;
 
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
     try {
-      // 1. Obtener el token del header
       token = req.headers.authorization.split(' ')[1];
-
-      // 2. Verificar la firma del token
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-      // 3. Obtener el usuario del token y adjuntarlo a `req`
-      const userId = decoded.id; 
-      if (!userId) {
-        res.status(401);
-        throw new Error('Token inválido, no contiene ID de usuario.');
-      }
       
-      req.user = await User.findById(userId).select('-password'); 
+      req.user = await User.findById(decoded.id).select('-password'); 
 
       if (!req.user) {
           res.status(401);
           throw new Error('Usuario del token ya no existe.');
       }
       
-      // Si todo va bien, pasa al siguiente middleware/controlador
       next();
 
     } catch (error) {
-      console.error('ERROR DE AUTENTICACIÓN:', error.message);
+      console.error('ERROR DE AUTENTICACIÓN (User):', error.message);
       res.status(401);
-      throw new Error('No autorizado, token fallido.');
+      throw new Error('No autorizado, token de usuario fallido.');
     }
   }
 
   if (!token) {
     res.status(401);
-    throw new Error('No autorizado, no hay token.');
+    throw new Error('No autorizado, no hay token de usuario.');
   }
 });
 
 /**
- * CORRECCIÓN v16.0: Se reemplazó 'throw new Error' con 'res.json'
- * para asegurar que se envía una respuesta al cliente en caso de no ser administrador,
- * evitando así que la solicitud se quede colgada indefinidamente.
+ * [NUEVO] Middleware para proteger rutas de ADMINISTRADORES.
+ * Verifica un token firmado con el secreto de administrador (JWT_ADMIN_SECRET).
+ */
+const protectAdmin = asyncHandler(async (req, res, next) => {
+  let token;
+
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    try {
+      token = req.headers.authorization.split(' ')[1];
+      
+      // [INSPECTIO - CORRECCIÓN] Se verifica el token con el secreto de administrador.
+      const decoded = jwt.verify(token, process.env.JWT_ADMIN_SECRET);
+
+      req.user = await User.findById(decoded.id).select('-password');
+
+      if (!req.user) {
+          res.status(401);
+          throw new Error('Administrador del token ya no existe.');
+      }
+
+      // [INSPECTIO - CORRECCIÓN] Doble verificación: nos aseguramos de que el usuario del token sea un admin.
+      if (req.user.role !== 'admin') {
+          res.status(403); // 403 Forbidden es más apropiado que 401 Unauthorized
+          throw new Error('Acceso denegado. El usuario no es un administrador.');
+      }
+      
+      next();
+
+    } catch (error) {
+      console.error('ERROR DE AUTENTICACIÓN (Admin):', error.message);
+      res.status(401);
+      throw new Error('No autorizado, token de administrador fallido.');
+    }
+  }
+
+  if (!token) {
+    res.status(401);
+    throw new Error('No autorizado, no hay token de administrador.');
+  }
+});
+
+/**
+ * Middleware para verificar si un usuario ya autenticado tiene rol de 'admin'.
+ * Se usa DESPUÉS de 'protect' o 'protectAdmin'.
+ * La versión anterior era correcta, no requiere cambios, pero se mantiene por completitud.
  */
 const isAdmin = (req, res, next) => {
     if (req.user && req.user.role === 'admin') {
         next();
     } else {
-        // CORRECCIÓN: Enviar una respuesta JSON en lugar de lanzar un error.
         res.status(403).json({ message: 'Acceso denegado. Se requieren permisos de administrador.' });
     }
 };
@@ -62,4 +96,5 @@ const isAdmin = (req, res, next) => {
 module.exports = {
   protect,
   isAdmin,
+  protectAdmin // Exportamos el nuevo middleware
 };

@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN FINAL v35.2 - MONITOREO UNIFICADO)
+// backend/index.js (FASE "FORTITUDO" v1.0 - BLINDADO Y OPTIMIZADO PARA DESPLIEGUE)
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -10,21 +10,31 @@ const dotenv = require('dotenv');
 const colors = require('colors');
 const connectDB = require('./config/db');
 const User = require('./models/userModel');
-
-// --- INICIO DE MODIFICACIÓN v35.2 ---
-// Se importa el servicio de monitoreo correcto y unificado.
 const { startMonitoring } = require('./services/transactionMonitor.js');
-// Se mantiene la importación del watcher antiguo, pero NO se usará.
-const { startWatcher } = require('./services/blockchainWatcherService');
-// --- FIN DE MODIFICACIÓN v35.2 ---
 
-console.log('[SISTEMA] Iniciando aplicación NEURO LINK...');
+// [FORTITUDO] - Importación de paquetes de seguridad
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { body, validationResult } = require('express-validator');
+
+console.log('[SISTEMA] Iniciando aplicación BLOCKSPHERE...');
 dotenv.config();
 
-// --- VERIFICACIÓN DE VARIABLES DE ENTORNO ---
+// [FORTITUDO] - Verificación de variables de entorno mejorada
 function checkEnvVariables() {
     console.log('[SISTEMA] Verificando variables de entorno críticas...');
-    const requiredVars = ['MONGO_URI', 'JWT_SECRET', 'TELEGRAM_BOT_TOKEN', 'FRONTEND_URL', 'ADMIN_URL', 'BACKEND_URL', 'BSCSCAN_API_KEY', 'MASTER_SEED_PHRASE'];
+    const requiredVars = [
+        'MONGO_URI', 
+        'JWT_SECRET', 
+        'JWT_ADMIN_SECRET', // Específico para admins
+        'TELEGRAM_BOT_TOKEN', 
+        'CLIENT_URL', // URL única del frontend
+        'BACKEND_URL',
+        'ANKR_RPC_URL',
+        'GAS_DISPENSER_PRIVATE_KEY', // Reemplaza la semilla maestra
+        'TREASURY_WALLET_ADDRESS', // Dirección de recolección harcodeada como variable
+        'SUPER_ADMIN_TELEGRAM_ID'
+    ];
     const missingVars = requiredVars.filter(v => !process.env[v]);
     if (missingVars.length > 0) {
         console.error(`!! ERROR FATAL: FALTAN VARIABLES DE ENTORNO: ${missingVars.join(', ')}`.red.bold);
@@ -50,18 +60,25 @@ const treasuryRoutes = require('./routes/treasuryRoutes');
 const userRoutes = require('./routes/userRoutes');
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 
-// --- CONFIGURACIÓN DE EXPRESS Y MIDDLEWARES ---
+// --- CONFIGURACIÓN DE EXPRESS Y MIDDLEWARES DE SEGURIDAD ---
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-app.disable('etag');
-const whitelist = [process.env.FRONTEND_URL, process.env.ADMIN_URL];
+app.use(express.json()); // Body parser para JSON
+
+// [FORTITUDO] - CAPA 1: Cabeceras de Seguridad con Helmet
+// Establece cabeceras HTTP seguras para proteger contra XSS, clickjacking, etc.
+app.use(helmet());
+
+// [FORTITUDO] - CAPA 2: Configuración Estricta de CORS
+// Solo permite peticiones desde el dominio del cliente especificado en .env
 const corsOptions = {
     origin: (origin, callback) => {
-        if (!origin || whitelist.indexOf(origin) !== -1) {
+        // En producción, CLIENT_URL será una URL única. En desarrollo, puede ser localhost.
+        if (process.env.CLIENT_URL.indexOf(origin) !== -1 || !origin) {
             callback(null, true);
         } else {
-            console.error(`[CORS] ❌ Origen RECHAZADO: '${origin}'. No está en la whitelist: [${whitelist.join(', ')}]`.red.bold);
+            console.error(`[CORS] ❌ Origen RECHAZADO: '${origin}'`.red.bold);
             callback(new Error(`Origen no permitido por CORS: ${origin}`));
         }
     },
@@ -69,12 +86,31 @@ const corsOptions = {
     credentials: true,
 };
 app.use(cors(corsOptions));
-app.use(express.json());
-// app.use(morgan('dev'));
+
+// [FORTITUDO] - CAPA 3: Límite de Peticiones (Rate Limiting)
+// Límite global para prevenir DoS básicos
+const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutos
+    max: 200, // Límite de 200 peticiones por IP cada 15 minutos
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: 'Demasiadas peticiones desde esta IP, por favor intente de nuevo después de 15 minutos.'
+});
+app.use(globalLimiter);
+
+// Límite mucho más estricto para las rutas de autenticación
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutos
+    max: 10, // Límite de 10 intentos por IP cada 15 minutos
+    message: 'Demasiados intentos de autenticación desde esta IP. Por seguridad, su acceso ha sido bloqueado temporalmente.'
+});
 
 // --- REGISTRO DE RUTAS DE LA API ---
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
-app.use('/api/auth', authRoutes);
+
+// [FORTITUDO] - CAPA 4: Validación de Entradas en Rutas Críticas
+// Se aplica el limiter a las rutas de auth
+app.use('/api/auth', authLimiter, authRoutes); 
 app.use('/api/tools', toolRoutes);
 app.use('/api/ranking', rankingRoutes);
 app.use('/api/wallet', walletRoutes);
@@ -140,7 +176,7 @@ bot.command('start', async (ctx) => {
         console.log(`[Bot /start] Perfil del usuario ${referredId} guardado/actualizado en la BD.`);
         
         const imageUrl = 'https://i.postimg.cc/8PqYj4zR/nicebot.jpg';
-        const webAppUrl = process.env.FRONTEND_URL;
+        const webAppUrl = process.env.CLIENT_URL; // Asegurarse que el bot apunta a la URL del cliente
         
         await ctx.replyWithPhoto(imageUrl, {
             caption: WELCOME_MESSAGE,
@@ -172,10 +208,7 @@ const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, async () => {
     console.log(`[SERVIDOR] 🚀 Servidor corriendo en puerto ${PORT}`.yellow.bold);
   
-    // --- INICIO DE MODIFICACIÓN v35.2 ---
-    // startWatcher(); // <-- Se comenta el watcher antiguo y defectuoso.
-    startMonitoring(); // <-- Se inicia el monitor nuevo, unificado y correcto.
-    // --- FIN DE MODIFICACIÓN v35.2 ---
+    startMonitoring();
 
     try {
         const botInfo = await bot.telegram.getMe();

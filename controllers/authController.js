@@ -1,23 +1,39 @@
-// backend/controllers/authController.js (VERSIÓN FINAL v32.0 - SIMPLIFICADA)
+// backend/controllers/authController.js (FASE "INSPECTIO" v1.0 - CORREGIDO)
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
 const jwt = require('jsonwebtoken');
-const { getTemporaryPhotoUrl } = require('./userController'); // Asegúrese de que este import es correcto
+const { getTemporaryPhotoUrl } = require('./userController');
 
 const PLACEHOLDER_AVATAR_URL = `${process.env.FRONTEND_URL}/assets/images/user-avatar-placeholder.png`;
 
-const generateToken = (id) => {
+// [INSPECTIO - CORRECCIÓN] Se crean dos generadores de tokens distintos.
+
+/**
+ * Genera un token para un usuario regular.
+ * Usa el secreto JWT estándar.
+ * @param {string} id El ID del usuario.
+ * @returns {string} El token JWT.
+ */
+const generateUserToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 };
 
 /**
+ * Genera un token para un administrador.
+ * Usa el secreto JWT de administrador, más seguro y aislado.
+ * @param {string} id El ID del administrador.
+ * @returns {string} El token JWT de administrador.
+ */
+const generateAdminToken = (id) => {
+    return jwt.sign({ id }, process.env.JWT_ADMIN_SECRET, { expiresIn: '1d' }); // Duración más corta por seguridad
+};
+
+
+/**
  * Sincroniza el usuario cuando la Mini App se abre.
- * NO maneja la lógica de referidos. Su única misión es autenticar al usuario
- * y devolverle su estado completo desde la base de datos.
  */
 const syncUser = async (req, res) => {
-    // La petición ya no contiene 'refCode'.
     const { telegramUser } = req.body;
     
     console.log(`[Auth Sync] Petición de sincronización para el usuario: ${telegramUser?.id}`);
@@ -29,11 +45,8 @@ const syncUser = async (req, res) => {
     const telegramId = telegramUser.id.toString();
 
     try {
-        // La única responsabilidad de esta función es encontrar al usuario.
-        // Se asume que el comando /start del bot ya lo ha creado.
         let user = await User.findOne({ telegramId });
 
-        // Caso de seguridad: si el usuario no existe (p. ej., borró la BD y no usó /start).
         if (!user) {
             console.warn(`[Auth Sync] ADVERTENCIA: El usuario ${telegramId} no existía. Creándolo sobre la marcha.`.yellow);
             const username = telegramUser.username || `user_${telegramId}`;
@@ -46,14 +59,12 @@ const syncUser = async (req, res) => {
             });
             await user.save();
         } else {
-             // Opcional: Actualizamos datos que pueden cambiar, como el nombre de usuario.
             user.username = telegramUser.username || user.username;
             user.fullName = `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim() || user.fullName;
             await user.save();
             console.log(`[Auth Sync] Usuario ${user.username} encontrado y actualizado.`);
         }
         
-        // Obtenemos los datos completos del usuario, incluyendo su referente si existe.
         const userWithDetails = await User.findById(user._id)
             .populate('activeTools.tool')
             .populate('referredBy', 'username fullName');
@@ -63,7 +74,8 @@ const syncUser = async (req, res) => {
         const userObject = userWithDetails.toObject();
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
         
-        const token = generateToken(user._id);
+        // Se usa el generador de tokens de usuario.
+        const token = generateUserToken(user._id);
 
         console.log(`[Auth Sync] Sincronización exitosa para ${user.username}.`);
         res.status(200).json({ token, user: userObject, settings });
@@ -73,8 +85,6 @@ const syncUser = async (req, res) => {
         return res.status(500).json({ message: 'Error interno del servidor.', details: error.message });
     }
 };
-
-// --- OTRAS FUNCIONES (SIN CAMBIOS) ---
 
 const getUserProfile = async (req, res) => {
     try {
@@ -88,14 +98,34 @@ const getUserProfile = async (req, res) => {
 const loginAdmin = async (req, res) => {
     const { username, password } = req.body;
     try {
-        const adminUser = await User.findOne({ $or: [{ username }, { telegramId: username }]}).select('+password');
-        if (adminUser && adminUser.role === 'admin' && (await adminUser.matchPassword(password))) {
-            const token = generateToken(adminUser._id);
-            res.json({ _id: adminUser._id, username: adminUser.username, role: adminUser.role, isTwoFactorEnabled: adminUser.isTwoFactorEnabled, token });
+        // Buscamos al admin y seleccionamos su contraseña para poder compararla.
+        const adminUser = await User.findOne({ 
+            $or: [{ username }, { telegramId: username }],
+            role: 'admin' // Aseguramos que solo un admin pueda iniciar sesión aquí.
+        }).select('+password');
+
+        if (adminUser && (await adminUser.matchPassword(password))) {
+            
+            // [INSPECTIO - CORRECCIÓN] Usamos el generador de tokens específico para administradores.
+            const token = generateAdminToken(adminUser._id);
+            
+            // [INSPECTIO - CORRECCIÓN] Devolvemos el objeto 'admin' completo, no campos sueltos.
+            // Esto es crucial para que el frontend obtenga el 'telegramId'.
+            const adminData = adminUser.toObject();
+            delete adminData.password; // Eliminar la contraseña del objeto antes de enviarlo.
+
+            res.json({
+                token,
+                admin: adminData
+            });
+
         } else {
             res.status(401).json({ message: 'Credenciales inválidas.' });
         }
-    } catch (error) { res.status(500).json({ message: 'Error del servidor' }); }
+    } catch (error) {
+        console.error(`[Admin Login] Error: ${error.message}`);
+        res.status(500).json({ message: 'Error del servidor' });
+    }
 };
 
 module.exports = { syncUser, getUserProfile, loginAdmin };

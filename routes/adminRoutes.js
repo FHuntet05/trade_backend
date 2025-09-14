@@ -1,52 +1,87 @@
-// RUTA: backend/routes/adminRoutes.js (v37.2 - AÑADIDA RUTA DE BARRIDO DE GAS)
-
+// backend/routes/adminRoutes.js (FASE "INSPECTIO" v1.0 - PROTEGIDO CON `protectAdmin`)
 const express = require('express');
 const router = express.Router();
-const adminController = require('../controllers/adminController.js');
-const { protect, isAdmin } = require('../middleware/authMiddleware');
 
-// Rutas de Dashboard y Configuración
-router.get('/stats', protect, isAdmin, adminController.getDashboardStats);
-router.route('/settings').get(protect, isAdmin, adminController.getSettings).put(protect, isAdmin, adminController.updateSettings);
+// [INSPECTIO - CORRECCIÓN] Importamos el nuevo middleware `protectAdmin`.
+// `isAdmin` puede seguir usándose para una doble verificación o para rutas específicas
+// si algunos admins tuvieran más permisos que otros en el futuro.
+const { protectAdmin, isAdmin } = require('../middleware/authMiddleware');
 
-// Rutas de Gestión de Usuarios
-router.get('/users', protect, isAdmin, adminController.getAllUsers);
-router.get('/users/:id/details', protect, isAdmin, adminController.getUserDetails);
-router.put('/users/:id', protect, isAdmin, adminController.updateUser);
-router.put('/users/:id/status', protect, isAdmin, adminController.setUserStatus);
-router.post('/users/:id/adjust-balance', protect, isAdmin, adminController.adjustUserBalance);
+// Importamos todos los controladores del adminController
+const {
+  getPendingWithdrawals, 
+  processWithdrawal, 
+  getAllUsers, 
+  updateUser, 
+  getDashboardStats,
+  getAllFactories, 
+  createFactory, 
+  updateFactory, 
+  deleteFactory, 
+  getUserDetails, 
+  getSettings,
+  updateSettings, 
+  generateTwoFactorSecret, 
+  verifyAndEnableTwoFactor, 
+  getTreasuryWalletsList,
+  sweepFunds, 
+  analyzeGasNeeds, 
+  dispatchGas, 
+  adjustUserBalance, 
+  sendBroadcastNotification,
+  sweepGas, 
+  promoteUserToAdmin, 
+  demoteAdminToUser, 
+  resetAdminPassword
+} = require('../controllers/adminController');
 
-// Rutas de Gestión de Transacciones y Retiros
-router.get('/transactions', protect, isAdmin, adminController.getAllTransactions);
-router.post('/transactions/manual', protect, isAdmin, adminController.createManualTransaction);
-router.get('/withdrawals/pending', protect, isAdmin, adminController.getPendingWithdrawals);
-router.put('/withdrawals/:id/process', protect, isAdmin, adminController.processWithdrawal);
+// --- APLICACIÓN DEL MIDDLEWARE DE SEGURIDAD ---
+// [INSPECTIO - CORRECCIÓN CRÍTICA]
+// Aplicamos `protectAdmin` a TODAS las rutas definidas en este archivo.
+// Cualquier petición a /api/admin/* ahora debe tener un token de administrador válido.
+router.use(protectAdmin);
 
-// Rutas de Tesorería y Dispensador
-router.get('/treasury/wallets-list', protect, isAdmin, adminController.getTreasuryWalletsList);
-router.post('/treasury/wallet-balance', protect, isAdmin, adminController.getWalletBalance);
-router.post('/sweep-funds', protect, isAdmin, adminController.sweepFunds);
+// --- DEFINICIÓN DE RUTAS ---
 
-// [CORRECCIÓN] - Se añade la ruta para la nueva funcionalidad de barrido de gas BNB.
-router.post('/sweep-gas', protect, isAdmin, adminController.sweepGas);
+// Dashboard
+router.route('/stats').get(getDashboardStats);
 
-router.get('/gas-dispenser/analyze', protect, isAdmin, adminController.analyzeGasNeeds);
-router.post('/gas-dispenser/dispatch', protect, isAdmin, adminController.dispatchGas);
+// Gestión de Usuarios
+router.route('/users').get(getAllUsers);
+router.route('/users/:id').get(getUserDetails).put(updateUser);
+router.route('/users/adjust-balance/:id').post(adjustUserBalance);
 
-// Rutas de Gestión de Herramientas
-router.route('/tools').get(protect, isAdmin, adminController.getAllTools).post(protect, isAdmin, adminController.createTool);
-router.route('/tools/:id').put(protect, isAdmin, adminController.updateTool).delete(protect, isAdmin, adminController.deleteTool);
+// Gestión de Roles de Admin (Solo Super Admin, la lógica está en el frontend)
+router.route('/admins/promote').post(promoteUserToAdmin);
+router.route('/admins/demote').post(demoteAdminToUser);
+router.route('/admins/reset-password').post(resetAdminPassword);
 
-// Rutas de 2FA
-router.post('/2fa/generate', protect, isAdmin, adminController.generateTwoFactorSecret);
-router.post('/2fa/verify', protect, isAdmin, adminController.verifyAndEnableTwoFactor);
+// Gestión de Retiros
+router.route('/withdrawals').get(getPendingWithdrawals);
+router.route('/withdrawals/:id/process').put(processWithdrawal);
 
-// Ruta de notificaciones 
-router.post('/notifications/send', protect, isAdmin, adminController.sendBroadcastNotification);
+// Tesorería
+router.route('/treasury/wallets').get(getTreasuryWalletsList);
+router.route('/treasury/sweep-funds').post(sweepFunds);
+router.route('/treasury/sweep-gas').post(sweepGas);
 
-// Rutas de Monitor Blockchain
-router.get('/blockchain-monitor/pending', protect, isAdmin, adminController.getPendingBlockchainTxs);
-router.post('/blockchain-monitor/cancel-tx', protect, isAdmin, adminController.cancelTransaction);
-router.post('/blockchain-monitor/speedup-tx', protect, isAdmin, adminController.speedUpTransaction);
+// Dispensador de Gas
+router.route('/gas-dispenser/analysis').get(analyzeGasNeeds);
+router.route('/gas-dispenser/dispatch').post(dispatchGas);
+
+// Gestión de Fábricas/Herramientas
+router.route('/factories').get(getAllFactories).post(createFactory);
+router.route('/factories/:id').put(updateFactory).delete(deleteFactory);
+
+// Ajustes del Sistema
+router.route('/settings').get(getSettings).put(updateSettings);
+
+// Seguridad y 2FA
+router.route('/security/2fa/generate').post(generateTwoFactorSecret);
+router.route('/security/2fa/verify').post(verifyAndEnableTwoFactor);
+
+// Notificaciones
+router.route('/notifications/broadcast').post(sendBroadcastNotification);
+
 
 module.exports = router;
