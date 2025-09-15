@@ -1,4 +1,4 @@
-// backend/index.js (FASE "REMEDIATIO" - LOGGING DE DIAGNÓSTICO AÑADIDO)
+// backend/index.js (SOLUCIÓN CORS PREFLIGHT DEFINITIVA)
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -57,8 +57,7 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 app.use(express.json());
 
 // [REMEDIATIO - LOGGING DE DIAGNÓSTICO]
-// Este middleware se ejecuta para CADA petición que llega al servidor, ANTES que CORS.
-// Nos dirá si las peticiones del frontend están llegando y desde qué origen.
+// Este middleware nos dará visibilidad de todas las peticiones entrantes.
 app.use((req, res, next) => {
     console.log(`[REQUEST LOG] Origen: ${req.headers.origin} | Método: ${req.method} | URL: ${req.url}`.magenta);
     next();
@@ -80,6 +79,13 @@ const corsOptions = {
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     credentials: true,
 };
+
+// [SOLUCIÓN DEFINITIVA] - MANEJO DE PREFLIGHT REQUESTS
+// Esta línea intercepta TODAS las peticiones OPTIONS y responde inmediatamente con los headers de CORS.
+// Esto desbloquea las peticiones POST con cabeceras de autorización desde el navegador.
+app.options('*', cors(corsOptions));
+
+// Aplicamos la configuración de CORS para el resto de las peticiones.
 app.use(cors(corsOptions));
 
 // --- Rate Limiting ---
@@ -111,7 +117,10 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
 app.use('/api/users', userRoutes);
 
-// ... (El resto del archivo, lógica del bot y arranque del servidor, se mantiene sin cambios) ...
+// =========================================================================
+// ================== LÓGICA DEL BOT DE TELEGRAM ===========================
+// =========================================================================
+
 const WELCOME_MESSAGE = `
 🤖 ¡Bienvenido a Nice Bot!\n\n
 🔐 Tu acceso privilegiado al universo de la minería digital inteligente. Conecta con el sistema NTX y transforma tu actividad en recompensas exclusivas.\n
@@ -126,6 +135,7 @@ const WELCOME_MESSAGE = `
 💎 Recupera tus NTX minados y potencia tus estrategias en el ecosistema tecnológico.\n
 🚀 ¿Listo para comenzar tu travesía digital con Nice Bot?
 🔘 Pulsa el botón inferior y libera el poder de la minería inteligente.`;
+
 bot.command('start', async (ctx) => {
     try {
         const referredId = ctx.from.id.toString();
@@ -138,7 +148,9 @@ bot.command('start', async (ctx) => {
                 referrerId = parts[1].trim();
             }
         }
+        
         console.log(`[Bot /start] Petición de inicio. Usuario: ${referredId}. Potencial Referente: ${referrerId}`.cyan);
+
         let referredUser = await User.findOne({ telegramId: referredId });
         if (!referredUser) {
             const username = ctx.from.username || `user_${referredId}`;
@@ -158,8 +170,10 @@ bot.command('start', async (ctx) => {
         }
         await referredUser.save();
         console.log(`[Bot /start] Perfil del usuario ${referredId} guardado/actualizado en la BD.`);
+        
         const imageUrl = 'https://i.postimg.cc/8PqYj4zR/nicebot.jpg';
         const webAppUrl = process.env.CLIENT_URL;
+        
         await ctx.replyWithPhoto(imageUrl, {
             caption: WELCOME_MESSAGE,
             parse_mode: 'Markdown',
@@ -169,21 +183,29 @@ bot.command('start', async (ctx) => {
                 ]
             }
         });
+
     } catch (error) {
         console.error('[Bot /start] ERROR FATAL EN EL COMANDO START:'.red.bold, error);
         await ctx.reply('Lo sentimos, ha ocurrido un error al procesar tu solicitud.');
     }
 });
+
+// --- CONFIGURACIÓN DE COMANDOS Y WEBHOOK ---
 bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
 const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
 const secretPath = `/api/telegram-webhook/${secretToken}`;
 app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
+
+// --- MIDDLEWARES DE ERROR Y ARRANQUE DEL SERVIDOR ---
 app.use(notFound);
 app.use(errorHandler);
+
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, async () => {
     console.log(`[SERVIDOR] 🚀 Servidor corriendo en puerto ${PORT}`.yellow.bold);
+  
     startMonitoring();
+
     try {
         const botInfo = await bot.telegram.getMe();
         console.log(`[SERVIDOR] ✅ Conectado como bot: ${botInfo.username}.`);
@@ -194,6 +216,7 @@ const server = app.listen(PORT, async () => {
         console.error("[SERVIDOR] ❌ ERROR AL CONFIGURAR TELEGRAM:", telegramError.message.red);
     }
 });
+
 process.on('unhandledRejection', (err, promise) => {
     console.error(`❌ ERROR NO MANEJADO: ${err.message}`.red.bold, err);
     server.close(() => process.exit(1));
