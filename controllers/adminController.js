@@ -1,8 +1,6 @@
-// backend/controllers/adminController.js (FASE "REMEDIATIO" - RUTA DE MODELO CORREGIDA)
+// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS SYNC")
 
 const User = require('../models/userModel');
-// [REMEDIATIO - CORRECCIÓN CRÍTICA] Se corrige el nombre del modelo importado.
-// El archivo se llama `toolModel.js` pero se usa como "Factory".
 const Factory = require('../models/toolModel');
 const Setting = require('../models/settingsModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
@@ -20,7 +18,7 @@ const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const crypto = require('crypto');
 const blockchainService = require('../services/blockchainService');
 
-// --- Constantes y Helpers ---
+// --- Constantes y Helpers (sin cambios) ---
 const PLACEHOLDER_AVATAR_URL = 'https://i.postimg.cc/mD21B6r7/user-avatar-placeholder.png';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
 const USDT_ABI = ['function balanceOf(address) view returns (uint256)'];
@@ -53,8 +51,9 @@ async function _getBalancesForAddress(address, chain) {
     }
 }
 
-// --- Endpoints del Dashboard ---
+// --- Endpoints del Dashboard (sin cambios) ---
 const getDashboardStats = asyncHandler(async (req, res) => {
+    // ... (código existente sin cambios)
     const totalDepositVolumePromise = User.aggregate([ { $unwind: '$transactions' }, { $match: { 'transactions.type': 'deposit' } }, { $group: { _id: null, total: { $sum: '$transactions.amount' } } } ]);
     const userGrowthDataPromise = User.aggregate([ { $match: { createdAt: { $gte: new Date(new Date().setDate(new Date().getDate() - 14)) } } }, { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, count: { $sum: 1 } } }, { $sort: { _id: 1 } } ]).then(data => data.map(item => ({ date: item._id, NuevosUsuarios: item.count })));
     const totalUsersPromise = User.countDocuments();
@@ -75,8 +74,9 @@ const getDashboardStats = asyncHandler(async (req, res) => {
     res.json({ totalUsers, totalDepositVolume, pendingWithdrawals, centralWalletBalances, userGrowthData });
 });
 
-// --- Gestión de Retiros ---
+// --- Gestión de Retiros (sin cambios) ---
 const getPendingWithdrawals = asyncHandler(async (req, res) => {
+    // ... (código existente sin cambios)
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const aggregationPipeline = [
@@ -111,6 +111,7 @@ const getPendingWithdrawals = asyncHandler(async (req, res) => {
 });
 
 const processWithdrawal = asyncHandler(async (req, res) => {
+    // ... (código existente sin cambios)
     const { status, adminNotes } = req.body;
     const { id: transactionId } = req.params;
     if (!['completed', 'rejected'].includes(status)) { res.status(400); throw new Error("El estado debe ser 'completed' o 'rejected'."); }
@@ -145,8 +146,9 @@ const processWithdrawal = asyncHandler(async (req, res) => {
     }
 });
 
-// --- Gestión de Tesorería ---
+// --- Gestión de Tesorería (sin cambios) ---
 const sweepFunds = asyncHandler(async (req, res) => {
+    // ... (código existente sin cambios)
     console.log('[Sweep] Solicitud de barrido de fondos recibida.');
     const { walletsToSweep } = req.body;
     const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
@@ -179,6 +181,7 @@ const sweepFunds = asyncHandler(async (req, res) => {
 });
 
 const sweepGas = asyncHandler(async (req, res) => {
+    // ... (código existente sin cambios)
     console.log('[SweepGas] Solicitud de barrido de gas (BNB) recibida.');
     const { walletsToSweep } = req.body;
     const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
@@ -210,6 +213,7 @@ const sweepGas = asyncHandler(async (req, res) => {
 });
 
 const getTreasuryWalletsList = asyncHandler(async (req, res) => {
+    // ... (código existente sin cambios)
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 15;
     const search = req.query.search || '';
@@ -241,8 +245,10 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
     res.json({ wallets: walletsWithDetails, pagination: { currentPage: page, totalPages: Math.ceil(totalWallets / limit), totalWallets }, summary });
 });
 
-// --- Dispensador de Gas ---
+
+// --- Dispensador de Gas (sin cambios) ---
 const analyzeGasNeeds = asyncHandler(async (req, res) => {
+    // ... (código existente sin cambios)
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 15;
     const { bscWallet } = transactionService.getCentralWallets();
@@ -268,6 +274,7 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
 });
 
 const dispatchGas = asyncHandler(async (req, res) => {
+    // ... (código existente sin cambios)
     const { chain, targets } = req.body;
     if (chain !== 'BSC' || !Array.isArray(targets) || targets.length === 0) { res.status(400); throw new Error("Petición inválida."); }
     const report = { summary: { success: 0, failed: 0, totalDispatched: 0 }, details: [] };
@@ -285,23 +292,99 @@ const dispatchGas = asyncHandler(async (req, res) => {
     res.json(report);
 });
 
-// --- Gestión de Usuarios ---
+// --- Gestión de Usuarios (sin cambios) ---
 const getAllUsers = asyncHandler(async (req, res) => { const pageSize = 10; const page = Number(req.query.page) || 1; const filter = req.query.search ? { $or: [{ username: { $regex: req.query.search, $options: 'i' } }, { telegramId: { $regex: req.query.search, $options: 'i' } }] } : {}; const count = await User.countDocuments(filter); const users = await User.find(filter).select('username telegramId role status createdAt balance.usdt photoFileId').sort({ createdAt: -1 }).limit(pageSize).skip(pageSize * (page - 1)).lean(); const usersWithPhotoUrl = await Promise.all(users.map(async (user) => ({ ...user, photoUrl: await getTemporaryPhotoUrl(user.photoFileId) || PLACEHOLDER_AVATAR_URL }))); res.json({ users: usersWithPhotoUrl, page, pages: Math.ceil(count / pageSize), totalUsers: count }); });
 const getUserDetails = asyncHandler(async (req, res) => { const { id } = req.params; const user = await User.findById(id).select('-password').lean(); if (!user) { res.status(404); throw new Error('Usuario no encontrado.'); } const referrals = await User.find({ referredBy: id }).select('username fullName telegramId photoFileId createdAt').lean(); const cryptoWallets = await CryptoWallet.find({ user: id }).lean(); const [userPhotoUrl, referralsWithPhoto] = await Promise.all([ getTemporaryPhotoUrl(user.photoFileId), Promise.all(referrals.map(async (ref) => ({ ...ref, photoUrl: await getTemporaryPhotoUrl(ref.photoFileId) || PLACEHOLDER_AVATAR_URL }))) ]); const page = parseInt(req.query.page) || 1; const limit = 10; const allTransactions = (user.transactions || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)); const paginatedTransactions = allTransactions.slice((page - 1) * limit, page * limit); res.json({ user: { ...user, photoUrl: userPhotoUrl || PLACEHOLDER_AVATAR_URL }, referrals: referralsWithPhoto, cryptoWallets, transactions: { items: paginatedTransactions, page, totalPages: Math.ceil(allTransactions.length / limit), totalItems: allTransactions.length } }); });
 const updateUser = asyncHandler(async (req, res) => { const { username, password, balanceUsdt, status, role } = req.body; const user = await User.findById(req.params.id); if (!user) { res.status(404); throw new Error('Usuario no encontrado.'); } user.username = username ?? user.username; user.balance.usdt = balanceUsdt ?? user.balance.usdt; user.status = status ?? user.status; user.role = role ?? user.role; if (password) { user.password = password; } const updatedUser = await user.save(); res.json(updatedUser); });
 const adjustUserBalance = asyncHandler(async (req, res) => { const { id } = req.params; const { type, currency, amount, reason } = req.body; if (!['admin_credit', 'admin_debit'].includes(type) || currency !== 'USDT' || !amount || !reason) { res.status(400); throw new Error("Parámetros inválidos."); } const session = await mongoose.startSession(); try { session.startTransaction(); const user = await User.findById(id).session(session); if(!user) throw new Error('Usuario no encontrado'); if (type === 'admin_credit') { user.balance.usdt = (user.balance.usdt || 0) + amount; } else { if ((user.balance.usdt || 0) < amount) throw new Error('Saldo insuficiente para el débito.'); user.balance.usdt -= amount; } user.transactions.push({ type, amount: type === 'admin_credit' ? amount : -amount, currency, description: reason, status: 'completed', metadata: { adminUsername: req.user.username } }); await user.save({ session }); await session.commitTransaction(); res.status(200).json({ message: 'Saldo ajustado exitosamente.', user: user.toObject() }); } catch (error) { await session.abortTransaction(); res.status(500).json({ message: error.message }); } finally { session.endSession(); } });
 
-// --- Gestión de Roles de Admin ---
+// --- Gestión de Roles de Admin (sin cambios) ---
 const promoteUserToAdmin = asyncHandler(async (req, res) => { const { userId, password } = req.body; if (!userId || !password) { res.status(400); throw new Error('Se requiere userId y password.'); } const user = await User.findById(userId); if (!user) { res.status(404); throw new Error('Usuario no encontrado.'); } if (user.role === 'admin') { return res.status(400).json({ message: 'El usuario ya es un administrador.' }); } user.role = 'admin'; user.password = password; user.mustResetPassword = true; await user.save(); res.json({ message: `El usuario ${user.username} ha sido promovido a administrador.` }); });
 const demoteAdminToUser = asyncHandler(async (req, res) => { const { adminId } = req.body; if (!adminId) { res.status(400); throw new Error('Se requiere el ID del administrador.'); } if (req.user.id === adminId) { res.status(400); throw new Error('No puedes degradarte a ti mismo.'); } const admin = await User.findById(adminId); if (!admin || admin.role !== 'admin') { res.status(404); throw new Error('Administrador no encontrado.'); } admin.role = 'user'; await admin.save(); res.json({ message: `El administrador ${admin.username} ha sido degradado a usuario.` }); });
 const resetAdminPassword = asyncHandler(async (req, res) => { const { adminId } = req.body; if (!adminId) { res.status(400); throw new Error('Se requiere el ID del administrador.'); } const admin = await User.findById(adminId); if (!admin || admin.role !== 'admin') { res.status(404); throw new Error('Administrador no encontrado.'); } const temporaryPassword = crypto.randomBytes(8).toString('hex'); admin.password = temporaryPassword; admin.mustResetPassword = true; await admin.save(); res.json({ message: `Contraseña reseteada para ${admin.username}.`, temporaryPassword }); });
+
+// --- [NEXUS SYNC] NUEVO: Gestión de Transacciones Globales ---
+const getAllTransactions = asyncHandler(async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 15;
+    const search = req.query.search || '';
+    const type = req.query.type || '';
+
+    let userFilter = {};
+    if (search) {
+        userFilter = {
+            $or: [
+                { username: { $regex: search, $options: 'i' } },
+                { telegramId: { $regex: search, $options: 'i' } }
+            ]
+        };
+    }
+    const users = await User.find(userFilter).select('_id');
+    const userIds = users.map(u => u._id);
+
+    let transactionMatch = { 'user': { $in: userIds } };
+    if (type) {
+        transactionMatch['transactions.type'] = type;
+    }
+
+    const aggregation = [
+        { $match: { 'transactions': { $exists: true, $ne: [] } } },
+        { $unwind: '$transactions' },
+        { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'user_info' } },
+        { $unwind: '$user_info' },
+        { $addFields: { 'transactions.user': { _id: '$user_info._id', username: '$user_info.username' } } },
+        { $replaceRoot: { newRoot: '$transactions' } },
+        { $match: transactionMatch },
+        { $sort: { createdAt: -1 } }
+    ];
+
+    const countPipeline = [...aggregation, { $count: 'total' }];
+    const totalResult = await User.aggregate(countPipeline);
+    const totalTransactions = totalResult.length > 0 ? totalResult[0].total : 0;
+
+    const paginatedAggregation = [...aggregation, { $skip: (page - 1) * limit }, { $limit: limit }];
+    const transactions = await User.aggregate(paginatedAggregation);
+
+    res.json({
+        transactions,
+        page,
+        pages: Math.ceil(totalTransactions / limit),
+        totalTransactions
+    });
+});
+
+
+// --- [NEXUS SYNC] NUEVO: Monitor Blockchain ---
+const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
+    // Busca transacciones pendientes o las que han sido confirmadas/fallidas en la última hora.
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const pendingTxs = await PendingTx.find({ 
+        $or: [
+            { status: 'PENDING' },
+            { updatedAt: { $gte: oneHourAgo } }
+        ]
+    }).sort({ createdAt: -1 }).limit(50);
+    res.json(pendingTxs);
+});
+
 
 // --- Funciones de Utilidad (Configuraciones, 2FA, Notificaciones) ---
 const getAllFactories = asyncHandler(async (req, res) => { const factories = await Factory.find({}).sort({ vipLevel: 1 }).lean(); res.json(factories); });
 const createFactory = asyncHandler(async (req, res) => { const newFactory = await Factory.create(req.body); res.status(201).json(newFactory); });
 const updateFactory = asyncHandler(async (req, res) => { const factory = await Factory.findByIdAndUpdate(req.params.id, req.body, { new: true }); if (!factory) return res.status(404).json({ message: 'Fábrica no encontrada.' }); res.json(factory); });
 const deleteFactory = asyncHandler(async (req, res) => { await Factory.findByIdAndDelete(req.params.id); res.json({ message: 'Fábrica eliminada.' }); });
-const getSettings = asyncHandler(async (req, res) => { const settings = await Setting.getSettings(); res.json(settings); });
+
+// [NEXUS SYNC - REPAIR] Se corrige la lógica para obtener los ajustes.
+const getSettings = asyncHandler(async (req, res) => {
+    const settings = await Setting.findOne({ singleton: 'global_settings' });
+    if (!settings) {
+        // Si no hay ajustes, crea uno con los valores por defecto del modelo.
+        const defaultSettings = await Setting.create({});
+        return res.json(defaultSettings);
+    }
+    res.json(settings);
+});
+
 const updateSettings = asyncHandler(async (req, res) => { const updatedSettings = await Setting.findOneAndUpdate({ singleton: 'global_settings' }, req.body, { new: true, upsert: true }); res.json(updatedSettings); });
 const generateTwoFactorSecret = asyncHandler(async (req, res) => { const secret = speakeasy.generateSecret({ name: `BlockSphere Admin (${req.user.username})` }); await User.findByIdAndUpdate(req.user.id, { twoFactorSecret: secret.base32 }); const data_url = await qrCodeToDataURLPromise(secret.otpauth_url); res.json({ secret: secret.base32, qrCodeUrl: data_url }); });
 const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => { const { token } = req.body; const user = await User.findById(req.user.id).select('+twoFactorSecret'); if (!user || !user.twoFactorSecret) return res.status(400).json({ message: 'No se ha generado un secreto 2FA.' }); const verified = speakeasy.totp.verify({ secret: user.twoFactorSecret, encoding: 'base32', token }); if (verified) { user.isTwoFactorEnabled = true; await user.save(); res.json({ message: '¡2FA habilitado!' }); } else { res.status(400).json({ message: 'Token inválido.' }); }});
@@ -313,5 +396,7 @@ module.exports = {
   getAllFactories, createFactory, updateFactory, deleteFactory, getUserDetails, getSettings,
   updateSettings, generateTwoFactorSecret, verifyAndEnableTwoFactor, getTreasuryWalletsList,
   sweepFunds, analyzeGasNeeds, dispatchGas, adjustUserBalance, sendBroadcastNotification,
-  sweepGas, promoteUserToAdmin, demoteAdminToUser, resetAdminPassword
+  sweepGas, promoteUserToAdmin, demoteAdminToUser, resetAdminPassword,
+  // [NEXUS SYNC] Exportamos las nuevas funciones.
+  getAllTransactions, getPendingBlockchainTxs
 };

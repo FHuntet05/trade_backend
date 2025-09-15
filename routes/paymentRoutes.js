@@ -1,9 +1,17 @@
+// RUTA: backend/routes/paymentRoutes.js (VERSIÓN "NEXUS - HÍBRIDA")
+
 const express = require('express');
 const router = express.Router();
-const { generateAddress, getPrices } = require('../controllers/paymentController');
+// [NEXUS HÍBRIDO] Importamos la nueva función del controlador.
+const { getDepositOptions, getPrices } = require('../controllers/paymentController');
 const { protect } = require('../middleware/authMiddleware');
 
-router.post('/generate-address', protect, generateAddress);
+// [NEXUS HÍBRIDO - REEMPLAZO]
+// La antigua ruta POST /generate-address ha sido deprecada y eliminada.
+// Se reemplaza por una única ruta GET que devuelve todas las opciones de depósito.
+router.get('/deposit-options', protect, getDepositOptions);
+
+// La ruta para obtener precios se mantiene.
 router.get('/prices', protect, getPrices);
 
 module.exports = router;
