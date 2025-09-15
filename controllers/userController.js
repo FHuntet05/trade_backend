@@ -1,11 +1,13 @@
-// backend/controllers/userController.js (VERSIÓN INSTRUMENTADA Y COMPLETA)
+// backend/controllers/userController.js (FASE "PERFECTIO" - VARIABLE DE ENTORNO CORREGIDA)
 const axios = require('axios');
 const User = require('../models/userModel');
 const asyncHandler = require('express-async-handler');
 
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
-// Asegurémonos de que el placeholder sea una URL completa para evitar problemas
-const PLACEHOLDER_AVATAR = `${process.env.FRONTEND_URL}/assets/images/user-avatar-placeholder.png`;
+// [PERFECTIO - CORRECCIÓN CRÍTICA]
+// Se utiliza la variable de entorno estandarizada 'CLIENT_URL' para asegurar que la URL
+// del placeholder sea correcta en el entorno de producción de Render.
+const PLACEHOLDER_AVATAR = `${process.env.CLIENT_URL}/assets/images/user-avatar-placeholder.png`;
 
 /**
  * @desc    Obtiene la URL de descarga temporal de una foto de Telegram.
@@ -13,42 +15,33 @@ const PLACEHOLDER_AVATAR = `${process.env.FRONTEND_URL}/assets/images/user-avata
  * @returns {Promise<string|null>} La URL temporal o null si falla.
  */
 const getTemporaryPhotoUrl = async (photoFileId) => {
-    // 1. PUNTO DE ENTRADA
-    console.log(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] Invocado.`);
     if (!photoFileId) {
-        console.log(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] No hay photoFileId. Retornando null.`);
         return null;
     }
-    console.log(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] Intentando resolver file_id: ${photoFileId}`);
 
     try {
-        // 2. LLAMADA A LA API DE TELEGRAM
-        console.log(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] Realizando llamada a /getFile...`);
         const fileInfoResponse = await axios.get(`${TELEGRAM_API_URL}/getFile`, {
             params: { file_id: photoFileId },
-            timeout: 4000 // Timeout agresivo para no bloquear
+            timeout: 4000
         });
 
         if (!fileInfoResponse.data.ok) {
-            console.error(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] ERROR: Telegram API no pudo obtener la info del archivo para file_id: ${photoFileId}. Respuesta:`, fileInfoResponse.data);
+            console.error(`[PHOTO SERVICE] ERROR: Telegram API no pudo obtener la info del archivo para file_id: ${photoFileId}. Respuesta:`, fileInfoResponse.data);
             return null;
         }
 
         const filePath = fileInfoResponse.data.result.file_path;
         const finalUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${filePath}`;
         
-        // 3. ÉXITO
-        console.log(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] Éxito. URL generada.`);
         return finalUrl;
     } catch (error) {
-        // 4. FALLO
-        console.error(`[PHOTO-TRACE] ---> [getTemporaryPhotoUrl] CATCH: Error al resolver la foto para el file_id ${photoFileId}:`, error.message);
+        console.error(`[PHOTO SERVICE] CATCH: Error al resolver la foto para el file_id ${photoFileId}:`, error.message);
         return null;
     }
 };
 
 /**
- * @desc    (Deprecado) Redirige a la URL de la foto. Ya no es la estrategia principal.
+ * @desc    (Deprecado) Redirige a la URL de la foto. No es la estrategia principal.
  * @route   GET /api/users/:telegramId/photo
  * @access  Public
  */
