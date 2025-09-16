@@ -1,11 +1,11 @@
-// backend/controllers/authController.js (FASE "REMEDIATIO" - CORRECCIÓN DE POPULATE)
+// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - FREE MINER")
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
+const Tool = require('../models/toolModel'); // [NEXUS FREE MINER] Importamos el modelo de la herramienta.
 const jwt = require('jsonwebtoken');
 const { getTemporaryPhotoUrl } = require('./userController');
 
-// [REMEDIATIO - CORRECCIÓN] La variable de entorno correcta es CLIENT_URL
 const PLACEHOLDER_AVATAR_URL = `${process.env.CLIENT_URL}/assets/images/user-avatar-placeholder.png`;
 
 const generateUserToken = (id) => {
@@ -28,40 +28,54 @@ const syncUser = async (req, res) => {
     const telegramId = telegramUser.id.toString();
 
     try {
-        // [REMEDIATIO - OPTIMIZACIÓN Y CORRECCIÓN]
-        // Usamos findOneAndUpdate con la opción { new: true, upsert: true }
-        // Esto busca al usuario. Si no existe, lo crea. Si existe, lo actualiza.
-        // Todo en una sola operación atómica en la base de datos.
-        // También populamos 'referredBy' directamente en esta consulta.
-        const user = await User.findOneAndUpdate(
-            { telegramId: telegramId },
-            { 
-                $set: {
-                    username: telegramUser.username || `user_${telegramId}`,
-                    fullName: `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim() || `user_${telegramId}`,
-                    language: telegramUser.language_code || 'es'
-                },
-                $setOnInsert: { // Estos valores solo se establecen si el usuario es nuevo (upsert)
-                    telegramId: telegramId,
-                }
-            },
-            { new: true, upsert: true }
-        ).populate('referredBy', 'username fullName');
-
+        let isNewUser = false;
+        let user = await User.findOne({ telegramId: telegramId });
+        
         if (!user) {
-            // Este caso es muy improbable con upsert: true, pero es una buena práctica de seguridad.
-            console.error('[Auth Sync] ERROR: No se pudo crear o encontrar al usuario.'.red.bold);
-            return res.status(500).json({ message: 'No se pudo procesar el perfil de usuario.' });
+            isNewUser = true;
+            console.log(`[Auth Sync] Usuario ${telegramId} no encontrado. Creando nuevo perfil.`);
+            user = new User({
+                telegramId: telegramId,
+                username: telegramUser.username || `user_${telegramId}`,
+                fullName: `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim() || `user_${telegramId}`,
+                language: telegramUser.language_code || 'es'
+            });
+        } else {
+             user.username = telegramUser.username || user.username;
+             user.fullName = `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim() || user.fullName;
+             user.language = telegramUser.language_code || user.language;
         }
+
+        // [NEXUS FREE MINER] Lógica para asignar la herramienta gratuita si es un usuario nuevo.
+        if (isNewUser) {
+            const freeTool = await Tool.findOne({ isFree: true }).lean();
+            if (freeTool) {
+                console.log(`[Auth Sync] Fábrica gratuita encontrada: "${freeTool.name}". Asignando al nuevo usuario.`);
+                const now = new Date();
+                const expiryDate = new Date(now.getTime() + freeTool.durationDays * 24 * 60 * 60 * 1000);
+                
+                user.activeTools.push({
+                    tool: freeTool._id,
+                    purchaseDate: now,
+                    expiryDate: expiryDate,
+                });
+                
+                user.effectiveMiningRate = (user.effectiveMiningRate || 0) + freeTool.miningBoost;
+                
+                // Iniciamos su primer ciclo de minado
+                user.miningStatus = 'IDLE'; 
+                user.lastMiningClaim = now;
+            } else {
+                console.log('[Auth Sync] No se encontró una fábrica gratuita configurada en el sistema.');
+            }
+        }
+        
+        await user.save();
+        await user.populate('referredBy', 'username fullName');
         
         console.log(`[Auth Sync] Usuario ${user.username} sincronizado/creado exitosamente.`);
 
-        // [REMEDIATIO - CORRECCIÓN]
-        // Se elimina la siguiente línea que causaba el error 500 porque el campo 'activeTools'
-        // no existe en el userModel.
-        // const userWithDetails = await User.findById(user._id).populate('activeTools.tool').populate('referredBy', 'username fullName');
-        
-        const settings = await Setting.findOne({ singleton: 'global_settings' }) || await Setting.create({ singleton: 'global_settings' });
+        const settings = await Setting.findOne({ singleton: 'global_settings' }) || await Setting.create({});
         
         const userObject = user.toObject();
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
@@ -79,7 +93,6 @@ const syncUser = async (req, res) => {
 
 const getUserProfile = async (req, res) => {
     try {
-        // [REMEDIATIO - CORRECCIÓN] Se elimina el populate de 'activeTools.tool' que no existe.
         const user = await User.findById(req.user.id).populate('referredBy', 'username fullName');
         if (!user) { return res.status(404).json({ message: 'Usuario no encontrado' }); }
         const settings = await Setting.findOne({ singleton: 'global_settings' });
