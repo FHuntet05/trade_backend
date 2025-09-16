@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/authController.js (VERSIÓN COMPLETA "NEXUS - DIAGNOSTIC FIX")
+// RUTA: backend/controllers/authController.js (VERSIÓN COMPLETA "NEXUS - SETTINGS AWARE")
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
@@ -25,9 +25,21 @@ const syncUser = async (req, res) => {
         return res.status(400).json({ message: 'Datos de usuario de Telegram requeridos.' });
     }
     
-    const telegramId = telegramUser.id.toString();
-
     try {
+        // [NEXUS SETTINGS AWARE] - Implementación del Modo Mantenimiento
+        // 1. Obtenemos la configuración del sistema ANTES que nada.
+        const settings = await Setting.findOne({ singleton: 'global_settings' }).lean();
+
+        // 2. Si el modo mantenimiento está activado, rechazamos la petición.
+        if (settings && settings.maintenanceMode) {
+            console.log(`[Auth Sync] ACCESO BLOQUEADO: El modo mantenimiento está activo. Usuario: ${telegramUser.id}`);
+            // Usamos el código de estado 503 Service Unavailable, que es el apropiado.
+            return res.status(503).json({ 
+                message: settings.maintenanceMessage || 'El sistema está en mantenimiento. Por favor, inténtelo más tarde.' 
+            });
+        }
+
+        const telegramId = telegramUser.id.toString();
         let isNewUser = false;
         let user = await User.findOne({ telegramId: telegramId });
         
@@ -72,8 +84,6 @@ const syncUser = async (req, res) => {
         await user.populate('referredBy', 'username fullName');
         
         console.log(`[Auth Sync] Usuario ${user.username} sincronizado/creado exitosamente.`);
-
-        const settings = await Setting.findOne({ singleton: 'global_settings' }) || await Setting.create({});
         
         const userObject = user.toObject();
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
@@ -81,7 +91,8 @@ const syncUser = async (req, res) => {
         const token = generateUserToken(user._id);
 
         console.log(`[Auth Sync] Sincronización completada para ${user.username}.`);
-        res.status(200).json({ token, user: userObject, settings });
+        // 3. Enviamos los ajustes al frontend junto con los datos del usuario.
+        res.status(200).json({ token, user: userObject, settings: settings || {} });
 
     } catch (error) {
         console.error('[Auth Sync] ERROR FATAL:'.red.bold, error);
@@ -108,7 +119,6 @@ const loginAdmin = async (req, res) => {
 
         if (adminUser && (await adminUser.matchPassword(password))) {
             const token = generateAdminToken(adminUser._id);
-            
             const adminData = adminUser.toObject({ getters: true, virtuals: true });
             delete adminData.password;
 

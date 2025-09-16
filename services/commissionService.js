@@ -1,84 +1,96 @@
-// backend/services/commissionService.js (RECONSTRUCCIÓN FÉNIX v23.1 - COMISIONES FIJAS)
+// RUTA: backend/services/commissionService.js (VERSIÓN "NEXUS - SETTINGS AWARE")
 
 const User = require('../models/userModel');
+const Setting = require('../models/settingsModel'); // <-- 1. Importar el modelo de configuración.
 const { createTransaction } = require('../utils/transactionLogger');
 const mongoose = require('mongoose');
 
 /**
- * Distribuye comisiones fijas de referido de forma atómica y eficiente.
+ * [REFACTORIZADO] Distribuye comisiones basadas en PORCENTAJES definidos en los ajustes del sistema.
  *
- * JUSTIFICACIÓN: La versión anterior asumía porcentajes. Esta versión implementa la
- * regla de negocio correcta: comisiones FIJAS en USDT por nivel. La arquitectura
- * atómica y eficiente se mantiene.
- *
- * @param {mongoose.Types.ObjectId} buyerId - El ID del usuario que realizó su primera compra.
+ * @param {mongoose.Types.ObjectId} buyerId - El ID del usuario que realizó una compra.
+ * @param {number} purchaseAmount - El monto total en USDT de la compra que genera la comisión.
  */
-const distributeFixedCommissions = async (buyerId) => {
+const distributeCommissions = async (buyerId, purchaseAmount) => {
   try {
-    // 1. Definir las comisiones FIJAS por nivel. ESTA ES LA REGLA DE NEGOCIO CORRECTA.
-    const FIXED_COMMISSIONS = {
-      1: 0.25, // 0.25 USDT para el Nivel 1
-      2: 0.15, // 0.15 USDT para el Nivel 2
-      3: 0.05, // 0.05 USDT para el Nivel 3
-    };
+    // 2. Obtener la configuración del sistema y la cadena de referidos en paralelo.
+    const [settings, buyer] = await Promise.all([
+        Setting.findOne({ singleton: 'global_settings' }).lean(),
+        User.findById(buyerId)
+            .select('username referredBy')
+            .populate({
+                path: 'referredBy',
+                select: 'username referredBy',
+                populate: {
+                    path: 'referredBy',
+                    select: 'username referredBy',
+                    populate: {
+                        path: 'referredBy',
+                        select: 'username',
+                    },
+                },
+            })
+            .lean()
+    ]);
 
-    // 2. Obtener la cadena de referidos en UNA SOLA consulta eficiente.
-    const buyer = await User.findById(buyerId)
-      .select('username referredBy')
-      .populate({
-        path: 'referredBy',
-        select: 'username referredBy', // No necesitamos el balance aquí, optimización menor
-        populate: {
-          path: 'referredBy',
-          select: 'username referredBy',
-          populate: {
-            path: 'referredBy',
-            select: 'username',
-          },
-        },
-      })
-      .lean();
-
-    if (!buyer || !buyer.referredBy) {
-      // No hay referente, no hay nada que hacer.
-      return;
+    if (!settings) {
+        console.error('[CommissionService] Error crítico: No se encontró la configuración del sistema.');
+        return;
     }
     
+    if (!buyer || !buyer.referredBy) {
+      return; // No hay referente, no hay nada que hacer.
+    }
+    
+    // 3. Crear un mapa de porcentajes de comisión desde los ajustes.
+    const COMMISSION_RATES = {
+      1: settings.commissionLevel1 || 0,
+      2: settings.commissionLevel2 || 0,
+      3: settings.commissionLevel3 || 0,
+    };
+
     const referrers = [];
     if (buyer.referredBy) { referrers.push({ user: buyer.referredBy, level: 1 }); }
     if (referrers[0]?.user.referredBy) { referrers.push({ user: referrers[0].user.referredBy, level: 2 }); }
     if (referrers[1]?.user.referredBy) { referrers.push({ user: referrers[1].user.referredBy, level: 3 }); }
     
-    // 3. Preparar todas las operaciones de actualización y transacciones.
     const updatePromises = referrers.map(ref => {
-      const commissionAmount = FIXED_COMMISSIONS[ref.level];
-      if (!commissionAmount) return null; // Seguridad por si algo sale mal
+      const commissionRate = COMMISSION_RATES[ref.level];
+      if (!commissionRate || commissionRate <= 0) return null;
 
-      // La operación ATÓMICA Y SEGURA para actualizar el saldo
+      // 4. Calcular el monto de la comisión basado en el porcentaje.
+      const commissionAmount = purchaseAmount * (commissionRate / 100);
+
       const updateUserPromise = User.findByIdAndUpdate(ref.user._id, {
         $inc: { 'balance.usdt': commissionAmount }
       });
       
       const createTransactionPromise = createTransaction(
         ref.user._id,
-        'commission',
+        'referral_commission', // Tipo de transacción más específico
         commissionAmount,
         'USDT',
         `Comisión Nivel ${ref.level} por compra de ${buyer.username}`
       );
 
       return Promise.all([updateUserPromise, createTransactionPromise]);
-    }).filter(Boolean); // Filtra cualquier nulo
+    }).filter(Boolean);
 
-    // 4. Ejecutar todas las actualizaciones en paralelo.
-    await Promise.all(updatePromises);
-    console.log(`[CommissionService] Comisiones FIJAS distribuidas por la compra de ${buyer.username}.`);
+    if (updatePromises.length > 0) {
+        await Promise.all(updatePromises);
+        console.log(`[CommissionService] Comisiones por porcentaje distribuidas por la compra de ${buyer.username}.`);
+    }
 
   } catch (error) {
     console.error(`[CommissionService] Fallo catastrófico al distribuir comisiones para la compra del usuario ${buyerId}:`, error);
   }
 };
 
+// Se mantiene la función anterior por si se necesita en otra parte, pero se renombra para evitar conflictos.
+const distributeFixedCommissions = async (buyerId) => { /* ...código anterior... */ };
+
+
 module.exports = {
+  distributeCommissions, // Exportamos la nueva función basada en porcentajes.
   distributeFixedCommissions,
 };
