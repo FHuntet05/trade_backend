@@ -1,4 +1,4 @@
-// backend/index.js (SOLUCIÓN CORS PREFLIGHT DEFINITIVA)
+// backend/index.js (VERSIÓN "NEXUS - TRUST PROXY")
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -54,10 +54,13 @@ const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
+// [NEXUS TRUST PROXY - CORRECCIÓN CRÍTICA]
+// Esta línea es esencial para que express-rate-limit funcione correctamente en Render.
+// Le dice a Express que confíe en el primer proxy que tiene delante (el de Render).
+app.set('trust proxy', 1);
+
 app.use(express.json());
 
-// [REMEDIATIO - LOGGING DE DIAGNÓSTICO]
-// Este middleware nos dará visibilidad de todas las peticiones entrantes.
 app.use((req, res, next) => {
     console.log(`[REQUEST LOG] Origen: ${req.headers.origin} | Método: ${req.method} | URL: ${req.url}`.magenta);
     next();
@@ -80,12 +83,7 @@ const corsOptions = {
     credentials: true,
 };
 
-// [SOLUCIÓN DEFINITIVA] - MANEJO DE PREFLIGHT REQUESTS
-// Esta línea intercepta TODAS las peticiones OPTIONS y responde inmediatamente con los headers de CORS.
-// Esto desbloquea las peticiones POST con cabeceras de autorización desde el navegador.
 app.options('*', cors(corsOptions));
-
-// Aplicamos la configuración de CORS para el resto de las peticiones.
 app.use(cors(corsOptions));
 
 // --- Rate Limiting ---
@@ -117,9 +115,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
 app.use('/api/users', userRoutes);
 
-// =========================================================================
-// ================== LÓGICA DEL BOT DE TELEGRAM ===========================
-// =========================================================================
+// ... (resto del archivo, lógica del bot y arranque del servidor sin cambios) ...
 
 const WELCOME_MESSAGE = `
 🤖 ¡Bienvenido a Nice Bot!\n\n
@@ -190,13 +186,11 @@ bot.command('start', async (ctx) => {
     }
 });
 
-// --- CONFIGURACIÓN DE COMANDOS Y WEBHOOK ---
 bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
 const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
 const secretPath = `/api/telegram-webhook/${secretToken}`;
 app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
 
-// --- MIDDLEWARES DE ERROR Y ARRANQUE DEL SERVIDOR ---
 app.use(notFound);
 app.use(errorHandler);
 
