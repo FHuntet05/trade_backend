@@ -1,4 +1,4 @@
-// backend/middleware/authMiddleware.js (FASE "INSPECTIO" v1.0 - CORREGIDO CON PROTECCIÓN DE ADMIN)
+// backend/middleware/authMiddleware.js (FASE "INSPECTIO" v2.0 - SUPERADMIN REFORZADO)
 
 const jwt = require('jsonwebtoken');
 const User = require('../models/userModel');
@@ -6,7 +6,6 @@ const asyncHandler = require('express-async-handler');
 
 /**
  * Middleware para proteger rutas de USUARIOS REGULARES.
- * Verifica un token firmado con JWT_SECRET.
  */
 const protect = asyncHandler(async (req, res, next) => {
   let token;
@@ -15,16 +14,13 @@ const protect = asyncHandler(async (req, res, next) => {
     try {
       token = req.headers.authorization.split(' ')[1];
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      
-      req.user = await User.findById(decoded.id).select('-password'); 
+      req.user = await User.findById(decoded.id).select('-password');
 
       if (!req.user) {
-          res.status(401);
-          throw new Error('Usuario del token ya no existe.');
+        res.status(401);
+        throw new Error('Usuario del token ya no existe.');
       }
-      
       next();
-
     } catch (error) {
       console.error('ERROR DE AUTENTICACIÓN (User):', error.message);
       res.status(401);
@@ -39,8 +35,7 @@ const protect = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * [NUEVO] Middleware para proteger rutas de ADMINISTRADORES.
- * Verifica un token firmado con el secreto de administrador (JWT_ADMIN_SECRET).
+ * Middleware para proteger rutas de ADMINISTRADORES.
  */
 const protectAdmin = asyncHandler(async (req, res, next) => {
   let token;
@@ -48,25 +43,20 @@ const protectAdmin = asyncHandler(async (req, res, next) => {
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
     try {
       token = req.headers.authorization.split(' ')[1];
-      
-      // [INSPECTIO - CORRECCIÓN] Se verifica el token con el secreto de administrador.
       const decoded = jwt.verify(token, process.env.JWT_ADMIN_SECRET);
 
       req.user = await User.findById(decoded.id).select('-password');
-
       if (!req.user) {
-          res.status(401);
-          throw new Error('Administrador del token ya no existe.');
+        res.status(401);
+        throw new Error('Administrador del token ya no existe.');
       }
 
-      // [INSPECTIO - CORRECCIÓN] Doble verificación: nos aseguramos de que el usuario del token sea un admin.
       if (req.user.role !== 'admin') {
-          res.status(403); // 403 Forbidden es más apropiado que 401 Unauthorized
-          throw new Error('Acceso denegado. El usuario no es un administrador.');
+        res.status(403);
+        throw new Error('Acceso denegado. El usuario no es un administrador.');
       }
-      
-      next();
 
+      next();
     } catch (error) {
       console.error('ERROR DE AUTENTICACIÓN (Admin):', error.message);
       res.status(401);
@@ -81,20 +71,46 @@ const protectAdmin = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * Middleware para verificar si un usuario ya autenticado tiene rol de 'admin'.
- * Se usa DESPUÉS de 'protect' o 'protectAdmin'.
- * La versión anterior era correcta, no requiere cambios, pero se mantiene por completitud.
+ * Verifica si el usuario ya autenticado tiene rol de 'admin'.
  */
 const isAdmin = (req, res, next) => {
-    if (req.user && req.user.role === 'admin') {
-        next();
-    } else {
-        res.status(403).json({ message: 'Acceso denegado. Se requieren permisos de administrador.' });
-    }
+  if (req.user && req.user.role === 'admin') {
+    next();
+  } else {
+    res.status(403).json({ message: 'Acceso denegado. Se requieren permisos de administrador.' });
+  }
+};
+
+/**
+ * Verifica si el usuario autenticado es el Super Admin.
+ */
+const isSuperAdmin = (req, res, next) => {
+  const superAdminId = process.env.SUPER_ADMIN_TELEGRAM_ID?.toString();
+  if (req.user && req.user.telegramId?.toString() === superAdminId) {
+    return next();
+  }
+  res.status(403).json({ message: 'Acceso denegado. Solo el Super Admin puede realizar esta acción.' });
+};
+
+/**
+ * Verifica si el usuario es admin pero NO superadmin.
+ */
+const isAdminButNotSuper = (req, res, next) => {
+  const superAdminId = process.env.SUPER_ADMIN_TELEGRAM_ID?.toString();
+  if (
+    req.user &&
+    req.user.role === 'admin' &&
+    req.user.telegramId?.toString() !== superAdminId
+  ) {
+    return next();
+  }
+  res.status(403).json({ message: 'Acceso denegado. Solo admins normales pueden realizar esta acción.' });
 };
 
 module.exports = {
   protect,
   isAdmin,
-  protectAdmin // Exportamos el nuevo middleware
+  protectAdmin,
+  isSuperAdmin,
+  isAdminButNotSuper,
 };
