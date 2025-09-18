@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/taskController.js (VERSIÓN NEXUS - A PRUEBA DE RACE CONDITIONS)
+// RUTA: backend/controllers/taskController.js (VERSIÓN NEXUS - PERSISTENCIA ATÓMICA DEFINITIVA)
 const asyncHandler = require('express-async-handler');
 const User = require('../models/userModel.js');
 
@@ -7,12 +7,11 @@ const User = require('../models/userModel.js');
  * @route POST /api/tasks/mark-as-visited
  * @access Private
  *
- * SOLUCIÓN ATÓMICA: La versión anterior era vulnerable a condiciones de carrera.
- * Esta nueva versión utiliza una única operación `findByIdAndUpdate` con una consulta condicional.
- * La consulta busca al usuario SOLO SI la tarea `joinedTelegram` NO ha sido reclamada (`$ne: true`).
- * - Si la encuentra, actualiza el saldo y marca la tarea como reclamada en un solo paso.
- * - Si NO la encuentra (porque ya fue reclamada), devuelve `null` y la operación falla de forma segura.
- * Esto elimina por completo la posibilidad de reclamos múltiples.
+ * SOLUCIÓN ATÓMICA DEFINITIVA: La versión anterior fallaba en usuarios nuevos.
+ * Esta nueva versión utiliza una consulta condicional robusta. La consulta
+ * busca al usuario SOLO SI 'claimedTasks.joinedTelegram' NO ES EXACTAMENTE 'true'.
+ * Esto cubre tanto el caso en que el campo no existe (es undefined) como el caso
+ * en que es false. Es la única forma de garantizar un único reclamo.
  */
 const markTaskAsVisited = asyncHandler(async (req, res) => {
     const { taskId } = req.body;
@@ -22,11 +21,11 @@ const markTaskAsVisited = asyncHandler(async (req, res) => {
 
     const reward = 500;
 
-    // --- LA CORRECCIÓN ATÓMICA ---
-    const updatedUser = await User.findByIdAndUpdate(
+    // --- LA CORRECCIÓN ATÓMICA DEFINITIVA ---
+    const updatedUser = await User.findOneAndUpdate( // Usamos findOneAndUpdate para mayor control
         {
             _id: req.user.id,
-            'claimedTasks.joinedTelegram': { $ne: true } // Condición: SOLO si no está ya reclamada
+            'claimedTasks.joinedTelegram': { $ne: true } // La condición clave y correcta
         },
         {
             $set: {
@@ -35,11 +34,10 @@ const markTaskAsVisited = asyncHandler(async (req, res) => {
             },
             $inc: { 'balance.ntx': reward }
         },
-        { new: true } // Devuelve el documento actualizado si la operación tuvo éxito
+        { new: true }
     );
 
     if (!updatedUser) {
-        // Si updatedUser es null, significa que la condición no se cumplió (la tarea ya estaba reclamada).
         res.status(400);
         throw new Error('Esta tarea ya ha sido completada.');
     }
@@ -51,6 +49,7 @@ const markTaskAsVisited = asyncHandler(async (req, res) => {
     });
 });
 
+
 /**
  * @desc Reclama la recompensa para tareas que requieren un clic manual (ATÓMICO).
  * @route POST /api/tasks/claim
@@ -60,7 +59,6 @@ const claimTaskReward = asyncHandler(async (req, res) => {
     const { taskId } = req.body;
     const userId = req.user.id;
 
-    // Primero, validamos la lógica de negocio que no se puede hacer en la consulta atómica.
     const user = await User.findById(userId).select('activeTools referrals');
     if (!user) { res.status(404); throw new Error('Usuario no encontrado'); }
 
@@ -80,9 +78,9 @@ const claimTaskReward = asyncHandler(async (req, res) => {
 
     if (!isCompleted) { res.status(400); throw new Error('La tarea aún no está completada.'); }
     
-    // --- LA CORRECCIÓN ATÓMICA ---
-    const updatedUser = await User.findByIdAndUpdate(
-        { _id: userId, [`claimedTasks.${taskId}`]: { $ne: true } }, // Condición: SOLO si no está ya reclamada
+    // --- LA CORRECCIÓN ATÓMICA DEFINITIVA ---
+    const updatedUser = await User.findOneAndUpdate(
+        { _id: userId, [`claimedTasks.${taskId}`]: { $ne: true } },
         { $inc: { 'balance.ntx': reward }, $set: { [`claimedTasks.${taskId}`]: true } },
         { new: true }
     ).populate('referrals');
@@ -108,7 +106,7 @@ const getTaskStatus = asyncHandler(async (req, res) => {
     ];
 
     const userTaskStatus = allTasks.map(task => {
-        const isClaimed = user.claimedTasks?.[task.taskId] || false;
+        const isClaimed = user.claimedTasks?.get(task.taskId) || false; // Se usa .get() para Mapas
         let progress = 0;
         let status = 'in_progress';
 
