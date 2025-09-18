@@ -1,5 +1,4 @@
-// backend/controllers/adminController.js (VERSIÓN "NEXUS SYNC" + SUPERADMIN RULES)
-
+// RUTA: backend/controllers/adminController.js (VERSIÓN NEXUS - DATA-SAFE - COMPLETO SIN OMISIONES)
 const User = require('../models/userModel');
 const Factory = require('../models/toolModel');
 const Setting = require('../models/settingsModel');
@@ -329,10 +328,30 @@ const getAllUsers = asyncHandler(async (req, res) => {
 });
 
 const getUserDetails = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.params.id).select('-password');
-  if (!user) { res.status(404); throw new Error('Usuario no encontrado'); }
-  const photoUrl = await getTemporaryPhotoUrl(user.photoFileId);
-  res.json({ ...user.toObject(), photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL });
+    const user = await User.findById(req.params.id).select('-password');
+    if (!user) {
+        res.status(404);
+        throw new Error('Usuario no encontrado');
+    }
+
+    const photoUrl = await getTemporaryPhotoUrl(user.photoFileId);
+    
+    const cryptoWallets = await CryptoWallet.find({ user: user._id });
+    const transactions = user.transactions || [];
+
+    res.json({
+        user: {
+            ...user.toObject(),
+            photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL,
+            balance: user.balance || { usdt: 0, ntx: 0 }
+        },
+        cryptoWallets: cryptoWallets || [],
+        transactions: {
+            items: transactions,
+            page: 1,
+            totalPages: 1
+        }
+    });
 });
 
 const updateUser = asyncHandler(async (req, res) => {
@@ -412,11 +431,61 @@ const resetAdminPassword = asyncHandler(async (req, res) => {
 
 // --- Transacciones Globales ---
 const getAllTransactions = asyncHandler(async (req, res) => {
-  const users = await User.find().select('username telegramId transactions');
-  const transactions = users.flatMap(user =>
-    user.transactions.map(tx => ({ ...tx.toObject(), user: { username: user.username, telegramId: user.telegramId } }))
-  );
-  res.json(transactions);
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 15;
+    const search = req.query.search || '';
+    const type = req.query.type || '';
+
+    let matchQuery = { 'transactions': { $exists: true, $ne: [] } };
+    
+    if (type) {
+        matchQuery['transactions.type'] = type;
+    }
+    
+    if (search) {
+        const searchRegex = { $regex: search, $options: 'i' };
+        matchQuery.$or = [
+            { 'username': searchRegex },
+            { 'transactions.description': searchRegex }
+        ];
+    }
+
+    const aggregationPipeline = [
+        { $match: matchQuery },
+        { $unwind: '$transactions' },
+        ...(type ? [{ $match: { 'transactions.type': type } }] : []),
+        ...(search ? [{ $match: { $or: [{ 'username': { $regex: search, $options: 'i' } }, { 'transactions.description': { $regex: search, $options: 'i' } }] } }] : []),
+        { $sort: { 'transactions.createdAt': -1 } },
+        {
+            $project: {
+                _id: '$transactions._id',
+                amount: '$transactions.amount',
+                currency: '$transactions.currency',
+                type: '$transactions.type',
+                description: '$transactions.description',
+                status: '$transactions.status',
+                createdAt: '$transactions.createdAt',
+                user: { _id: '$_id', username: '$username' }
+            }
+        }
+    ];
+
+    const countPipeline = [...aggregationPipeline, { $count: 'total' }];
+    const paginatedPipeline = [...aggregationPipeline, { $skip: (page - 1) * limit }, { $limit: limit }];
+
+    const [totalResult, transactions] = await Promise.all([
+        User.aggregate(countPipeline),
+        User.aggregate(paginatedPipeline)
+    ]);
+
+    const total = totalResult.length > 0 ? totalResult[0].total : 0;
+    
+    res.json({
+        transactions: transactions || [],
+        page,
+        pages: Math.ceil(total / limit),
+        total
+    });
 });
 
 // --- Monitor de Blockchain ---

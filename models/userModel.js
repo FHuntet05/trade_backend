@@ -1,4 +1,4 @@
-// RUTA: backend/models/userModel.js (FASE "PERFECTIO" - CAMPO DE REFERIDOS AÑADIDO)
+// RUTA: backend/models/userModel.js (VERSIÓN NEXUS - PERSISTENCIA DE TAREAS CORREGIDA)
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
@@ -7,8 +7,8 @@ const transactionSchema = new mongoose.Schema({
         type: String,
         required: true,
         enum: [
-            'deposit', 'withdrawal', 'purchase', 'mining_claim', 
-            'referral_commission', 'task_reward', 'admin_credit', 'admin_debit'
+            'deposit', 'withdrawal', 'purchase', 'mining_claim', 'referral_commission', 
+            'task_reward', 'admin_credit', 'admin_debit', 'swap_ntx_to_usdt' // Añadido swap
         ]
     },
     amount: { type: Number, required: true },
@@ -44,40 +44,49 @@ const userSchema = new mongoose.Schema({
     totalRecharge: { type: Number, default: 0 },
     totalWithdrawal: { type: Number, default: 0 },
     currentVipLevel: { type: Number, default: 0 },
+    
+    // ======================= INICIO DE LA CORRECCIÓN CRÍTICA =======================
+    // --- Estado de Tareas y Progreso ---
+    // Esta sección era la que faltaba por completo.
+    
+    // Almacena un mapa de Task IDs que ya han sido reclamados.
+    // Ejemplo: { joinedTelegram: true, inviteFriends: true }
+    claimedTasks: {
+        type: Map,
+        of: Boolean,
+        default: {}
+    },
+    
+    // Flag para la tarea específica de visitar el canal de Telegram.
+    telegramVisited: {
+        type: Boolean,
+        default: false
+    },
+    // ======================== FIN DE LA CORRECCIÓN CRÍTICA =========================
 
     // --- Estructura de Referidos ---
-    referredBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        default: null
-    },
+    referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     referralCode: { type: String, unique: true, sparse: true },
-    
-    // [PERFECTIO - CORRECCIÓN CRÍTICA]
-    // Se añade el campo 'referrals' que faltaba. Este campo almacenará una lista
-    // de los usuarios que esta persona ha referido directamente.
-    // Esto es ESENCIAL para que la lógica de la página de "Equipo" funcione.
     referrals: [{
-        user: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User'
-        },
-        level: {
-            type: Number,
-            default: 1 // Por ahora, solo almacenamos referidos directos de nivel 1.
-        }
+        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        level: { type: Number, default: 1 }
     }],
     
-    transactions: [transactionSchema]
+    // --- Historial de Transacciones y Herramientas ---
+    transactions: [transactionSchema],
+    activeTools: [{
+        tool: { type: mongoose.Schema.Types.ObjectId, ref: 'Tool' },
+        purchaseDate: { type: Date, default: Date.now },
+        expiryDate: { type: Date }
+    }]
 
 }, {
     timestamps: true
 });
 
+// --- Métodos y Hooks (sin cambios) ---
 userSchema.pre('save', async function(next) {
-    if (!this.isModified('password') || !this.password) {
-        return next();
-    }
+    if (!this.isModified('password') || !this.password) return next();
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
     next();
