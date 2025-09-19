@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN NEXUS - DATA-SAFE - COMPLETO SIN OMISIONES)
+// RUTA: backend/controllers/adminController.js (VERSIÓN NEXUS CONTROL - AUDIT & REFACTOR)
 const User = require('../models/userModel');
 const Factory = require('../models/toolModel');
 const Setting = require('../models/settingsModel');
@@ -356,23 +356,55 @@ const getUserDetails = asyncHandler(async (req, res) => {
 
 const updateUser = asyncHandler(async (req, res) => {
   const { username, password, balanceUsdt, status, role } = req.body;
+  
   const user = await User.findById(req.params.id);
   if (!user) { res.status(404); throw new Error('Usuario no encontrado.'); }
+
+  const originalStatus = user.status;
+  const originalRole = user.role;
+
   const superAdminId = process.env.SUPER_ADMIN_TELEGRAM_ID?.toString();
   const isRequesterSuper = req.user.telegramId?.toString() === superAdminId;
+
   if (!isRequesterSuper) {
     if (user.role === 'admin' || user.telegramId?.toString() === superAdminId) {
       res.status(403); throw new Error('No puedes modificar a este usuario.');
     }
-    if (role && role === 'admin') {
+    if (role && role !== user.role) {
       res.status(403); throw new Error('No tienes permisos para promover a administrador.');
     }
   }
+
   user.username = username ?? user.username;
   user.balance.usdt = balanceUsdt ?? user.balance.usdt;
-  user.status = status ?? user.status;
-  if (isRequesterSuper && role) user.role = role;
-  if (password) user.password = password;
+  
+  // [NEXUS CONTROL] - Lógica de actualización de estado y rol con auditoría
+  if (status && status !== originalStatus) {
+    user.status = status;
+    user.transactions.push({
+      type: 'admin_action',
+      currency: 'SYSTEM',
+      amount: 0,
+      description: `Estado cambiado de '${originalStatus}' a '${status}' por el admin '${req.user.username}'.`
+    });
+  }
+
+  if (isRequesterSuper && role && role !== originalRole) {
+    user.role = role;
+    user.transactions.push({
+      type: 'admin_action',
+      currency: 'SYSTEM',
+      amount: 0,
+      description: `Rol cambiado de '${originalRole}' a '${role}' por el Super Admin '${req.user.username}'.`
+    });
+  }
+  
+  // La contraseña de un usuario normal no se maneja aquí.
+  // La de un admin se maneja en el endpoint de reseteo.
+  if (password && user.role === 'admin') {
+      user.password = password;
+  }
+  
   const updatedUser = await user.save();
   res.json(updatedUser);
 });
@@ -388,45 +420,59 @@ const adjustUserBalance = asyncHandler(async (req, res) => {
   await user.save(); res.json({ message: 'Saldo ajustado correctamente.', balance: user.balance });
 });
 
-// --- Roles de Admin ---
-const promoteUserToAdmin = asyncHandler(async (req, res) => {
-  const { userId, password } = req.body;
-  if (!userId || !password) { res.status(400); throw new Error('Se requiere userId y password.'); }
-  const superAdminId = process.env.SUPER_ADMIN_TELEGRAM_ID?.toString();
-  if (req.user.telegramId?.toString() !== superAdminId) {
-    res.status(403); throw new Error('Solo el Super Admin puede promover usuarios a administradores.');
-  }
-  const user = await User.findById(userId);
-  if (!user) { res.status(404); throw new Error('Usuario no encontrado.'); }
-  if (user.role === 'admin') return res.status(400).json({ message: 'El usuario ya es un administrador.' });
-  user.role = 'admin'; user.password = password; user.mustResetPassword = true; await user.save();
-  res.json({ message: `El usuario ${user.username} ha sido promovido a administrador.` });
-});
 
-const demoteAdminToUser = asyncHandler(async (req, res) => {
-  const { adminId } = req.body;
-  const superAdminId = process.env.SUPER_ADMIN_TELEGRAM_ID?.toString();
-  if (req.user.telegramId?.toString() !== superAdminId) {
-    res.status(403); throw new Error('Solo el Super Admin puede degradar administradores.');
-  }
-  const admin = await User.findById(adminId);
-  if (!admin || admin.role !== 'admin') { res.status(404); throw new Error('Administrador no encontrado.'); }
-  admin.role = 'user'; await admin.save();
-  res.json({ message: `El administrador ${admin.username} ha sido degradado a usuario.` });
-});
-
+// [NEXUS CONTROL] - Endpoint dedicado y seguro para resetear contraseñas de admins
 const resetAdminPassword = asyncHandler(async (req, res) => {
-  const { adminId } = req.body;
-  if (!adminId) { res.status(400); throw new Error('Se requiere el ID del administrador.'); }
-  const superAdminId = process.env.SUPER_ADMIN_TELEGRAM_ID?.toString();
-  if (req.user.telegramId?.toString() !== superAdminId) {
-    res.status(403); throw new Error('Solo el Super Admin puede resetear contraseñas de administradores.');
+  const { id: adminId } = req.params;
+
+  const adminUser = await User.findById(adminId);
+
+  // Validación 1: El usuario debe existir
+  if (!adminUser) {
+    res.status(404);
+    throw new Error('Usuario administrador no encontrado.');
   }
-  const admin = await User.findById(adminId);
-  if (!admin || admin.role !== 'admin') { res.status(404); throw new Error('Administrador no encontrado.'); }
+
+  // Validación 2: El usuario objetivo DEBE ser un administrador
+  if (adminUser.role !== 'admin') {
+    res.status(400);
+    throw new Error('Solo se puede resetear la contraseña de una cuenta de administrador.');
+  }
+
+  // Validación 3: Un administrador no puede resetear su propia contraseña desde aquí
+  if (adminUser._id.toString() === req.user._id.toString()) {
+      res.status(403);
+      throw new Error('No puedes resetear tu propia contraseña desde esta herramienta.');
+  }
+  
+  const superAdminId = process.env.SUPER_ADMIN_TELEGRAM_ID?.toString();
+  const isTargetSuperAdmin = adminUser.telegramId?.toString() === superAdminId;
+  const isRequesterSuper = req.user.telegramId?.toString() === superAdminId;
+  
+  // Validación 4: Solo un Super Admin puede resetear la contraseña de otro Super Admin
+  if(isTargetSuperAdmin && !isRequesterSuper){
+    res.status(403);
+    throw new Error('Solo el Super Admin puede resetear su propia contraseña.');
+  }
+
   const temporaryPassword = crypto.randomBytes(8).toString('hex');
-  admin.password = temporaryPassword; admin.mustResetPassword = true; await admin.save();
-  res.json({ message: `Contraseña reseteada para ${admin.username}.`, temporaryPassword });
+  adminUser.password = temporaryPassword;
+  adminUser.mustResetPassword = true;
+  
+  // Auditoría
+  adminUser.transactions.push({
+    type: 'admin_action',
+    currency: 'SYSTEM',
+    amount: 0,
+    description: `Contraseña de admin reseteada por '${req.user.username}'.`
+  });
+
+  await adminUser.save();
+  
+  res.json({ 
+    message: `Contraseña reseteada para ${adminUser.username}.`, 
+    temporaryPassword 
+  });
 });
 
 // --- Transacciones Globales ---
@@ -551,9 +597,9 @@ module.exports = {
   getUserDetails,
   updateUser,
   adjustUserBalance,
-  promoteUserToAdmin,
-  demoteAdminToUser,
-  resetAdminPassword,
+  // promoteUserToAdmin, (obsoleto, manejado por updateUser)
+  // demoteAdminToUser, (obsoleto, manejado por updateUser)
+  resetAdminPassword, // Reemplaza la lógica anterior
   getAllTransactions,
   getPendingBlockchainTxs,
   getAllFactories,
