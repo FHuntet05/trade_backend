@@ -1,4 +1,4 @@
-// RUTA: backend/models/userModel.js (VERSIÓN NEXUS - PERSISTENCIA DE TAREAS CORREGIDA)
+// RUTA: backend/models/userModel.js (VERSIÓN NEXUS - VALIDATION FIX APPLIED)
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
@@ -6,13 +6,22 @@ const transactionSchema = new mongoose.Schema({
     type: {
         type: String,
         required: true,
+        // ======================= INICIO DE LA CORRECCIÓN CRÍTICA =======================
         enum: [
             'deposit', 'withdrawal', 'purchase', 'mining_claim', 'referral_commission', 
-            'task_reward', 'admin_credit', 'admin_debit', 'swap_ntx_to_usdt' // Añadido swap
+            'task_reward', 'admin_credit', 'admin_debit', 'swap_ntx_to_usdt',
+            'admin_action' // <-- AÑADIDO: Nuevo tipo para registros de auditoría
         ]
+        // ======================== FIN DE LA CORRECCIÓN CRÍTICA =========================
     },
     amount: { type: Number, required: true },
-    currency: { type: String, required: true, enum: ['USDT', 'NTX'] },
+    // ======================= INICIO DE LA CORRECCIÓN CRÍTICA =======================
+    currency: { 
+        type: String, 
+        required: true, 
+        enum: ['USDT', 'NTX', 'SYSTEM'] // <-- AÑADIDO: 'SYSTEM' para acciones internas
+    },
+    // ======================== FIN DE LA CORRECCIÓN CRÍTICA =========================
     description: { type: String, required: true },
     status: { type: String, required: true, enum: ['pending', 'completed', 'rejected', 'failed'], default: 'completed' },
     metadata: { type: Map, of: String }
@@ -45,24 +54,17 @@ const userSchema = new mongoose.Schema({
     totalWithdrawal: { type: Number, default: 0 },
     currentVipLevel: { type: Number, default: 0 },
     
-    // ======================= INICIO DE LA CORRECCIÓN CRÍTICA =======================
     // --- Estado de Tareas y Progreso ---
-    // Esta sección era la que faltaba por completo.
-    
-    // Almacena un mapa de Task IDs que ya han sido reclamados.
-    // Ejemplo: { joinedTelegram: true, inviteFriends: true }
     claimedTasks: {
         type: Map,
         of: Boolean,
         default: {}
     },
     
-    // Flag para la tarea específica de visitar el canal de Telegram.
     telegramVisited: {
         type: Boolean,
         default: false
     },
-    // ======================== FIN DE LA CORRECCIÓN CRÍTICA =========================
 
     // --- Estructura de Referidos ---
     referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
