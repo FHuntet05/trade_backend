@@ -1,4 +1,4 @@
-// backend/routes/adminRoutes.js (VERSIÓN "NEXUS SYNC" + SUPERADMIN CHECKS)
+// backend/routes/adminRoutes.js (VERSIÓN "NEXUS RECOVERY" - RUTAS SINCRONIZADAS)
 const express = require('express');
 const router = express.Router();
 
@@ -26,11 +26,11 @@ const {
   adjustUserBalance,
   sendBroadcastNotification,
   sweepGas,
-  promoteUserToAdmin,
-  demoteAdminToUser,
-  resetAdminPassword,
+  resetAdminPassword,      // <-- La función correcta ahora
   getAllTransactions,
   getPendingBlockchainTxs,
+  // promoteUserToAdmin,    // <-- Obsoleta, eliminada
+  // demoteAdminToUser,     // <-- Obsoleta, eliminada
 } = require('../controllers/adminController');
 
 // --- Middleware global para admins ---
@@ -44,10 +44,18 @@ router.route('/users').get(getAllUsers);
 router.route('/users/:id').get(getUserDetails).put(updateUser);
 router.route('/users/adjust-balance/:id').post(adjustUserBalance);
 
-// --- Gestión de Roles de Admin (Solo Super Admin)
-router.route('/admins/promote').post(isSuperAdmin, promoteUserToAdmin);
-router.route('/admins/demote').post(isSuperAdmin, demoteAdminToUser);
-router.route('/admins/reset-password').post(isSuperAdmin, resetAdminPassword);
+// ======================= INICIO DE LA CORRECCIÓN CRÍTICA =======================
+// La lógica de promover/degradar ahora está dentro de updateUser.
+// La ruta para resetear la contraseña es ahora más específica y segura.
+
+// Ya no se necesitan rutas separadas para promover/degradar.
+// router.route('/admins/promote').post(isSuperAdmin, promoteUserToAdmin); // <-- ELIMINADA
+// router.route('/admins/demote').post(isSuperAdmin, demoteAdminToUser);   // <-- ELIMINADA
+
+// Nueva ruta para resetear la contraseña de un administrador específico
+router.route('/users/:id/reset-password').post(resetAdminPassword);
+// ======================== FIN DE LA CORRECCIÓN CRÍTICA =========================
+
 
 // --- Transacciones globales
 router.route('/transactions').get(getAllTransactions);
