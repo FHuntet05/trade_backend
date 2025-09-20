@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN "NEXUS - REFERRAL LOGIC FIXED")
+// backend/index.js (VERSIÓN "NEXUS - AUTO PROVISIONING & REFERRAL FIX")
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -10,6 +10,7 @@ const dotenv = require('dotenv');
 const colors = require('colors');
 const connectDB = require('./config/db');
 const User = require('./models/userModel');
+const Tool = require('./models/toolModel'); // [NEXUS PROVISIONING] Importamos el modelo de herramientas.
 const { startMonitoring } = require('./services/transactionMonitor.js');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -36,6 +37,39 @@ checkEnvVariables();
 
 // --- CONEXIÓN A BASE DE DATOS ---
 connectDB();
+
+// [NEXUS PROVISIONING] - INICIO DE LA LÓGICA DE PROVISIÓN AUTOMÁTICA
+const provisionFreeTool = async () => {
+    try {
+        const freeToolExists = await Tool.findOne({ isFree: true });
+        if (freeToolExists) {
+            console.log('[SISTEMA] ✅ Herramienta gratuita ya existe en la base de datos.'.green);
+            return;
+        }
+
+        console.log('[SISTEMA] ⚠️ No se encontró herramienta gratuita. Creando una por defecto...'.yellow);
+        const newFreeTool = new Tool({
+            name: "Miner Gratuito de Inicio",
+            vipLevel: 0,
+            price: 0,
+            miningBoost: 500, // 500 NTX por día
+            durationDays: 5,   // Dura 5 días
+            imageUrl: "https://i.postimg.cc/pLgD5gYq/free-miner.png", // URL de imagen genérica
+            isFree: true,
+        });
+        await newFreeTool.save();
+        console.log('[SISTEMA] ✅ Herramienta gratuita creada y guardada en la base de datos.'.green.bold);
+
+    } catch (error) {
+        console.error('❌ ERROR FATAL al provisionar la herramienta gratuita:'.red.bold, error);
+        // En un entorno de producción, podría decidir si detener el servidor es necesario.
+        // process.exit(1); 
+    }
+};
+// Ejecutamos la provisión después de conectar a la BD.
+provisionFreeTool();
+// [NEXUS PROVISIONING] - FIN DE LA LÓGICA DE PROVISIÓN AUTOMÁTICA
+
 
 // --- IMPORTACIÓN DE RUTAS DE LA API ---
 const authRoutes = require('./routes/authRoutes');
@@ -150,7 +184,7 @@ bot.command('start', async (ctx) => {
             referredUser = new User({ telegramId: referredId, username, fullName: fullName || username, language: ctx.from.language_code || 'es' });
         }
 
-        // [NEXUS ONBOARDING FIX] - INICIO DE LA LÓGICA DE REFERIDOS CORREGIDA
+        // [NEXUS REFERRAL FIX] - INICIO DE LA LÓGICA DE REFERIDOS CORREGIDA
         const canBeReferred = referrerId && referrerId !== referredId && !referredUser.referredBy;
 
         if (canBeReferred) {
@@ -158,15 +192,13 @@ bot.command('start', async (ctx) => {
             const referrerUser = await User.findOne({ telegramId: referrerId });
             
             if (referrerUser) {
-                // Paso 1: Asignar el 'referredBy' al nuevo usuario.
                 referredUser.referredBy = referrerUser._id;
                 console.log(`[Bot /start] Referente ${referrerUser.username} (${referrerId}) encontrado. Asignando...`.green);
 
-                // Paso 2: Añadir al nuevo usuario a la lista de 'referrals' del referente, evitando duplicados.
                 const isAlreadyReferred = referrerUser.referrals.some(ref => ref.user.equals(referredUser._id));
                 if (!isAlreadyReferred) {
                     referrerUser.referrals.push({ level: 1, user: referredUser._id });
-                    await referrerUser.save(); // Guardamos los cambios en el referente.
+                    await referrerUser.save();
                     console.log(`[Bot /start] Nuevo usuario ${referredUser.username} añadido a la lista de referidos de ${referrerUser.username}.`.green.bold);
                 } else {
                      console.log(`[Bot /start] El usuario ${referredUser.username} ya estaba en la lista de referidos de ${referrerUser.username}. No se realizan cambios.`.yellow);
@@ -175,9 +207,9 @@ bot.command('start', async (ctx) => {
                 console.log(`[Bot /start] ADVERTENCIA: El ID de referente ${referrerId} no fue encontrado en la base de datos.`.red);
             }
         }
-        // [NEXUS ONBOARDING FIX] - FIN DE LA LÓGICA DE REFERIDOS CORREGIDA
+        // [NEXUS REFERRAL FIX] - FIN DE LA LÓGICA DE REFERIDOS CORREGIDA
 
-        await referredUser.save(); // Guardamos al nuevo/actualizado usuario.
+        await referredUser.save();
         console.log(`[Bot /start] Perfil del usuario ${referredId} guardado/actualizado en la BD.`);
         
         const imageUrl = 'https://i.postimg.cc/8PqYj4zR/nicebot.jpg';

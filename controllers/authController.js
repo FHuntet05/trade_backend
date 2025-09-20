@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - STABLE & CORRECTED")
+// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - AUTO PROVISIONING & REFERRAL FIX")
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
@@ -57,7 +57,7 @@ const syncUser = async (req, res) => {
         if (isNewUser) {
             const freeTool = await Tool.findOne({ isFree: true }).lean();
             if (freeTool) {
-                console.log(`[Auth Sync] Fábrica gratuita encontrada: "${freeTool.name}". Asignando al nuevo usuario.`);
+                console.log(`[Auth Sync] Herramienta gratuita encontrada: "${freeTool.name}". Asignando al nuevo usuario.`);
                 const now = new Date();
                 const expiryDate = new Date(now.getTime() + freeTool.durationDays * 24 * 60 * 60 * 1000);
                 
@@ -66,10 +66,15 @@ const syncUser = async (req, res) => {
                     purchaseDate: now,
                     expiryDate: expiryDate,
                 });
+                
+                // [NEXUS PROVISIONING] - Asignación explícita del estado inicial
                 user.effectiveMiningRate = freeTool.miningBoost;
-                console.log(`[Auth Sync] Estado inicial para ${user.username}: Tasa=${user.effectiveMiningRate}, Estado=${user.miningStatus}`);
+                user.miningStatus = 'IDLE'; // Se establece explícitamente para claridad y seguridad.
+                user.lastMiningClaim = now; // Se resetea el reloj al momento de la creación.
+
+                console.log(`[Auth Sync] Estado inicial para ${user.username} configurado: Tasa=${user.effectiveMiningRate}, Estado=${user.miningStatus}`.green);
             } else {
-                console.warn('[Auth Sync] ADVERTENCIA: No se encontró una herramienta gratuita configurada en el sistema. El nuevo usuario no tendrá poder de minado inicial.'.yellow);
+                console.error('[Auth Sync] ERROR CRÍTICO: No se encontró la herramienta gratuita auto-provisionada. El nuevo usuario no tendrá poder de minado.'.red.bold);
             }
         }
         
