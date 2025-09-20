@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS - DATA INTEGRITY FIX")
+// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS - TYPECAST & UI SYNC FIX")
 const User = require('../models/userModel');
 const Factory = require('../models/toolModel');
 const Setting =require('../models/settingsModel');
@@ -71,21 +71,21 @@ const getPendingWithdrawals = asyncHandler(async (req, res) => {
     { $match: { 'transactions.type': 'withdrawal', 'transactions.status': 'pending' } },
     { $sort: { 'transactions.createdAt': -1 } },
     {
-      // [NEXUS DATA INTEGRITY FIX] - INICIO DE LA CORRECCIÓN CRÍTICA
-      // Se utiliza $ifNull para garantizar que los campos numéricos siempre tengan un valor.
-      // Si el campo en la BD es nulo o no existe, se devolverá 0 en su lugar.
+      // [NEXUS TYPECAST FIX] - INICIO DE LA CORRECCIÓN CRÍTICA
+      // Se utiliza $toDouble para forzar la conversión del string guardado en metadata a un número.
+      // Luego, $ifNull actúa como fallback si el campo no existe, asegurando que el resultado siempre sea un número.
       $project: {
         _id: '$transactions._id',
         grossAmount: { $abs: '$transactions.amount' },
-        feeAmount: { $ifNull: ['$transactions.metadata.feeAmount', 0] },
-        netAmount: { $ifNull: ['$transactions.metadata.netAmount', 0] },
+        feeAmount: { $ifNull: [ { $toDouble: '$transactions.metadata.feeAmount' }, 0 ] },
+        netAmount: { $ifNull: [ { $toDouble: '$transactions.metadata.netAmount' }, 0 ] },
         walletAddress: '$transactions.metadata.walletAddress',
         currency: '$transactions.currency',
         status: '$transactions.status',
         createdAt: '$transactions.createdAt',
         user: { _id: '$_id', username: '$username', telegramId: '$telegramId', photoFileId: '$photoFileId' }
       }
-      // [NEXUS DATA INTEGRITY FIX] - FIN DE LA CORRECCIÓN CRÍTICA
+      // [NEXUS TYPECAST FIX] - FIN DE LA CORRECCIÓN CRÍTICA
     }
   ];
   const countPipeline = [...aggregationPipeline, { $count: 'total' }];
