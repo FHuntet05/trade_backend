@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/authController.js (VERSIÓN COMPLETA "NEXUS - SETTINGS AWARE")
+// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS ENFORCEMENT - PRIVACY FILTER")
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
@@ -26,14 +26,10 @@ const syncUser = async (req, res) => {
     }
     
     try {
-        // [NEXUS SETTINGS AWARE] - Implementación del Modo Mantenimiento
-        // 1. Obtenemos la configuración del sistema ANTES que nada.
         const settings = await Setting.findOne({ singleton: 'global_settings' }).lean();
 
-        // 2. Si el modo mantenimiento está activado, rechazamos la petición.
         if (settings && settings.maintenanceMode) {
             console.log(`[Auth Sync] ACCESO BLOQUEADO: El modo mantenimiento está activo. Usuario: ${telegramUser.id}`);
-            // Usamos el código de estado 503 Service Unavailable, que es el apropiado.
             return res.status(503).json({ 
                 message: settings.maintenanceMessage || 'El sistema está en mantenimiento. Por favor, inténtelo más tarde.' 
             });
@@ -70,9 +66,7 @@ const syncUser = async (req, res) => {
                     purchaseDate: now,
                     expiryDate: expiryDate,
                 });
-                
                 user.effectiveMiningRate = (user.effectiveMiningRate || 0) + freeTool.miningBoost;
-                
                 user.miningStatus = 'IDLE'; 
                 user.lastMiningClaim = now;
             } else {
@@ -88,10 +82,18 @@ const syncUser = async (req, res) => {
         const userObject = user.toObject();
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
         
+        // [NEXUS ENFORCEMENT] - INICIO DE LA CORRECCIÓN DE PRIVACIDAD
+        // Filtramos las transacciones para que el usuario nunca vea las acciones de los administradores.
+        const filteredTransactions = (userObject.transactions || []).filter(
+            tx => tx.type !== 'admin_action'
+        );
+        userObject.transactions = filteredTransactions;
+        // [NEXUS ENFORCEMENT] - FIN DE LA CORRECCIÓN DE PRIVACIDAD
+
         const token = generateUserToken(user._id);
 
         console.log(`[Auth Sync] Sincronización completada para ${user.username}.`);
-        // 3. Enviamos los ajustes al frontend junto con los datos del usuario.
+        // Enviamos el objeto de usuario ya filtrado y con el campo 'status' incluido.
         res.status(200).json({ token, user: userObject, settings: settings || {} });
 
     } catch (error) {
@@ -104,8 +106,19 @@ const getUserProfile = async (req, res) => {
     try {
         const user = await User.findById(req.user.id).populate('referredBy', 'username fullName');
         if (!user) { return res.status(404).json({ message: 'Usuario no encontrado' }); }
+        
         const settings = await Setting.findOne({ singleton: 'global_settings' });
-        res.json({ user: user.toObject(), settings: settings || {} });
+        
+        const userObject = user.toObject();
+
+        // [NEXUS ENFORCEMENT] - APLICAMOS EL MISMO FILTRO AQUÍ POR CONSISTENCIA
+        const filteredTransactions = (userObject.transactions || []).filter(
+            tx => tx.type !== 'admin_action'
+        );
+        userObject.transactions = filteredTransactions;
+
+        res.json({ user: userObject, settings: settings || {} });
+
     } catch (error) { res.status(500).json({ message: 'Error del servidor' }); }
 };
 
