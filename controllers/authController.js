@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - NEW USER LOGIC FIX")
+// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - STATE SYNC FIX")
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
@@ -19,17 +19,15 @@ const generateAdminToken = (id) => {
 const syncUser = async (req, res) => {
     const { telegramUser } = req.body;
     
-    console.log(`[Auth Sync] Petición de sincronización para el usuario: ${telegramUser?.id}`);
-    
     if (!telegramUser || !telegramUser.id) {
         return res.status(400).json({ message: 'Datos de usuario de Telegram requeridos.' });
     }
     
     try {
+        // [NEXUS SYNC FIX] - Paso 1: Obtenemos los settings. Esto ya se hacía para el modo mantenimiento.
         const settings = await Setting.findOne({ singleton: 'global_settings' }).lean();
 
         if (settings && settings.maintenanceMode) {
-            console.log(`[Auth Sync] ACCESO BLOQUEADO: El modo mantenimiento está activo. Usuario: ${telegramUser.id}`);
             return res.status(503).json({ 
                 message: settings.maintenanceMessage || 'El sistema está en mantenimiento. Por favor, inténtelo más tarde.' 
             });
@@ -38,25 +36,18 @@ const syncUser = async (req, res) => {
         const telegramId = telegramUser.id.toString();
         let user = await User.findOne({ telegramId: telegramId });
         
-        // [NEXUS FINAL FIX] - INICIO DE LA LÓGICA DE REGISTRO CORREGIDA
-        // No usamos 'isNewUser'. En su lugar, verificamos si el usuario necesita ser provisionado.
         if (!user) {
-            console.log(`[Auth Sync] Usuario ${telegramId} no encontrado por sync. Creando nuevo perfil.`);
             user = new User({
                 telegramId: telegramId,
                 username: telegramUser.username || `user_${telegramId}`,
                 fullName: `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim() || `user_${telegramId}`,
                 language: telegramUser.language_code || 'es'
             });
-            // Al ser un objeto Mongoose nuevo, pasará la siguiente comprobación.
         }
 
-        // La condición clave: ¿El usuario ya tiene herramientas? Si no, es funcionalmente "nuevo".
         if (user.activeTools.length === 0) {
-            console.log(`[Auth Sync] El usuario ${user.username} no tiene herramientas activas. Provisionando herramienta gratuita...`);
             const freeTool = await Tool.findOne({ isFree: true }).lean();
             if (freeTool) {
-                console.log(`[Auth Sync] Herramienta gratuita encontrada: "${freeTool.name}". Asignando...`);
                 const now = new Date();
                 const expiryDate = new Date(now.getTime() + freeTool.durationDays * 24 * 60 * 60 * 1000);
                 
@@ -69,23 +60,17 @@ const syncUser = async (req, res) => {
                 user.effectiveMiningRate = freeTool.miningBoost;
                 user.miningStatus = 'IDLE';
                 user.lastMiningClaim = now;
-
-                console.log(`[Auth Sync] Estado inicial para ${user.username} configurado: Tasa=${user.effectiveMiningRate}, Estado=${user.miningStatus}`.green);
             } else {
                 console.error('[Auth Sync] ERROR CRÍTICO: No se encontró la herramienta gratuita. El nuevo usuario no tendrá poder de minado.'.red.bold);
             }
         }
-        // [NEXUS FINAL FIX] - FIN DE LA LÓGICA DE REGISTRO CORREGIDA
         
-        // Actualizamos datos básicos en cada sincronización por si cambian en Telegram.
         user.username = telegramUser.username || user.username;
         user.fullName = `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim() || user.fullName;
         user.language = telegramUser.language_code || user.language;
         
         await user.save();
         await user.populate('referredBy', 'username fullName');
-        
-        console.log(`[Auth Sync] Usuario ${user.username} sincronizado/creado exitosamente.`);
         
         const userObject = user.toObject();
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
@@ -97,8 +82,13 @@ const syncUser = async (req, res) => {
 
         const token = generateUserToken(user._id);
 
-        console.log(`[Auth Sync] Sincronización completada para ${user.username}.`);
-        res.status(200).json({ token, user: userObject, settings: settings || {} });
+        // [NEXUS SYNC FIX] - Paso 2: La respuesta ahora incluye el objeto 'settings'.
+        // Esto asegura que el frontend del usuario siempre tenga la configuración más reciente.
+        res.status(200).json({ 
+            token, 
+            user: userObject, 
+            settings: settings || {} // Enviamos un objeto vacío como fallback por seguridad.
+        });
 
     } catch (error) {
         console.error('[Auth Sync] ERROR FATAL:'.red.bold, error);
@@ -111,6 +101,7 @@ const getUserProfile = async (req, res) => {
         const user = await User.findById(req.user.id).populate('referredBy', 'username fullName');
         if (!user) { return res.status(404).json({ message: 'Usuario no encontrado' }); }
         
+        // La configuración también se envía aquí para mantener la consistencia.
         const settings = await Setting.findOne({ singleton: 'global_settings' });
         
         const userObject = user.toObject();

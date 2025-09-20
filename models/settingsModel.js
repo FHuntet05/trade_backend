@@ -1,8 +1,14 @@
-// RUTA: backend/models/settingsModel.js (VERSIÓN "NEXUS - DEPOSIT COMMISSIONS")
+// RUTA: backend/models/settingsModel.js (VERSIÓN "NEXUS - STATE SYNC FIX")
 const mongoose = require('mongoose');
 
 const settingsSchema = new mongoose.Schema({
   singleton: { type: String, default: 'global_settings', unique: true },
+  
+  // [NEXUS SYNC FIX] - INICIO DE LA CORRECIÓN
+  // Campo booleano para el control global de los retiros.
+  withdrawalsEnabled: { type: Boolean, default: false },
+  // [NEXUS SYNC FIX] - FIN DE LA CORRECIÓN
+  
   maintenanceMode: { type: Boolean, default: false },
   maintenanceMessage: { type: String, trim: true, default: 'La aplicación está en mantenimiento. Vuelve más tarde.' },
   minimumWithdrawal: { type: Number, default: 1.0 },
@@ -11,19 +17,19 @@ const settingsSchema = new mongoose.Schema({
   minimumSwap: { type: Number, default: 10000 },
   adminTelegramId: { type: String, trim: true, default: '' },
   bnbAlertThreshold: { type: Number, default: 0.05 },
-  trxAlertThreshold: { type: Number, default: 100 },
   
-  // [NEXUS MONETIZATION] - INICIO DE LA CORRECCIÓN
-  // Campos para comisiones por compra de herramientas (ya existentes, solo se renombran para claridad).
-  commissionLevel1: { type: Number, default: 0 }, // Para compras
-  commissionLevel2: { type: Number, default: 0 }, // Para compras
-  commissionLevel3: { type: Number, default: 0 }, // Para compras
+  // Comisiones por compra de herramientas
+  commissionLevel1: { type: Number, default: 0 },
+  commissionLevel2: { type: Number, default: 0 },
+  commissionLevel3: { type: Number, default: 0 },
 
-  // Nuevos campos para comisiones por el PRIMER DEPÓSITO de un referido.
-  depositCommissionLevel1: { type: Number, default: 0 }, // % de comisión por depósito Nivel 1
-  depositCommissionLevel2: { type: Number, default: 0 }, // % de comisión por depósito Nivel 2
-  depositCommissionLevel3: { type: Number, default: 0 }, // % de comisión por depósito Nivel 3
-  // [NEXUS MONETIZATION] - FIN DE LA CORRECCIÓN
+  // Comisiones por el PRIMER DEPÓSITO de un referido.
+  depositCommissionLevel1: { type: Number, default: 0 },
+  depositCommissionLevel2: { type: Number, default: 0 },
+  depositCommissionLevel3: { type: Number, default: 0 },
+  
+  // [NEXUS SYNC FIX] - Campo para la comisión fija (restaurado)
+  fixedCommissionAmount: { type: Number, default: 0 },
 
 }, { timestamps: true });
 
