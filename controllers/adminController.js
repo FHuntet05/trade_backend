@@ -1,7 +1,7 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS ONBOARDING - FULL IMPLEMENTATION")
+// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS - DATA INTEGRITY FIX")
 const User = require('../models/userModel');
 const Factory = require('../models/toolModel');
-const Setting = require('../models/settingsModel');
+const Setting =require('../models/settingsModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
 const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
@@ -17,7 +17,7 @@ const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const crypto = require('crypto');
 const blockchainService = require('../services/blockchainService');
 
-// --- Constantes y Helpers ---
+// --- Constantes y Helpers (sin cambios) ---
 const PLACEHOLDER_AVATAR_URL = 'https://i.postimg.cc/mD21B6r7/user-avatar-placeholder.png';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
 const USDT_ABI = ['function balanceOf(address) view returns (uint256)'];
@@ -31,9 +31,7 @@ function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió e
 }
 
 async function _getBalancesForAddress(address, chain) {
-  if (chain !== 'BSC') {
-    throw new Error(`Cadena no soportada: ${chain}. Solo se procesa BSC.`);
-  }
+  if (chain !== 'BSC') { throw new Error(`Cadena no soportada: ${chain}. Solo se procesa BSC.`); }
   try {
     const usdtBscContract = new ethers.Contract(USDT_BSC_ADDRESS, USDT_ABI, blockchainService.provider);
     const [usdtBalanceRaw, bnbBalanceRaw] = await Promise.all([
@@ -50,36 +48,14 @@ async function _getBalancesForAddress(address, chain) {
   }
 }
 
-// --- Endpoints del Dashboard ---
+// --- Endpoints del Dashboard (sin cambios) ---
 const getDashboardStats = asyncHandler(async (req, res) => {
-  const totalDepositVolumePromise = User.aggregate([
-    { $unwind: '$transactions' },
-    { $match: { 'transactions.type': 'deposit' } },
-    { $group: { _id: null, total: { $sum: '$transactions.amount' } } }
-  ]);
-  const userGrowthDataPromise = User.aggregate([
-    { $match: { createdAt: { $gte: new Date(new Date().setDate(new Date().getDate() - 14)) } } },
-    { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, count: { $sum: 1 } } },
-    { $sort: { _id: 1 } }
-  ]).then(data => data.map(item => ({ date: item._id, NuevosUsuarios: item.count })));
+  const totalDepositVolumePromise = User.aggregate([ { $unwind: '$transactions' }, { $match: { 'transactions.type': 'deposit' } }, { $group: { _id: null, total: { $sum: '$transactions.amount' } } } ]);
+  const userGrowthDataPromise = User.aggregate([ { $match: { createdAt: { $gte: new Date(new Date().setDate(new Date().getDate() - 14)) } } }, { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, count: { $sum: 1 } } }, { $sort: { _id: 1 } } ]).then(data => data.map(item => ({ date: item._id, NuevosUsuarios: item.count })));
   const totalUsersPromise = User.countDocuments();
-  const pendingWithdrawalsPromise = User.aggregate([
-    { $unwind: '$transactions' },
-    { $match: { 'transactions.type': 'withdrawal', 'transactions.status': 'pending' } },
-    { $count: 'total' }
-  ]);
-  const centralWalletBalancesPromise = (async () => {
-    try {
-      const { bscWallet } = transactionService.getCentralWallets();
-      const balances = await _getBalancesForAddress(bscWallet.address, 'BSC');
-      return { usdt: balances.usdt, bnb: balances.bnb };
-    } catch (error) {
-      console.error("Error al obtener balance de billetera central:", error);
-      return { usdt: 0, bnb: 0 };
-    }
-  })();
-  const [ totalUsers, totalDepositVolumeResult, pendingWithdrawalsResult, centralWalletBalances, userGrowthData ] =
-    await Promise.all([ totalUsersPromise, totalDepositVolumePromise, pendingWithdrawalsPromise, centralWalletBalancesPromise, userGrowthDataPromise ]);
+  const pendingWithdrawalsPromise = User.aggregate([ { $unwind: '$transactions' }, { $match: { 'transactions.type': 'withdrawal', 'transactions.status': 'pending' } }, { $count: 'total' } ]);
+  const centralWalletBalancesPromise = (async () => { try { const { bscWallet } = transactionService.getCentralWallets(); const balances = await _getBalancesForAddress(bscWallet.address, 'BSC'); return { usdt: balances.usdt, bnb: balances.bnb }; } catch (error) { console.error("Error al obtener balance de billetera central:", error); return { usdt: 0, bnb: 0 }; } })();
+  const [ totalUsers, totalDepositVolumeResult, pendingWithdrawalsResult, centralWalletBalances, userGrowthData ] = await Promise.all([ totalUsersPromise, totalDepositVolumePromise, pendingWithdrawalsPromise, centralWalletBalancesPromise, userGrowthDataPromise ]);
   const totalDepositVolume = totalDepositVolumeResult.length > 0 ? totalDepositVolumeResult[0].total : 0;
   const pendingWithdrawals = pendingWithdrawalsResult.length > 0 ? pendingWithdrawalsResult[0].total : 0;
   res.json({ totalUsers, totalDepositVolume, pendingWithdrawals, centralWalletBalances, userGrowthData });
@@ -95,17 +71,21 @@ const getPendingWithdrawals = asyncHandler(async (req, res) => {
     { $match: { 'transactions.type': 'withdrawal', 'transactions.status': 'pending' } },
     { $sort: { 'transactions.createdAt': -1 } },
     {
+      // [NEXUS DATA INTEGRITY FIX] - INICIO DE LA CORRECCIÓN CRÍTICA
+      // Se utiliza $ifNull para garantizar que los campos numéricos siempre tengan un valor.
+      // Si el campo en la BD es nulo o no existe, se devolverá 0 en su lugar.
       $project: {
         _id: '$transactions._id',
         grossAmount: { $abs: '$transactions.amount' },
-        feeAmount: '$transactions.metadata.feeAmount',
-        netAmount: '$transactions.metadata.netAmount',
+        feeAmount: { $ifNull: ['$transactions.metadata.feeAmount', 0] },
+        netAmount: { $ifNull: ['$transactions.metadata.netAmount', 0] },
         walletAddress: '$transactions.metadata.walletAddress',
         currency: '$transactions.currency',
         status: '$transactions.status',
         createdAt: '$transactions.createdAt',
         user: { _id: '$_id', username: '$username', telegramId: '$telegramId', photoFileId: '$photoFileId' }
       }
+      // [NEXUS DATA INTEGRITY FIX] - FIN DE LA CORRECCIÓN CRÍTICA
     }
   ];
   const countPipeline = [...aggregationPipeline, { $count: 'total' }];
@@ -120,13 +100,11 @@ const getPendingWithdrawals = asyncHandler(async (req, res) => {
   res.json({ withdrawals: withdrawalsWithDetails, page, pages: Math.ceil(total / limit), total });
 });
 
+// --- RESTO DEL ARCHIVO (SIN CAMBIOS) ---
 const processWithdrawal = asyncHandler(async (req, res) => {
   const { status, adminNotes } = req.body;
   const { id: transactionId } = req.params;
-  if (!['completed', 'rejected'].includes(status)) {
-    res.status(400);
-    throw new Error("El estado debe ser 'completed' o 'rejected'.");
-  }
+  if (!['completed', 'rejected'].includes(status)) { res.status(400); throw new Error("El estado debe ser 'completed' o 'rejected'."); }
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
@@ -148,9 +126,7 @@ const processWithdrawal = asyncHandler(async (req, res) => {
     withdrawal.metadata.processedBy = req.user.username;
     await user.save({ session });
     await session.commitTransaction();
-    if (user.telegramId && notificationMessage) {
-      await sendTelegramMessage(user.telegramId, notificationMessage);
-    }
+    if (user.telegramId && notificationMessage) { await sendTelegramMessage(user.telegramId, notificationMessage); }
     res.json({ message: `Retiro marcado como '${status}' exitosamente.`, withdrawal });
   } catch (error) {
     await session.abortTransaction();
@@ -160,58 +136,27 @@ const processWithdrawal = asyncHandler(async (req, res) => {
   }
 });
 
-// --- Tesorería ---
 const sweepFunds = asyncHandler(async (req, res) => {
   const { walletsToSweep } = req.body;
   const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
-  if (!SWEEP_DESTINATION_WALLET) {
-    res.status(500); throw new Error('Error crítico de configuración de seguridad del servidor.');
-  }
-  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
-    res.status(400); throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array).");
-  }
+  if (!SWEEP_DESTINATION_WALLET) { res.status(500); throw new Error('Error crítico de configuración de seguridad del servidor.'); }
+  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) { res.status(400); throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array)."); }
   const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
-  if (wallets.length === 0) {
-    return res.json({ message: "Ninguna de las wallets candidatas fue encontrada...", summary: {}, details: [] });
-  }
+  if (wallets.length === 0) { return res.json({ message: "Ninguna de las wallets candidatas fue encontrada...", summary: {}, details: [] }); }
   const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
-  for (const wallet of wallets) {
-    try {
-      const txHash = await transactionService.sweepUsdtOnBscFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET);
-      report.summary.successfulSweeps++;
-      report.details.push({ address: wallet.address, status: 'SUCCESS', txHash });
-    } catch (error) {
-      report.summary.failedSweeps++;
-      report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message });
-    }
-  }
+  for (const wallet of wallets) { try { const txHash = await transactionService.sweepUsdtOnBscFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET); report.summary.successfulSweeps++; report.details.push({ address: wallet.address, status: 'SUCCESS', txHash }); } catch (error) { report.summary.failedSweeps++; report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message }); } }
   res.json(report);
 });
 
 const sweepGas = asyncHandler(async (req, res) => {
   const { walletsToSweep } = req.body;
   const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
-  if (!SWEEP_DESTINATION_WALLET) {
-    res.status(500); throw new Error('Error crítico de configuración de seguridad del servidor.');
-  }
-  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
-    res.status(400); throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array).");
-  }
+  if (!SWEEP_DESTINATION_WALLET) { res.status(500); throw new Error('Error crítico de configuración de seguridad del servidor.'); }
+  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) { res.status(400); throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array)."); }
   const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
-  if (wallets.length === 0) {
-    return res.json({ message: "Ninguna wallet candidata encontrada...", summary: {}, details: [] });
-  }
+  if (wallets.length === 0) { return res.json({ message: "Ninguna wallet candidata encontrada...", summary: {}, details: [] }); }
   const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
-  for (const wallet of wallets) {
-    try {
-      const txHash = await transactionService.sweepBnbFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET);
-      report.summary.successfulSweeps++;
-      report.details.push({ address: wallet.address, status: 'SUCCESS', txHash });
-    } catch (error) {
-      report.summary.failedSweeps++;
-      report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message });
-    }
-  }
+  for (const wallet of wallets) { try { const txHash = await transactionService.sweepBnbFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET); report.summary.successfulSweeps++; report.details.push({ address: wallet.address, status: 'SUCCESS', txHash }); } catch (error) { report.summary.failedSweeps++; report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message }); } }
   res.json(report);
 });
 
@@ -220,85 +165,34 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
   const limit = parseInt(req.query.limit) || 15;
   const search = req.query.search || '';
   let query = { chain: 'BSC' };
-  if (search) {
-    const userQuery = { username: { $regex: search, $options: 'i' } };
-    const users = await User.find(userQuery).select('_id');
-    query.$or = [{ address: { $regex: search, $options: 'i' } }, { user: { $in: users.map(u => u._id) } }];
-  }
-  const [totalWallets, wallets] = await Promise.all([
-    CryptoWallet.countDocuments(query),
-    CryptoWallet.find(query).populate('user', 'username').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean()
-  ]);
-  if (totalWallets === 0) {
-    return res.json({ wallets: [], pagination: { currentPage: 1, totalPages: 0, totalWallets: 0 }, summary: { usdt: 0, bnb: 0 } });
-  }
-  const walletsWithDetails = await Promise.all(wallets.map(async (wallet) => {
-    try {
-      const balances = await _getBalancesForAddress(wallet.address, wallet.chain);
-      let estimatedRequiredGas = 0;
-      if (balances.usdt > 0.000001) {
-        estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt);
-      }
-      return { ...wallet, usdtBalance: balances.usdt, gasBalance: balances.bnb, estimatedRequiredGas };
-    } catch (error) {
-      return { ...wallet, usdtBalance: 0, gasBalance: 0, estimatedRequiredGas: 0, error: `Fallo al obtener balance: ${error.message}` };
-    }
-  }));
-  const summary = walletsWithDetails.reduce((acc, wallet) => {
-    acc.usdt += wallet.usdtBalance || 0;
-    acc.bnb += wallet.gasBalance || 0;
-    return acc;
-  }, { usdt: 0, bnb: 0 });
+  if (search) { const userQuery = { username: { $regex: search, $options: 'i' } }; const users = await User.find(userQuery).select('_id'); query.$or = [{ address: { $regex: search, $options: 'i' } }, { user: { $in: users.map(u => u._id) } }]; }
+  const [totalWallets, wallets] = await Promise.all([ CryptoWallet.countDocuments(query), CryptoWallet.find(query).populate('user', 'username').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean() ]);
+  if (totalWallets === 0) { return res.json({ wallets: [], pagination: { currentPage: 1, totalPages: 0, totalWallets: 0 }, summary: { usdt: 0, bnb: 0 } }); }
+  const walletsWithDetails = await Promise.all(wallets.map(async (wallet) => { try { const balances = await _getBalancesForAddress(wallet.address, wallet.chain); let estimatedRequiredGas = 0; if (balances.usdt > 0.000001) { estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt); } return { ...wallet, usdtBalance: balances.usdt, gasBalance: balances.bnb, estimatedRequiredGas }; } catch (error) { return { ...wallet, usdtBalance: 0, gasBalance: 0, estimatedRequiredGas: 0, error: `Fallo al obtener balance: ${error.message}` }; } }));
+  const summary = walletsWithDetails.reduce((acc, wallet) => { acc.usdt += wallet.usdtBalance || 0; acc.bnb += wallet.gasBalance || 0; return acc; }, { usdt: 0, bnb: 0 });
   res.json({ wallets: walletsWithDetails, pagination: { currentPage: page, totalPages: Math.ceil(totalWallets / limit), totalWallets }, summary });
 });
 
-// --- Dispensador de Gas ---
 const analyzeGasNeeds = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 15;
   const { bscWallet } = transactionService.getCentralWallets();
-  const [totalWalletsInChain, balanceRaw] = await Promise.all([
-    CryptoWallet.countDocuments({ chain: 'BSC' }),
-    blockchainService.getBnbBalance(bscWallet.address)
-  ]);
+  const [totalWalletsInChain, balanceRaw] = await Promise.all([ CryptoWallet.countDocuments({ chain: 'BSC' }), blockchainService.getBnbBalance(bscWallet.address) ]);
   const centralWalletBalance = parseFloat(ethers.utils.formatEther(balanceRaw));
   const walletsOnPage = await CryptoWallet.find({ chain: 'BSC' }).populate('user', 'username').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean();
-  const walletsNeedingGasPromises = walletsOnPage.map(async (wallet) => {
-    try {
-      const balances = await _getBalancesForAddress(wallet.address, 'BSC');
-      if (!balances || balances.usdt <= 0.000001) return null;
-      const requiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt);
-      if (balances.bnb < requiredGas - GAS_SUFFICIENT_TOLERANCE) {
-        return { address: wallet.address, user: wallet.user, usdtBalance: balances.usdt, gasBalance: balances.bnb, requiredGas };
-      }
-      return null;
-    } catch (error) { return null; }
-  });
+  const walletsNeedingGasPromises = walletsOnPage.map(async (wallet) => { try { const balances = await _getBalancesForAddress(wallet.address, 'BSC'); if (!balances || balances.usdt <= 0.000001) return null; const requiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt); if (balances.bnb < requiredGas - GAS_SUFFICIENT_TOLERANCE) { return { address: wallet.address, user: wallet.user, usdtBalance: balances.usdt, gasBalance: balances.bnb, requiredGas }; } return null; } catch (error) { return null; } });
   const filteredWallets = (await Promise.all(walletsNeedingGasPromises)).filter(Boolean);
   res.json({ centralWalletBalance, wallets: filteredWallets, pagination: { currentPage: page, totalPages: Math.ceil(totalWalletsInChain / limit), totalWallets: totalWalletsInChain } });
 });
 
 const dispatchGas = asyncHandler(async (req, res) => {
   const { chain, targets } = req.body;
-  if (chain !== 'BSC' || !Array.isArray(targets) || targets.length === 0) {
-    res.status(400); throw new Error("Petición inválida.");
-  }
+  if (chain !== 'BSC' || !Array.isArray(targets) || targets.length === 0) { res.status(400); throw new Error("Petición inválida."); }
   const report = { summary: { success: 0, failed: 0, totalDispatched: 0 }, details: [] };
-  for (const target of targets) {
-    try {
-      const txHash = await transactionService.sendBscGas(target.address, target.amount);
-      report.summary.success++;
-      report.summary.totalDispatched += parseFloat(target.amount);
-      report.details.push({ address: target.address, status: 'SUCCESS', txHash, amount: target.amount });
-    } catch (error) {
-      report.summary.failed++;
-      report.details.push({ address: target.address, status: 'FAILED', reason: error.message, amount: target.amount });
-    }
-  }
+  for (const target of targets) { try { const txHash = await transactionService.sendBscGas(target.address, target.amount); report.summary.success++; report.summary.totalDispatched += parseFloat(target.amount); report.details.push({ address: target.address, status: 'SUCCESS', txHash, amount: target.amount }); } catch (error) { report.summary.failed++; report.details.push({ address: target.address, status: 'FAILED', reason: error.message, amount: target.amount }); } }
   res.json(report);
 });
 
-// --- Gestión de Usuarios ---
 const getAllUsers = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
@@ -307,10 +201,7 @@ const getAllUsers = asyncHandler(async (req, res) => {
   if (search) query.username = { $regex: search, $options: 'i' };
   const totalUsers = await User.countDocuments(query);
   const users = await User.find(query).select('-password').skip((page - 1) * limit).limit(limit).lean();
-  const usersWithPhoto = await Promise.all(users.map(async (user) => {
-    const photoUrl = await getTemporaryPhotoUrl(user.photoFileId);
-    return { ...user, photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL };
-  }));
+  const usersWithPhoto = await Promise.all(users.map(async (user) => { const photoUrl = await getTemporaryPhotoUrl(user.photoFileId); return { ...user, photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL }; }));
   res.json({ users: usersWithPhoto, pagination: { currentPage: page, totalPages: Math.ceil(totalUsers / limit), totalUsers } });
 });
 
@@ -320,11 +211,7 @@ const getUserDetails = asyncHandler(async (req, res) => {
     const photoUrl = await getTemporaryPhotoUrl(user.photoFileId);
     const cryptoWallets = await CryptoWallet.find({ user: user._id });
     const transactions = user.transactions || [];
-    res.json({
-        user: { ...user.toObject(), photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL, balance: user.balance || { usdt: 0, ntx: 0 } },
-        cryptoWallets: cryptoWallets || [],
-        transactions: { items: transactions, page: 1, totalPages: 1 }
-    });
+    res.json({ user: { ...user.toObject(), photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL, balance: user.balance || { usdt: 0, ntx: 0 } }, cryptoWallets: cryptoWallets || [], transactions: { items: transactions, page: 1, totalPages: 1 } });
 });
 
 const updateUser = asyncHandler(async (req, res) => {
@@ -335,20 +222,11 @@ const updateUser = asyncHandler(async (req, res) => {
   const originalRole = user.role;
   const superAdminId = process.env.SUPER_ADMIN_TELEGRAM_ID?.toString();
   const isRequesterSuper = req.user.telegramId?.toString() === superAdminId;
-  if (!isRequesterSuper) {
-    if (user.role === 'admin' || user.telegramId?.toString() === superAdminId) { res.status(403); throw new Error('No puedes modificar a este usuario.'); }
-    if (role && role !== user.role) { res.status(403); throw new Error('No tienes permisos para promover a administrador.'); }
-  }
+  if (!isRequesterSuper) { if (user.role === 'admin' || user.telegramId?.toString() === superAdminId) { res.status(403); throw new Error('No puedes modificar a este usuario.'); } if (role && role !== user.role) { res.status(403); throw new Error('No tienes permisos para promover a administrador.'); } }
   user.username = username ?? user.username;
   user.balance.usdt = balanceUsdt ?? user.balance.usdt;
-  if (status && status !== originalStatus) {
-    user.status = status;
-    user.transactions.push({ type: 'admin_action', currency: 'SYSTEM', amount: 0, description: `Estado cambiado de '${originalStatus}' a '${status}' por el admin '${req.user.username}'.` });
-  }
-  if (isRequesterSuper && role && role !== originalRole) {
-    user.role = role;
-    user.transactions.push({ type: 'admin_action', currency: 'SYSTEM', amount: 0, description: `Rol cambiado de '${originalRole}' a '${role}' por el Super Admin '${req.user.username}'.` });
-  }
+  if (status && status !== originalStatus) { user.status = status; user.transactions.push({ type: 'admin_action', currency: 'SYSTEM', amount: 0, description: `Estado cambiado de '${originalStatus}' a '${status}' por el admin '${req.user.username}'.` }); }
+  if (isRequesterSuper && role && role !== originalRole) { user.role = role; user.transactions.push({ type: 'admin_action', currency: 'SYSTEM', amount: 0, description: `Rol cambiado de '${originalRole}' a '${role}' por el Super Admin '${req.user.username}'.` }); }
   if (password && user.role === 'admin') { user.password = password; }
   const updatedUser = await user.save();
   res.json(updatedUser);
@@ -381,7 +259,6 @@ const resetAdminPassword = asyncHandler(async (req, res) => {
   res.json({ message: `Contraseña reseteada para ${adminUser.username}.`, temporaryPassword });
 });
 
-// --- Transacciones Globales ---
 const getAllTransactions = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 15;
@@ -390,14 +267,7 @@ const getAllTransactions = asyncHandler(async (req, res) => {
     let matchQuery = { 'transactions': { $exists: true, $ne: [] } };
     if (type) { matchQuery['transactions.type'] = type; }
     if (search) { const searchRegex = { $regex: search, $options: 'i' }; matchQuery.$or = [ { 'username': searchRegex }, { 'transactions.description': searchRegex } ]; }
-    const aggregationPipeline = [
-        { $match: matchQuery },
-        { $unwind: '$transactions' },
-        ...(type ? [{ $match: { 'transactions.type': type } }] : []),
-        ...(search ? [{ $match: { $or: [{ 'username': { $regex: search, $options: 'i' } }, { 'transactions.description': { $regex: search, $options: 'i' } }] } }] : []),
-        { $sort: { 'transactions.createdAt': -1 } },
-        { $project: { _id: '$transactions._id', amount: '$transactions.amount', currency: '$transactions.currency', type: '$transactions.type', description: '$transactions.description', status: '$transactions.status', createdAt: '$transactions.createdAt', user: { _id: '$_id', username: '$username' } } }
-    ];
+    const aggregationPipeline = [ { $match: matchQuery }, { $unwind: '$transactions' }, ...(type ? [{ $match: { 'transactions.type': type } }] : []), ...(search ? [{ $match: { $or: [{ 'username': { $regex: search, $options: 'i' } }, { 'transactions.description': { $regex: search, $options: 'i' } }] } }] : []), { $sort: { 'transactions.createdAt': -1 } }, { $project: { _id: '$transactions._id', amount: '$transactions.amount', currency: '$transactions.currency', type: '$transactions.type', description: '$transactions.description', status: '$transactions.status', createdAt: '$transactions.createdAt', user: { _id: '$_id', username: '$username' } } } ];
     const countPipeline = [...aggregationPipeline, { $count: 'total' }];
     const paginatedPipeline = [...aggregationPipeline, { $skip: (page - 1) * limit }, { $limit: limit }];
     const [totalResult, transactions] = await Promise.all([ User.aggregate(countPipeline), User.aggregate(paginatedPipeline) ]);
@@ -405,12 +275,10 @@ const getAllTransactions = asyncHandler(async (req, res) => {
     res.json({ transactions: transactions || [], page, pages: Math.ceil(total / limit), total });
 });
 
-// --- Monitor de Blockchain ---
 const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
   const pendingTxs = await PendingTx.find().lean(); res.json(pendingTxs);
 });
 
-// --- Fábricas ---
 const getAllFactories = asyncHandler(async (req, res) => {
   const factories = await Factory.find(); res.json(factories);
 });
@@ -420,9 +288,7 @@ const createFactory = asyncHandler(async (req, res) => {
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
-    if (isFree) {
-      await Factory.updateMany({ isFree: true }, { $set: { isFree: false } }, { session });
-    }
+    if (isFree) { await Factory.updateMany({ isFree: true }, { $set: { isFree: false } }, { session }); }
     const factory = new Factory({ ...factoryData, isFree });
     const createdFactory = await factory.save({ session });
     await session.commitTransaction();
@@ -440,9 +306,7 @@ const updateFactory = asyncHandler(async (req, res) => {
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
-    if (isFree) {
-      await Factory.updateMany({ _id: { $ne: req.params.id }, isFree: true }, { $set: { isFree: false } }, { session });
-    }
+    if (isFree) { await Factory.updateMany({ _id: { $ne: req.params.id }, isFree: true }, { $set: { isFree: false } }, { session }); }
     const factory = await Factory.findById(req.params.id);
     if (!factory) { res.status(404); throw new Error('Fábrica no encontrada'); }
     Object.assign(factory, { ...factoryData, isFree });
@@ -463,7 +327,6 @@ const deleteFactory = asyncHandler(async (req, res) => {
   await factory.deleteOne(); res.json({ message: 'Fábrica eliminada' });
 });
 
-// --- Ajustes ---
 const getSettings = asyncHandler(async (req, res) => {
   const settings = await Setting.findOne(); res.json(settings);
 });
@@ -473,7 +336,6 @@ const updateSettings = asyncHandler(async (req, res) => {
   Object.assign(settings, req.body); const updatedSettings = await settings.save(); res.json(updatedSettings);
 });
 
-// --- Seguridad 2FA ---
 const generateTwoFactorSecret = asyncHandler(async (req, res) => {
   const secret = speakeasy.generateSecret({ name: 'Nexus Security App' });
   const qrCodeDataURL = await qrCodeToDataURLPromise(secret.otpauth_url);
@@ -486,33 +348,17 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
   req.user.twoFactorEnabled = true; req.user.twoFactorSecret = secret; await req.user.save(); res.json({ message: '2FA habilitado con éxito' });
 });
 
-// --- Notificaciones ---
 const sendBroadcastNotification = asyncHandler(async (req, res) => {
   const { message, imageUrl, buttonUrl, buttonText } = req.body;
   if (!message) { res.status(400); throw new Error('El mensaje es requerido.'); }
   const users = await User.find({ status: 'active' }).select('telegramId');
-  
-  // Creamos un objeto de opciones para el mensaje enriquecido.
   const options = {};
   if (imageUrl) options.photo = imageUrl;
-  if (buttonUrl && buttonText) {
-      options.reply_markup = {
-          inline_keyboard: [[{ text: buttonText, url: buttonUrl }]]
-      };
-  }
-
-  // Promise.allSettled es más robusto para envíos masivos.
-  const results = await Promise.allSettled(
-    users.map(u => sendTelegramMessage(u.telegramId, message, options))
-  );
-
+  if (buttonUrl && buttonText) { options.reply_markup = { inline_keyboard: [[{ text: buttonText, url: buttonUrl }]] }; }
+  const results = await Promise.allSettled( users.map(u => sendTelegramMessage(u.telegramId, message, options)) );
   const successfulSends = results.filter(r => r.status === 'fulfilled').length;
   const failedSends = results.length - successfulSends;
-  
-  res.json({ 
-      message: `Notificación enviada. Éxitos: ${successfulSends}, Fallos: ${failedSends}.`,
-      details: { successful: successfulSends, failed: failedSends }
-  });
+  res.json({ message: `Notificación enviada. Éxitos: ${successfulSends}, Fallos: ${failedSends}.`, details: { successful: successfulSends, failed: failedSends } });
 });
 
 module.exports = {
