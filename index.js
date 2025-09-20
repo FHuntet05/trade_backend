@@ -150,20 +150,20 @@ app.use('/api/users', userRoutes);
 const WELCOME_MESSAGE = `
 🌐🚀 NEW PROJECT: BlockSphere 🚀🌐\n\n  
 
-📢 Official launch: September 22 2025 \n 
-✔️ PERMANENT project, fully backed by blockchain.\n 
-🔒 All funds are protected and managed with complete security.\n\n
+📢 Official launch: September 22 2025 
+✔️ PERMANENT project, fully backed by blockchain.
+🔒 All funds are protected and managed with complete security.\n
 
 💰 Guaranteed daily earnings:\n  
-📦 Active investment/mining packages:\n
-🔹 Package 1: 3 USDT → 1.5 USDT daily\n  
-🔹 Package 2: 8 USDT → 4 USDT daily\n  
-🔹 Package 3: 16 USDT → 8 USDT daily\n 
-🔹 Package 4: 32 USDT → 16 USDT daily\n 
-🔹 Package 5: 75 USDT → 37.5 USDT daily\n\n  
+📦 Active investment/mining packages:
+🔹 Package 1: 3 USDT → 1.5 USDT daily 
+🔹 Package 2: 8 USDT → 4 USDT daily 
+🔹 Package 3: 16 USDT → 8 USDT daily
+🔹 Package 4: 32 USDT → 16 USDT daily
+🔹 Package 5: 75 USDT → 37.5 USDT daily\n 
 
-✨ This project is here to stay.\n  
-📈 BlockSphere will provide steady earnings and grow permanently.\n 
+✨ This project is here to stay. 
+📈 BlockSphere will provide steady earnings and grow permanently. 
 🔥 A solid and transparent system that truly makes a difference in the market.`;
 
 
