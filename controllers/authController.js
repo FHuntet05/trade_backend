@@ -1,116 +1,145 @@
-// RUTA: backend/models/userModel.js (VERSIÓN "NEXUS - INITIAL STATE FIX")
-const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
+// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - STABLE & CORRECTED")
 
-const transactionSchema = new mongoose.Schema({
-    type: {
-        type: String,
-        required: true,
-        enum: [
-            'deposit', 'withdrawal', 'purchase', 'mining_claim', 'referral_commission', 
-            'task_reward', 'admin_credit', 'admin_debit', 'swap_ntx_to_usdt',
-            'admin_action'
-        ]
-    },
-    amount: { type: Number, required: true },
-    currency: { 
-        type: String, 
-        required: true, 
-        enum: ['USDT', 'NTX', 'SYSTEM']
-    },
-    description: { type: String, required: true },
-    status: { type: String, required: true, enum: ['pending', 'completed', 'rejected', 'failed'], default: 'completed' },
-    metadata: { type: Map, of: String }
-}, { timestamps: true });
+const User = require('../models/userModel');
+const Setting = require('../models/settingsModel');
+const Tool = require('../models/toolModel');
+const jwt = require('jsonwebtoken');
+const { getTemporaryPhotoUrl } = require('./userController');
 
+const PLACEHOLDER_AVATAR_URL = `${process.env.CLIENT_URL}/assets/images/user-avatar-placeholder.png`;
 
-const userSchema = new mongoose.Schema({
-    // --- Identificadores y Autenticación ---
-    telegramId: { type: String, required: true, unique: true, index: true },
-    username: { type: String, required: true, trim: true },
-    fullName: { type: String, trim: true },
-    password: { type: String, select: false },
-    photoFileId: { type: String },
-    language: { type: String, default: 'es' },
-
-    // --- Roles y Permisos ---
-    role: { type: String, enum: ['user', 'admin'], default: 'user' },
-    status: { type: String, enum: ['active', 'banned', 'pending_verification'], default: 'active' },
-
-    // --- Configuración de Seguridad y Estado ---
-    isTwoFactorEnabled: { type: Boolean, default: false },
-    twoFactorSecret: { type: String, select: false },
-    mustResetPassword: { type: Boolean, default: false },
-
-    // --- Datos Financieros y de Negocio ---
-    balance: {
-        usdt: { type: Number, default: 0.0 },
-        ntx: { type: Number, default: 0.0 }
-    },
-    totalRecharge: { type: Number, default: 0 },
-    totalWithdrawal: { type: Number, default: 0 },
-    currentVipLevel: { type: Number, default: 0 },
-    
-    // [NEXUS ONBOARDING FIX] - INICIO DE LA CORRECCIÓN CRÍTICA
-    // Se añaden los campos de estado de minado con valores por defecto.
-    // Esto asegura que cada nuevo usuario tenga un estado inicial válido y predecible.
-    effectiveMiningRate: { type: Number, default: 0 }, // NTX por día
-    miningStatus: {
-        type: String,
-        enum: ['IDLE', 'MINING', 'CLAIMABLE'], // Estados posibles del ciclo
-        default: 'IDLE' // El usuario empieza inactivo, listo para 'Empezar a Minar'
-    },
-    lastMiningClaim: {
-        type: Date,
-        default: Date.now // Establece un punto de partida temporal para el ciclo
-    },
-    // [NEXUS ONBOARDING FIX] - FIN DE LA CORRECCIÓN CRÍTICA
-
-    // --- Estado de Tareas y Progreso ---
-    claimedTasks: {
-        type: Map,
-        of: Boolean,
-        default: {}
-    },
-    
-    telegramVisited: {
-        type: Boolean,
-        default: false
-    },
-
-    // --- Estructura de Referidos ---
-    referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-    referralCode: { type: String, unique: true, sparse: true },
-    referrals: [{
-        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-        level: { type: Number, default: 1 }
-    }],
-    
-    // --- Historial de Transacciones y Herramientas ---
-    transactions: [transactionSchema],
-    activeTools: [{
-        tool: { type: mongoose.Schema.Types.ObjectId, ref: 'Tool' },
-        purchaseDate: { type: Date, default: Date.now },
-        expiryDate: { type: Date }
-    }]
-
-}, {
-    timestamps: true
-});
-
-// --- Métodos y Hooks (sin cambios) ---
-userSchema.pre('save', async function(next) {
-    if (!this.isModified('password') || !this.password) return next();
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-});
-
-userSchema.methods.matchPassword = async function(enteredPassword) {
-    if (!this.password) return false;
-    return await bcrypt.compare(enteredPassword, this.password);
+const generateUserToken = (id) => {
+    return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 };
 
-const User = mongoose.model('User', userSchema);
+const generateAdminToken = (id) => {
+    return jwt.sign({ id }, process.env.JWT_ADMIN_SECRET, { expiresIn: '1d' });
+};
 
-module.exports = User;
+const syncUser = async (req, res) => {
+    const { telegramUser } = req.body;
+    
+    console.log(`[Auth Sync] Petición de sincronización para el usuario: ${telegramUser?.id}`);
+    
+    if (!telegramUser || !telegramUser.id) {
+        return res.status(400).json({ message: 'Datos de usuario de Telegram requeridos.' });
+    }
+    
+    try {
+        const settings = await Setting.findOne({ singleton: 'global_settings' }).lean();
+
+        if (settings && settings.maintenanceMode) {
+            console.log(`[Auth Sync] ACCESO BLOQUEADO: El modo mantenimiento está activo. Usuario: ${telegramUser.id}`);
+            return res.status(503).json({ 
+                message: settings.maintenanceMessage || 'El sistema está en mantenimiento. Por favor, inténtelo más tarde.' 
+            });
+        }
+
+        const telegramId = telegramUser.id.toString();
+        let isNewUser = false;
+        let user = await User.findOne({ telegramId: telegramId });
+        
+        if (!user) {
+            isNewUser = true;
+            console.log(`[Auth Sync] Usuario ${telegramId} no encontrado. Creando nuevo perfil con valores por defecto.`);
+            user = new User({
+                telegramId: telegramId,
+                username: telegramUser.username || `user_${telegramId}`,
+                fullName: `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim() || `user_${telegramId}`,
+                language: telegramUser.language_code || 'es'
+            });
+        } else {
+             user.username = telegramUser.username || user.username;
+             user.fullName = `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim() || user.fullName;
+             user.language = telegramUser.language_code || user.language;
+        }
+
+        if (isNewUser) {
+            const freeTool = await Tool.findOne({ isFree: true }).lean();
+            if (freeTool) {
+                console.log(`[Auth Sync] Fábrica gratuita encontrada: "${freeTool.name}". Asignando al nuevo usuario.`);
+                const now = new Date();
+                const expiryDate = new Date(now.getTime() + freeTool.durationDays * 24 * 60 * 60 * 1000);
+                
+                user.activeTools.push({
+                    tool: freeTool._id,
+                    purchaseDate: now,
+                    expiryDate: expiryDate,
+                });
+                user.effectiveMiningRate = freeTool.miningBoost;
+                console.log(`[Auth Sync] Estado inicial para ${user.username}: Tasa=${user.effectiveMiningRate}, Estado=${user.miningStatus}`);
+            } else {
+                console.warn('[Auth Sync] ADVERTENCIA: No se encontró una herramienta gratuita configurada en el sistema. El nuevo usuario no tendrá poder de minado inicial.'.yellow);
+            }
+        }
+        
+        await user.save();
+        await user.populate('referredBy', 'username fullName');
+        
+        console.log(`[Auth Sync] Usuario ${user.username} sincronizado/creado exitosamente.`);
+        
+        const userObject = user.toObject();
+        userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
+        
+        const filteredTransactions = (userObject.transactions || []).filter(
+            tx => tx.type !== 'admin_action'
+        );
+        userObject.transactions = filteredTransactions;
+
+        const token = generateUserToken(user._id);
+
+        console.log(`[Auth Sync] Sincronización completada para ${user.username}.`);
+        res.status(200).json({ token, user: userObject, settings: settings || {} });
+
+    } catch (error) {
+        console.error('[Auth Sync] ERROR FATAL:'.red.bold, error);
+        return res.status(500).json({ message: 'Error interno del servidor.', details: error.message });
+    }
+};
+
+const getUserProfile = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).populate('referredBy', 'username fullName');
+        if (!user) { return res.status(404).json({ message: 'Usuario no encontrado' }); }
+        
+        const settings = await Setting.findOne({ singleton: 'global_settings' });
+        
+        const userObject = user.toObject();
+
+        const filteredTransactions = (userObject.transactions || []).filter(
+            tx => tx.type !== 'admin_action'
+        );
+        userObject.transactions = filteredTransactions;
+
+        res.json({ user: userObject, settings: settings || {} });
+
+    } catch (error) { res.status(500).json({ message: 'Error del servidor' }); }
+};
+
+const loginAdmin = async (req, res) => {
+    const { username, password } = req.body;
+    try {
+        const adminUser = await User.findOne({ 
+            $or: [{ username }, { telegramId: username }],
+            role: 'admin'
+        }).select('+password username role telegramId');
+
+        if (adminUser && (await adminUser.matchPassword(password))) {
+            const token = generateAdminToken(adminUser._id);
+            const adminData = adminUser.toObject({ getters: true, virtuals: true });
+            delete adminData.password;
+
+            res.json({
+                token,
+                admin: adminData
+            });
+        } else {
+            res.status(401).json({ message: 'Credenciales inválidas.' });
+        }
+    } catch (error) {
+        console.error(`[Admin Login] Error: ${error.message}`);
+        res.status(500).json({ message: 'Error del servidor' });
+    }
+};
+
+module.exports = { syncUser, getUserProfile, loginAdmin };
