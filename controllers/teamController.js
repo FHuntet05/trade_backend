@@ -1,76 +1,92 @@
-// backend/controllers/teamController.js (FASE "PERFECTIO" - LÓGICA DE NEGOCIO CORREGIDA)
+// RUTA: backend/controllers/teamController.js (VERSIÓN "NEXUS - REPORTING AGGREGATION")
 
 const User = require('../models/userModel');
 const mongoose = require('mongoose');
 
-// Función auxiliar recursiva para procesar los niveles de referidos
-const processReferrals = (members, level, maxLevel, stats) => {
-    if (level > maxLevel || !members) {
-        return;
-    }
-
-    members.forEach(referral => {
-        const member = referral.user;
-        if (!member) return;
-
-        stats.totalTeamMembers++;
-        stats.levels[level - 1].totalMembers++;
-        // [PERFECTIO - LÓGICA CORREGIDA] Un "miembro válido" es quien ha recargado.
-        if (member.totalRecharge > 0) {
-            stats.levels[level - 1].validMembers++;
-        }
-        
-        stats.totalTeamRecharge += member.totalRecharge || 0;
-        stats.totalTeamWithdrawals += member.totalWithdrawal || 0;
-
-        // Procesar el siguiente nivel
-        processReferrals(member.referrals, level + 1, maxLevel, stats);
-    });
-};
-
+// [NEXUS REPORTING FIX] - La función 'getTeamStats' ha sido completamente refactorizada
+// para usar una única y eficiente consulta de agregación de MongoDB.
 const getTeamStats = async (req, res) => {
     try {
         const userId = new mongoose.Types.ObjectId(req.user.id);
 
-        // [PERFECTIO - CONSULTA CORREGIDA]
-        // Esta consulta ahora carga de forma fiable toda la jerarquía de 3 niveles
-        // y selecciona solo los campos necesarios para optimizar el rendimiento.
-        const user = await User.findById(userId).populate({
-            path: 'referrals.user',
-            select: 'totalRecharge totalWithdrawal referrals', // Campos necesarios para el cálculo
-            populate: {
-                path: 'referrals.user',
-                select: 'totalRecharge totalWithdrawal referrals',
-                populate: {
-                    path: 'referrals.user',
-                    select: 'totalRecharge totalWithdrawal referrals'
-                }
-            }
-        });
-
-        if (!user) {
+        // Obtenemos al usuario solicitante para calcular su comisión total por separado.
+        const currentUser = await User.findById(userId).select('transactions').lean();
+        if (!currentUser) {
             return res.status(404).json({ message: "Usuario no encontrado" });
         }
 
-        const stats = {
-            totalTeamMembers: 0,
-            totalTeamRecharge: 0,
-            totalTeamWithdrawals: 0,
-            // [PERFECTIO - LÓGICA CORREGIDA] Se calcula el total de comisiones del propio usuario.
-            totalCommission: user.transactions
-                                 .filter(tx => tx.type === 'referral_commission')
-                                 .reduce((sum, tx) => sum + tx.amount, 0),
-            levels: [
+        const totalCommission = currentUser.transactions
+            .filter(tx => tx.type === 'referral_commission')
+            .reduce((sum, tx) => sum + tx.amount, 0);
+
+        // La pipeline de agregación para calcular las estadísticas del equipo.
+        const teamStatsPipeline = [
+            // 1. Empezamos con el usuario actual.
+            { $match: { _id: userId } },
+            // 2. Usamos $graphLookup para obtener todos los referidos hasta 3 niveles.
+            {
+                $graphLookup: {
+                    from: 'users',
+                    startWith: '$referrals.user',
+                    connectFromField: 'referrals.user',
+                    connectToField: '_id',
+                    as: 'teamMembers',
+                    maxDepth: 2, // 0-indexed: Nivel 1 (depth 0), Nivel 2 (depth 1), Nivel 3 (depth 2)
+                    depthField: 'level'
+                }
+            },
+            // 3. Descomponemos el array de miembros del equipo.
+            { $unwind: '$teamMembers' },
+            // 4. Agrupamos los resultados para sumar los totales y contar miembros por nivel.
+            {
+                $group: {
+                    _id: null, // Agrupamos todo en un único documento de resultados.
+                    totalTeamMembers: { $sum: 1 },
+                    totalTeamRecharge: { $sum: '$teamMembers.totalRecharge' },
+                    // [NEXUS REPORTING FIX] - Sumamos los retiros totales de forma correcta.
+                    totalTeamWithdrawals: { $sum: '$teamMembers.totalWithdrawal' }, 
+                    level1Members: { $sum: { $cond: [{ $eq: ['$teamMembers.level', 0] }, 1, 0] } },
+                    level2Members: { $sum: { $cond: [{ $eq: ['$teamMembers.level', 1] }, 1, 0] } },
+                    level3Members: { $sum: { $cond: [{ $eq: ['$teamMembers.level', 2] }, 1, 0] } },
+                    // Contamos miembros válidos (que han depositado al menos una vez).
+                    level1Valid: { $sum: { $cond: [{ $and: [ { $eq: ['$teamMembers.level', 0] }, { $gt: ['$teamMembers.totalRecharge', 0] } ] }, 1, 0] } },
+                    level2Valid: { $sum: { $cond: [{ $and: [ { $eq: ['$teamMembers.level', 1] }, { $gt: ['$teamMembers.totalRecharge', 0] } ] }, 1, 0] } },
+                    level3Valid: { $sum: { $cond: [{ $and: [ { $eq: ['$teamMembers.level', 2] }, { $gt: ['$teamMembers.totalRecharge', 0] } ] }, 1, 0] } }
+                }
+            },
+            // 5. Proyectamos el resultado final en el formato que espera el frontend.
+            {
+                $project: {
+                    _id: 0,
+                    totalTeamMembers: 1,
+                    totalTeamRecharge: 1,
+                    totalTeamWithdrawals: 1,
+                    levels: [
+                        { level: 1, totalMembers: '$level1Members', validMembers: '$level1Valid' },
+                        { level: 2, totalMembers: '$level2Members', validMembers: '$level2Valid' },
+                        { level: 3, totalMembers: '$level3Members', validMembers: '$level3Valid' },
+                    ]
+                }
+            }
+        ];
+        
+        const teamStatsResult = await User.aggregate(teamStatsPipeline);
+        
+        // Combinamos los resultados.
+        const finalStats = {
+            totalCommission,
+            // Si el usuario no tiene equipo, teamStatsResult estará vacío.
+            totalTeamMembers: teamStatsResult[0]?.totalTeamMembers || 0,
+            totalTeamRecharge: teamStatsResult[0]?.totalTeamRecharge || 0,
+            totalTeamWithdrawals: teamStatsResult[0]?.totalTeamWithdrawals || 0,
+            levels: teamStatsResult[0]?.levels || [
                 { level: 1, totalMembers: 0, validMembers: 0 },
                 { level: 2, totalMembers: 0, validMembers: 0 },
                 { level: 3, totalMembers: 0, validMembers: 0 },
             ],
         };
 
-        // La función recursiva procesa los 3 niveles
-        processReferrals(user.referrals, 1, 3, stats);
-
-        res.json(stats);
+        res.json(finalStats);
 
     } catch (error) {
         console.error("Error al obtener estadísticas del equipo:", error);
@@ -78,6 +94,9 @@ const getTeamStats = async (req, res) => {
     }
 };
 
+
+// La función getLevelDetails se mantiene igual, ya que su lógica es diferente
+// y el método de populate anidado es aceptable para obtener una lista de usuarios.
 const getLevelDetails = async (req, res) => {
     try {
         const userId = new mongoose.Types.ObjectId(req.user.id);
@@ -87,9 +106,10 @@ const getLevelDetails = async (req, res) => {
             return res.status(400).json({ message: 'Nivel no válido.' });
         }
 
+        // Esta consulta es aceptable para esta funcionalidad específica.
         const user = await User.findById(userId).populate({
             path: 'referrals.user',
-            select: 'username photoFileId referrals', // Solo los campos necesarios
+            select: 'username photoFileId referrals',
             populate: {
                 path: 'referrals.user',
                 select: 'username photoFileId referrals',
@@ -105,7 +125,6 @@ const getLevelDetails = async (req, res) => {
         }
 
         let levelMembers = [];
-
         if (requestedLevel === 1) {
             levelMembers = user.referrals.map(r => r.user);
         } else if (requestedLevel === 2) {
@@ -126,13 +145,11 @@ const getLevelDetails = async (req, res) => {
             });
         }
         
-        // La obtención de la URL de la foto se delega al frontend o a un endpoint específico
-        // para no sobrecargar esta consulta.
         const finalResponse = levelMembers
-            .filter(Boolean) // Filtra cualquier posible nulo
+            .filter(Boolean)
             .map(member => ({
                 username: member.username,
-                photoFileId: member.photoFileId, // Enviamos el ID para que el frontend pueda construir la URL
+                photoFileId: member.photoFileId,
             }));
 
         res.json(finalResponse);

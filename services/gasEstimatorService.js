@@ -15,7 +15,7 @@ const USDT_BSC_ABI = [
 // [REMEDIATIO - REFACTOR] Se elimina la creación de un proveedor local.
 // const bscProvider = new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/');
 
-const MIN_BSC_GAS_PRICE_GWEI = 5;
+const MIN_BSC_GAS_PRICE_GWEI = 7;
 const MIN_BSC_GAS_PRICE_WEI = ethers.BigNumber.from(MIN_BSC_GAS_PRICE_GWEI).mul(ethers.BigNumber.from(10).pow(9));
 
 async function estimateBscSweepCost(fromAddress, usdtAmountToSweep) {
