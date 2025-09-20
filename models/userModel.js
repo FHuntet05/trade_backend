@@ -1,4 +1,4 @@
-// RUTA: backend/models/userModel.js (VERSIÓN "NEXUS - INITIAL STATE FIX")
+// RUTA: backend/models/userModel.js (VERSIÓN "NEXUS - CORE CYCLE FIX")
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
@@ -51,20 +51,18 @@ const userSchema = new mongoose.Schema({
     totalWithdrawal: { type: Number, default: 0 },
     currentVipLevel: { type: Number, default: 0 },
     
-    // [NEXUS ONBOARDING FIX] - INICIO DE LA CORRECCIÓN CRÍTICA
-    // Se añaden los campos de estado de minado con valores por defecto.
-    // Esto asegura que cada nuevo usuario tenga un estado inicial válido y predecible.
+    // [NEXUS CORE CYCLE FIX] - INICIO DE LA CORRECCIÓN
     effectiveMiningRate: { type: Number, default: 0 }, // NTX por día
     miningStatus: {
         type: String,
-        enum: ['IDLE', 'MINING', 'CLAIMABLE'], // Estados posibles del ciclo
-        default: 'IDLE' // El usuario empieza inactivo, listo para 'Empezar a Minar'
+        enum: ['IDLE', 'MINING', 'CLAIMABLE'],
+        default: 'IDLE' 
     },
     lastMiningClaim: {
         type: Date,
-        default: Date.now // Establece un punto de partida temporal para el ciclo
+        default: Date.now
     },
-    // [NEXUS ONBOARDING FIX] - FIN DE LA CORRECCIÓN CRÍTICA
+    // [NEXUS CORE CYCLE FIX] - FIN DE LA CORRECCIÓN
 
     // --- Estado de Tareas y Progreso ---
     claimedTasks: {
