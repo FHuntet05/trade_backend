@@ -1,35 +1,36 @@
-// RUTA: backend/models/settingsModel.js (VERSIÓN "NEXUS - STATE SYNC FIX")
+// RUTA: backend/models/settingsModel.js (VERSIÓN "NEXUS - REFINED & SIMPLIFIED")
 const mongoose = require('mongoose');
 
 const settingsSchema = new mongoose.Schema({
   singleton: { type: String, default: 'global_settings', unique: true },
   
-  // [NEXUS SYNC FIX] - INICIO DE LA CORRECIÓN
-  // Campo booleano para el control global de los retiros.
+  // Controles del Sistema
   withdrawalsEnabled: { type: Boolean, default: false },
-  // [NEXUS SYNC FIX] - FIN DE LA CORRECIÓN
-  
   maintenanceMode: { type: Boolean, default: false },
   maintenanceMessage: { type: String, trim: true, default: 'La aplicación está en mantenimiento. Vuelve más tarde.' },
+  
+  // Parámetros Financieros
   minimumWithdrawal: { type: Number, default: 1.0 },
   withdrawalFeePercent: { type: Number, default: 0 },
   swapFeePercent: { type: Number, default: 0 },
   minimumSwap: { type: Number, default: 10000 },
+
+  // Alertas y Notificaciones
   adminTelegramId: { type: String, trim: true, default: '' },
   bnbAlertThreshold: { type: Number, default: 0.05 },
   
-  // Comisiones por compra de herramientas
-  commissionLevel1: { type: Number, default: 0 },
-  commissionLevel2: { type: Number, default: 0 },
-  commissionLevel3: { type: Number, default: 0 },
+  // [NEXUS REFINEMENT] - INICIO DE LA REFACTORIZACIÓN
+  // Se mantienen únicamente las comisiones por el PRIMER DEPÓSITO.
+  depositCommissionLevel1: { type: Number, default: 0 }, // % de comisión por depósito Nivel 1
+  depositCommissionLevel2: { type: Number, default: 0 }, // % de comisión por depósito Nivel 2
+  depositCommissionLevel3: { type: Number, default: 0 }, // % de comisión por depósito Nivel 3
 
-  // Comisiones por el PRIMER DEPÓSITO de un referido.
-  depositCommissionLevel1: { type: Number, default: 0 },
-  depositCommissionLevel2: { type: Number, default: 0 },
-  depositCommissionLevel3: { type: Number, default: 0 },
-  
-  // [NEXUS SYNC FIX] - Campo para la comisión fija (restaurado)
-  fixedCommissionAmount: { type: Number, default: 0 },
+  // Los siguientes campos de comisión por compra han sido eliminados por ser obsoletos:
+  // - commissionLevel1
+  // - commissionLevel2
+  // - commissionLevel3
+  // - fixedCommissionAmount
+  // [NEXUS REFINEMENT] - FIN DE LA REFACTORIZACIÓN
 
 }, { timestamps: true });
 
