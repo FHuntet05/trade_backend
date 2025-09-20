@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN "NEXUS - TRUST PROXY")
+// backend/index.js (VERSIÓN "NEXUS - REFERRAL LOGIC FIXED")
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -54,11 +54,7 @@ const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// [NEXUS TRUST PROXY - CORRECCIÓN CRÍTICA]
-// Esta línea es esencial para que express-rate-limit funcione correctamente en Render.
-// Le dice a Express que confíe en el primer proxy que tiene delante (el de Render).
 app.set('trust proxy', 1);
-
 app.use(express.json());
 
 app.use((req, res, next) => {
@@ -115,7 +111,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
 app.use('/api/users', userRoutes);
 
-// ... (resto del archivo, lógica del bot y arranque del servidor sin cambios) ...
+// --- LÓGICA DEL BOT DE TELEGRAM ---
 
 const WELCOME_MESSAGE = `
 🤖 ¡Bienvenido a Nice Bot!\n\n
@@ -153,18 +149,35 @@ bot.command('start', async (ctx) => {
             const fullName = `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim();
             referredUser = new User({ telegramId: referredId, username, fullName: fullName || username, language: ctx.from.language_code || 'es' });
         }
+
+        // [NEXUS ONBOARDING FIX] - INICIO DE LA LÓGICA DE REFERIDOS CORREGIDA
         const canBeReferred = referrerId && referrerId !== referredId && !referredUser.referredBy;
+
         if (canBeReferred) {
+            console.log(`[Bot /start] Intentando asignar referente ${referrerId} al nuevo usuario ${referredId}.`.yellow);
             const referrerUser = await User.findOne({ telegramId: referrerId });
+            
             if (referrerUser) {
+                // Paso 1: Asignar el 'referredBy' al nuevo usuario.
                 referredUser.referredBy = referrerUser._id;
-                if (!referrerUser.referrals.some(ref => ref.user.equals(referredUser._id))) {
-                    referredUser.referrals.push({ level: 1, user: referredUser._id });
-                    await referrerUser.save();
+                console.log(`[Bot /start] Referente ${referrerUser.username} (${referrerId}) encontrado. Asignando...`.green);
+
+                // Paso 2: Añadir al nuevo usuario a la lista de 'referrals' del referente, evitando duplicados.
+                const isAlreadyReferred = referrerUser.referrals.some(ref => ref.user.equals(referredUser._id));
+                if (!isAlreadyReferred) {
+                    referrerUser.referrals.push({ level: 1, user: referredUser._id });
+                    await referrerUser.save(); // Guardamos los cambios en el referente.
+                    console.log(`[Bot /start] Nuevo usuario ${referredUser.username} añadido a la lista de referidos de ${referrerUser.username}.`.green.bold);
+                } else {
+                     console.log(`[Bot /start] El usuario ${referredUser.username} ya estaba en la lista de referidos de ${referrerUser.username}. No se realizan cambios.`.yellow);
                 }
+            } else {
+                console.log(`[Bot /start] ADVERTENCIA: El ID de referente ${referrerId} no fue encontrado en la base de datos.`.red);
             }
         }
-        await referredUser.save();
+        // [NEXUS ONBOARDING FIX] - FIN DE LA LÓGICA DE REFERIDOS CORREGIDA
+
+        await referredUser.save(); // Guardamos al nuevo/actualizado usuario.
         console.log(`[Bot /start] Perfil del usuario ${referredId} guardado/actualizado en la BD.`);
         
         const imageUrl = 'https://i.postimg.cc/8PqYj4zR/nicebot.jpg';
@@ -191,6 +204,7 @@ const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32
 const secretPath = `/api/telegram-webhook/${secretToken}`;
 app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
 
+// --- MIDDLEWARE DE ERRORES Y ARRANQUE DEL SERVIDOR ---
 app.use(notFound);
 app.use(errorHandler);
 

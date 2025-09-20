@@ -1,4 +1,4 @@
-// RUTA: backend/models/userModel.js (VERSIÓN NEXUS - VALIDATION FIX APPLIED)
+// RUTA: backend/models/userModel.js (VERSIÓN "NEXUS - INITIAL STATE FIX")
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
@@ -6,22 +6,18 @@ const transactionSchema = new mongoose.Schema({
     type: {
         type: String,
         required: true,
-        // ======================= INICIO DE LA CORRECCIÓN CRÍTICA =======================
         enum: [
             'deposit', 'withdrawal', 'purchase', 'mining_claim', 'referral_commission', 
             'task_reward', 'admin_credit', 'admin_debit', 'swap_ntx_to_usdt',
-            'admin_action' // <-- AÑADIDO: Nuevo tipo para registros de auditoría
+            'admin_action'
         ]
-        // ======================== FIN DE LA CORRECCIÓN CRÍTICA =========================
     },
     amount: { type: Number, required: true },
-    // ======================= INICIO DE LA CORRECCIÓN CRÍTICA =======================
     currency: { 
         type: String, 
         required: true, 
-        enum: ['USDT', 'NTX', 'SYSTEM'] // <-- AÑADIDO: 'SYSTEM' para acciones internas
+        enum: ['USDT', 'NTX', 'SYSTEM']
     },
-    // ======================== FIN DE LA CORRECCIÓN CRÍTICA =========================
     description: { type: String, required: true },
     status: { type: String, required: true, enum: ['pending', 'completed', 'rejected', 'failed'], default: 'completed' },
     metadata: { type: Map, of: String }
@@ -35,6 +31,7 @@ const userSchema = new mongoose.Schema({
     fullName: { type: String, trim: true },
     password: { type: String, select: false },
     photoFileId: { type: String },
+    language: { type: String, default: 'es' },
 
     // --- Roles y Permisos ---
     role: { type: String, enum: ['user', 'admin'], default: 'user' },
@@ -54,6 +51,21 @@ const userSchema = new mongoose.Schema({
     totalWithdrawal: { type: Number, default: 0 },
     currentVipLevel: { type: Number, default: 0 },
     
+    // [NEXUS ONBOARDING FIX] - INICIO DE LA CORRECCIÓN CRÍTICA
+    // Se añaden los campos de estado de minado con valores por defecto.
+    // Esto asegura que cada nuevo usuario tenga un estado inicial válido y predecible.
+    effectiveMiningRate: { type: Number, default: 0 }, // NTX por día
+    miningStatus: {
+        type: String,
+        enum: ['IDLE', 'MINING', 'CLAIMABLE'], // Estados posibles del ciclo
+        default: 'IDLE' // El usuario empieza inactivo, listo para 'Empezar a Minar'
+    },
+    lastMiningClaim: {
+        type: Date,
+        default: Date.now // Establece un punto de partida temporal para el ciclo
+    },
+    // [NEXUS ONBOARDING FIX] - FIN DE LA CORRECCIÓN CRÍTICA
+
     // --- Estado de Tareas y Progreso ---
     claimedTasks: {
         type: Map,

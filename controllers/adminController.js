@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN NEXUS CONTROL - AUDIT & REFACTOR)
+// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS ONBOARDING - FULL IMPLEMENTATION")
 const User = require('../models/userModel');
 const Factory = require('../models/toolModel');
 const Setting = require('../models/settingsModel');
@@ -162,17 +162,13 @@ const processWithdrawal = asyncHandler(async (req, res) => {
 
 // --- Tesorería ---
 const sweepFunds = asyncHandler(async (req, res) => {
-  console.log('[Sweep] Solicitud de barrido de fondos recibida.');
   const { walletsToSweep } = req.body;
   const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
   if (!SWEEP_DESTINATION_WALLET) {
-    console.error('[CRITICAL] SWEEP_DESTINATION_WALLET no está configurada en .env');
-    res.status(500);
-    throw new Error('Error crítico de configuración de seguridad del servidor.');
+    res.status(500); throw new Error('Error crítico de configuración de seguridad del servidor.');
   }
   if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
-    res.status(400);
-    throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array).");
+    res.status(400); throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array).");
   }
   const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
   if (wallets.length === 0) {
@@ -184,28 +180,22 @@ const sweepFunds = asyncHandler(async (req, res) => {
       const txHash = await transactionService.sweepUsdtOnBscFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET);
       report.summary.successfulSweeps++;
       report.details.push({ address: wallet.address, status: 'SUCCESS', txHash });
-      console.log(`[Sweep] Éxito en barrido de ${wallet.address}. Hash: ${txHash}`);
     } catch (error) {
       report.summary.failedSweeps++;
       report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message });
-      console.error(`[Sweep] Fallo en barrido de ${wallet.address}: ${error.message}`);
     }
   }
   res.json(report);
 });
 
 const sweepGas = asyncHandler(async (req, res) => {
-  console.log('[SweepGas] Solicitud de barrido de gas (BNB) recibida.');
   const { walletsToSweep } = req.body;
   const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
   if (!SWEEP_DESTINATION_WALLET) {
-    console.error('[CRITICAL] SWEEP_DESTINATION_WALLET no está configurada en .env');
-    res.status(500);
-    throw new Error('Error crítico de configuración de seguridad del servidor.');
+    res.status(500); throw new Error('Error crítico de configuración de seguridad del servidor.');
   }
   if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
-    res.status(400);
-    throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array).");
+    res.status(400); throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array).");
   }
   const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
   if (wallets.length === 0) {
@@ -217,11 +207,9 @@ const sweepGas = asyncHandler(async (req, res) => {
       const txHash = await transactionService.sweepBnbFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET);
       report.summary.successfulSweeps++;
       report.details.push({ address: wallet.address, status: 'SUCCESS', txHash });
-      console.log(`[SweepGas] Éxito en barrido de gas de ${wallet.address}. Hash: ${txHash}`);
     } catch (error) {
       report.summary.failedSweeps++;
       report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message });
-      console.error(`[SweepGas] Fallo en barrido de gas de ${wallet.address}: ${error.message}`);
     }
   }
   res.json(report);
@@ -293,8 +281,7 @@ const analyzeGasNeeds = asyncHandler(async (req, res) => {
 const dispatchGas = asyncHandler(async (req, res) => {
   const { chain, targets } = req.body;
   if (chain !== 'BSC' || !Array.isArray(targets) || targets.length === 0) {
-    res.status(400);
-    throw new Error("Petición inválida.");
+    res.status(400); throw new Error("Petición inválida.");
   }
   const report = { summary: { success: 0, failed: 0, totalDispatched: 0 }, details: [] };
   for (const target of targets) {
@@ -329,82 +316,40 @@ const getAllUsers = asyncHandler(async (req, res) => {
 
 const getUserDetails = asyncHandler(async (req, res) => {
     const user = await User.findById(req.params.id).select('-password');
-    if (!user) {
-        res.status(404);
-        throw new Error('Usuario no encontrado');
-    }
-
+    if (!user) { res.status(404); throw new Error('Usuario no encontrado'); }
     const photoUrl = await getTemporaryPhotoUrl(user.photoFileId);
-    
     const cryptoWallets = await CryptoWallet.find({ user: user._id });
     const transactions = user.transactions || [];
-
     res.json({
-        user: {
-            ...user.toObject(),
-            photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL,
-            balance: user.balance || { usdt: 0, ntx: 0 }
-        },
+        user: { ...user.toObject(), photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL, balance: user.balance || { usdt: 0, ntx: 0 } },
         cryptoWallets: cryptoWallets || [],
-        transactions: {
-            items: transactions,
-            page: 1,
-            totalPages: 1
-        }
+        transactions: { items: transactions, page: 1, totalPages: 1 }
     });
 });
 
 const updateUser = asyncHandler(async (req, res) => {
   const { username, password, balanceUsdt, status, role } = req.body;
-  
   const user = await User.findById(req.params.id);
   if (!user) { res.status(404); throw new Error('Usuario no encontrado.'); }
-
   const originalStatus = user.status;
   const originalRole = user.role;
-
   const superAdminId = process.env.SUPER_ADMIN_TELEGRAM_ID?.toString();
   const isRequesterSuper = req.user.telegramId?.toString() === superAdminId;
-
   if (!isRequesterSuper) {
-    if (user.role === 'admin' || user.telegramId?.toString() === superAdminId) {
-      res.status(403); throw new Error('No puedes modificar a este usuario.');
-    }
-    if (role && role !== user.role) {
-      res.status(403); throw new Error('No tienes permisos para promover a administrador.');
-    }
+    if (user.role === 'admin' || user.telegramId?.toString() === superAdminId) { res.status(403); throw new Error('No puedes modificar a este usuario.'); }
+    if (role && role !== user.role) { res.status(403); throw new Error('No tienes permisos para promover a administrador.'); }
   }
-
   user.username = username ?? user.username;
   user.balance.usdt = balanceUsdt ?? user.balance.usdt;
-  
-  // [NEXUS CONTROL] - Lógica de actualización de estado y rol con auditoría
   if (status && status !== originalStatus) {
     user.status = status;
-    user.transactions.push({
-      type: 'admin_action',
-      currency: 'SYSTEM',
-      amount: 0,
-      description: `Estado cambiado de '${originalStatus}' a '${status}' por el admin '${req.user.username}'.`
-    });
+    user.transactions.push({ type: 'admin_action', currency: 'SYSTEM', amount: 0, description: `Estado cambiado de '${originalStatus}' a '${status}' por el admin '${req.user.username}'.` });
   }
-
   if (isRequesterSuper && role && role !== originalRole) {
     user.role = role;
-    user.transactions.push({
-      type: 'admin_action',
-      currency: 'SYSTEM',
-      amount: 0,
-      description: `Rol cambiado de '${originalRole}' a '${role}' por el Super Admin '${req.user.username}'.`
-    });
+    user.transactions.push({ type: 'admin_action', currency: 'SYSTEM', amount: 0, description: `Rol cambiado de '${originalRole}' a '${role}' por el Super Admin '${req.user.username}'.` });
   }
-  
-  // La contraseña de un usuario normal no se maneja aquí.
-  // La de un admin se maneja en el endpoint de reseteo.
-  if (password && user.role === 'admin') {
-      user.password = password;
-  }
-  
+  if (password && user.role === 'admin') { user.password = password; }
   const updatedUser = await user.save();
   res.json(updatedUser);
 });
@@ -413,66 +358,27 @@ const adjustUserBalance = asyncHandler(async (req, res) => {
   const { id } = req.params; const { amount, currency } = req.body;
   const user = await User.findById(id);
   if (!user) { res.status(404); throw new Error('Usuario no encontrado'); }
-  if (!['usdt', 'btc', 'eth'].includes(currency)) {
-    res.status(400); throw new Error('Moneda inválida.');
-  }
+  if (!['usdt', 'btc', 'eth'].includes(currency)) { res.status(400); throw new Error('Moneda inválida.'); }
   user.balance[currency] = (user.balance[currency] || 0) + amount;
   await user.save(); res.json({ message: 'Saldo ajustado correctamente.', balance: user.balance });
 });
 
-
-// [NEXUS CONTROL] - Endpoint dedicado y seguro para resetear contraseñas de admins
 const resetAdminPassword = asyncHandler(async (req, res) => {
   const { id: adminId } = req.params;
-
   const adminUser = await User.findById(adminId);
-
-  // Validación 1: El usuario debe existir
-  if (!adminUser) {
-    res.status(404);
-    throw new Error('Usuario administrador no encontrado.');
-  }
-
-  // Validación 2: El usuario objetivo DEBE ser un administrador
-  if (adminUser.role !== 'admin') {
-    res.status(400);
-    throw new Error('Solo se puede resetear la contraseña de una cuenta de administrador.');
-  }
-
-  // Validación 3: Un administrador no puede resetear su propia contraseña desde aquí
-  if (adminUser._id.toString() === req.user._id.toString()) {
-      res.status(403);
-      throw new Error('No puedes resetear tu propia contraseña desde esta herramienta.');
-  }
-  
+  if (!adminUser) { res.status(404); throw new Error('Usuario administrador no encontrado.'); }
+  if (adminUser.role !== 'admin') { res.status(400); throw new Error('Solo se puede resetear la contraseña de una cuenta de administrador.'); }
+  if (adminUser._id.toString() === req.user._id.toString()) { res.status(403); throw new Error('No puedes resetear tu propia contraseña desde esta herramienta.'); }
   const superAdminId = process.env.SUPER_ADMIN_TELEGRAM_ID?.toString();
   const isTargetSuperAdmin = adminUser.telegramId?.toString() === superAdminId;
   const isRequesterSuper = req.user.telegramId?.toString() === superAdminId;
-  
-  // Validación 4: Solo un Super Admin puede resetear la contraseña de otro Super Admin
-  if(isTargetSuperAdmin && !isRequesterSuper){
-    res.status(403);
-    throw new Error('Solo el Super Admin puede resetear su propia contraseña.');
-  }
-
+  if(isTargetSuperAdmin && !isRequesterSuper){ res.status(403); throw new Error('Solo el Super Admin puede resetear su propia contraseña.'); }
   const temporaryPassword = crypto.randomBytes(8).toString('hex');
   adminUser.password = temporaryPassword;
   adminUser.mustResetPassword = true;
-  
-  // Auditoría
-  adminUser.transactions.push({
-    type: 'admin_action',
-    currency: 'SYSTEM',
-    amount: 0,
-    description: `Contraseña de admin reseteada por '${req.user.username}'.`
-  });
-
+  adminUser.transactions.push({ type: 'admin_action', currency: 'SYSTEM', amount: 0, description: `Contraseña de admin reseteada por '${req.user.username}'.` });
   await adminUser.save();
-  
-  res.json({ 
-    message: `Contraseña reseteada para ${adminUser.username}.`, 
-    temporaryPassword 
-  });
+  res.json({ message: `Contraseña reseteada para ${adminUser.username}.`, temporaryPassword });
 });
 
 // --- Transacciones Globales ---
@@ -481,57 +387,22 @@ const getAllTransactions = asyncHandler(async (req, res) => {
     const limit = parseInt(req.query.limit) || 15;
     const search = req.query.search || '';
     const type = req.query.type || '';
-
     let matchQuery = { 'transactions': { $exists: true, $ne: [] } };
-    
-    if (type) {
-        matchQuery['transactions.type'] = type;
-    }
-    
-    if (search) {
-        const searchRegex = { $regex: search, $options: 'i' };
-        matchQuery.$or = [
-            { 'username': searchRegex },
-            { 'transactions.description': searchRegex }
-        ];
-    }
-
+    if (type) { matchQuery['transactions.type'] = type; }
+    if (search) { const searchRegex = { $regex: search, $options: 'i' }; matchQuery.$or = [ { 'username': searchRegex }, { 'transactions.description': searchRegex } ]; }
     const aggregationPipeline = [
         { $match: matchQuery },
         { $unwind: '$transactions' },
         ...(type ? [{ $match: { 'transactions.type': type } }] : []),
         ...(search ? [{ $match: { $or: [{ 'username': { $regex: search, $options: 'i' } }, { 'transactions.description': { $regex: search, $options: 'i' } }] } }] : []),
         { $sort: { 'transactions.createdAt': -1 } },
-        {
-            $project: {
-                _id: '$transactions._id',
-                amount: '$transactions.amount',
-                currency: '$transactions.currency',
-                type: '$transactions.type',
-                description: '$transactions.description',
-                status: '$transactions.status',
-                createdAt: '$transactions.createdAt',
-                user: { _id: '$_id', username: '$username' }
-            }
-        }
+        { $project: { _id: '$transactions._id', amount: '$transactions.amount', currency: '$transactions.currency', type: '$transactions.type', description: '$transactions.description', status: '$transactions.status', createdAt: '$transactions.createdAt', user: { _id: '$_id', username: '$username' } } }
     ];
-
     const countPipeline = [...aggregationPipeline, { $count: 'total' }];
     const paginatedPipeline = [...aggregationPipeline, { $skip: (page - 1) * limit }, { $limit: limit }];
-
-    const [totalResult, transactions] = await Promise.all([
-        User.aggregate(countPipeline),
-        User.aggregate(paginatedPipeline)
-    ]);
-
+    const [totalResult, transactions] = await Promise.all([ User.aggregate(countPipeline), User.aggregate(paginatedPipeline) ]);
     const total = totalResult.length > 0 ? totalResult[0].total : 0;
-    
-    res.json({
-        transactions: transactions || [],
-        page,
-        pages: Math.ceil(total / limit),
-        total
-    });
+    res.json({ transactions: transactions || [], page, pages: Math.ceil(total / limit), total });
 });
 
 // --- Monitor de Blockchain ---
@@ -543,14 +414,49 @@ const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
 const getAllFactories = asyncHandler(async (req, res) => {
   const factories = await Factory.find(); res.json(factories);
 });
+
 const createFactory = asyncHandler(async (req, res) => {
-  const factory = new Factory(req.body); const createdFactory = await factory.save(); res.status(201).json(createdFactory);
+  const { isFree, ...factoryData } = req.body;
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction();
+    if (isFree) {
+      await Factory.updateMany({ isFree: true }, { $set: { isFree: false } }, { session });
+    }
+    const factory = new Factory({ ...factoryData, isFree });
+    const createdFactory = await factory.save({ session });
+    await session.commitTransaction();
+    res.status(201).json(createdFactory);
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
 });
+
 const updateFactory = asyncHandler(async (req, res) => {
-  const factory = await Factory.findById(req.params.id);
-  if (!factory) { res.status(404); throw new Error('Fábrica no encontrada'); }
-  Object.assign(factory, req.body); const updatedFactory = await factory.save(); res.json(updatedFactory);
+  const { isFree, ...factoryData } = req.body;
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction();
+    if (isFree) {
+      await Factory.updateMany({ _id: { $ne: req.params.id }, isFree: true }, { $set: { isFree: false } }, { session });
+    }
+    const factory = await Factory.findById(req.params.id);
+    if (!factory) { res.status(404); throw new Error('Fábrica no encontrada'); }
+    Object.assign(factory, { ...factoryData, isFree });
+    const updatedFactory = await factory.save({ session });
+    await session.commitTransaction();
+    res.json(updatedFactory);
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
 });
+
 const deleteFactory = asyncHandler(async (req, res) => {
   const factory = await Factory.findById(req.params.id);
   if (!factory) { res.status(404); throw new Error('Fábrica no encontrada'); }
@@ -582,11 +488,31 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
 
 // --- Notificaciones ---
 const sendBroadcastNotification = asyncHandler(async (req, res) => {
-  const { message } = req.body;
-  if (!message) { res.status(400); throw new Error('Mensaje requerido'); }
-  const users = await User.find().select('telegramId');
-  await Promise.all(users.map(u => sendTelegramMessage(u.telegramId, message)));
-  res.json({ message: 'Notificación enviada a todos los usuarios' });
+  const { message, imageUrl, buttonUrl, buttonText } = req.body;
+  if (!message) { res.status(400); throw new Error('El mensaje es requerido.'); }
+  const users = await User.find({ status: 'active' }).select('telegramId');
+  
+  // Creamos un objeto de opciones para el mensaje enriquecido.
+  const options = {};
+  if (imageUrl) options.photo = imageUrl;
+  if (buttonUrl && buttonText) {
+      options.reply_markup = {
+          inline_keyboard: [[{ text: buttonText, url: buttonUrl }]]
+      };
+  }
+
+  // Promise.allSettled es más robusto para envíos masivos.
+  const results = await Promise.allSettled(
+    users.map(u => sendTelegramMessage(u.telegramId, message, options))
+  );
+
+  const successfulSends = results.filter(r => r.status === 'fulfilled').length;
+  const failedSends = results.length - successfulSends;
+  
+  res.json({ 
+      message: `Notificación enviada. Éxitos: ${successfulSends}, Fallos: ${failedSends}.`,
+      details: { successful: successfulSends, failed: failedSends }
+  });
 });
 
 module.exports = {
@@ -597,9 +523,7 @@ module.exports = {
   getUserDetails,
   updateUser,
   adjustUserBalance,
-  // promoteUserToAdmin, (obsoleto, manejado por updateUser)
-  // demoteAdminToUser, (obsoleto, manejado por updateUser)
-  resetAdminPassword, // Reemplaza la lógica anterior
+  resetAdminPassword,
   getAllTransactions,
   getPendingBlockchainTxs,
   getAllFactories,
