@@ -148,19 +148,24 @@ app.use('/api/users', userRoutes);
 // --- LÓGICA DEL BOT DE TELEGRAM ---
 
 const WELCOME_MESSAGE = `
-🤖 ¡Bienvenido a Nice Bot!\n\n
-🔐 Tu acceso privilegiado al universo de la minería digital inteligente. Conecta con el sistema NTX y transforma tu actividad en recompensas exclusivas.\n
-📘 ¿Cómo funciona tu experiencia?\n
-🔹 1. Activa tu Minería Diaria\n\n
-⚒️ Inicia sesión cada 24 horas y comienza a generar NTX, el token neural de la red Nice Bot.\n
-🔹 2. Optimiza tu Potencia\n\n
-🛠️ Accede a la tienda y mejora tu rig con herramientas compradas en USDT / TRX / BNB. Velocidad y rentabilidad 🔥\n
-🔹 3. Expande tu Red Inteligente\n\n
-🧠 Invita aliados con tu enlace personal y multiplica tu influencia. Cada invitado te acerca al próximo nivel 💸\n
-🔹 4. Reclama y Evoluciona\n\n
-💎 Recupera tus NTX minados y potencia tus estrategias en el ecosistema tecnológico.\n
-🚀 ¿Listo para comenzar tu travesía digital con Nice Bot?
-🔘 Pulsa el botón inferior y libera el poder de la minería inteligente.`;
+🌐🚀 NEW PROJECT: BlockSphere 🚀🌐\n\n  
+
+📢 Official launch: September 22 2025 \n 
+✔️ PERMANENT project, fully backed by blockchain.\n 
+🔒 All funds are protected and managed with complete security.\n\n
+
+💰 Guaranteed daily earnings:\n  
+📦 Active investment/mining packages:\n
+🔹 Package 1: 3 USDT → 1.5 USDT daily\n  
+🔹 Package 2: 8 USDT → 4 USDT daily\n  
+🔹 Package 3: 16 USDT → 8 USDT daily\n 
+🔹 Package 4: 32 USDT → 16 USDT daily\n 
+🔹 Package 5: 75 USDT → 37.5 USDT daily\n\n  
+
+✨ This project is here to stay.\n  
+📈 BlockSphere will provide steady earnings and grow permanently.\n 
+🔥 A solid and transparent system that truly makes a difference in the market.`;
+
 
 bot.command('start', async (ctx) => {
     try {
@@ -212,7 +217,7 @@ bot.command('start', async (ctx) => {
         await referredUser.save();
         console.log(`[Bot /start] Perfil del usuario ${referredId} guardado/actualizado en la BD.`);
         
-        const imageUrl = 'https://i.postimg.cc/8PqYj4zR/nicebot.jpg';
+        const imageUrl = 'https://i.postimg.cc/XqqqFR0C/photo-2025-09-20-02-42-29.jpg';
         const webAppUrl = process.env.CLIENT_URL;
         
         await ctx.replyWithPhoto(imageUrl, {
