@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - AUTO PROVISIONING & REFERRAL FIX")
+// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - NEW USER LOGIC FIX")
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
@@ -36,28 +36,27 @@ const syncUser = async (req, res) => {
         }
 
         const telegramId = telegramUser.id.toString();
-        let isNewUser = false;
         let user = await User.findOne({ telegramId: telegramId });
         
+        // [NEXUS FINAL FIX] - INICIO DE LA LÓGICA DE REGISTRO CORREGIDA
+        // No usamos 'isNewUser'. En su lugar, verificamos si el usuario necesita ser provisionado.
         if (!user) {
-            isNewUser = true;
-            console.log(`[Auth Sync] Usuario ${telegramId} no encontrado. Creando nuevo perfil con valores por defecto.`);
+            console.log(`[Auth Sync] Usuario ${telegramId} no encontrado por sync. Creando nuevo perfil.`);
             user = new User({
                 telegramId: telegramId,
                 username: telegramUser.username || `user_${telegramId}`,
                 fullName: `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim() || `user_${telegramId}`,
                 language: telegramUser.language_code || 'es'
             });
-        } else {
-             user.username = telegramUser.username || user.username;
-             user.fullName = `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim() || user.fullName;
-             user.language = telegramUser.language_code || user.language;
+            // Al ser un objeto Mongoose nuevo, pasará la siguiente comprobación.
         }
 
-        if (isNewUser) {
+        // La condición clave: ¿El usuario ya tiene herramientas? Si no, es funcionalmente "nuevo".
+        if (user.activeTools.length === 0) {
+            console.log(`[Auth Sync] El usuario ${user.username} no tiene herramientas activas. Provisionando herramienta gratuita...`);
             const freeTool = await Tool.findOne({ isFree: true }).lean();
             if (freeTool) {
-                console.log(`[Auth Sync] Herramienta gratuita encontrada: "${freeTool.name}". Asignando al nuevo usuario.`);
+                console.log(`[Auth Sync] Herramienta gratuita encontrada: "${freeTool.name}". Asignando...`);
                 const now = new Date();
                 const expiryDate = new Date(now.getTime() + freeTool.durationDays * 24 * 60 * 60 * 1000);
                 
@@ -67,16 +66,21 @@ const syncUser = async (req, res) => {
                     expiryDate: expiryDate,
                 });
                 
-                // [NEXUS PROVISIONING] - Asignación explícita del estado inicial
                 user.effectiveMiningRate = freeTool.miningBoost;
-                user.miningStatus = 'IDLE'; // Se establece explícitamente para claridad y seguridad.
-                user.lastMiningClaim = now; // Se resetea el reloj al momento de la creación.
+                user.miningStatus = 'IDLE';
+                user.lastMiningClaim = now;
 
                 console.log(`[Auth Sync] Estado inicial para ${user.username} configurado: Tasa=${user.effectiveMiningRate}, Estado=${user.miningStatus}`.green);
             } else {
-                console.error('[Auth Sync] ERROR CRÍTICO: No se encontró la herramienta gratuita auto-provisionada. El nuevo usuario no tendrá poder de minado.'.red.bold);
+                console.error('[Auth Sync] ERROR CRÍTICO: No se encontró la herramienta gratuita. El nuevo usuario no tendrá poder de minado.'.red.bold);
             }
         }
+        // [NEXUS FINAL FIX] - FIN DE LA LÓGICA DE REGISTRO CORREGIDA
+        
+        // Actualizamos datos básicos en cada sincronización por si cambian en Telegram.
+        user.username = telegramUser.username || user.username;
+        user.fullName = `${telegramUser.first_name || ''} ${telegramUser.last_name || ''}`.trim() || user.fullName;
+        user.language = telegramUser.language_code || user.language;
         
         await user.save();
         await user.populate('referredBy', 'username fullName');
