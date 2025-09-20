@@ -99,7 +99,7 @@ const getTaskStatus = asyncHandler(async (req, res) => {
     const allTasks = [
         { taskId: 'boughtUpgrade', reward: 1500, target: 1 },
         { taskId: 'inviteFriends', reward: 1000, target: 10 },
-        { taskId: 'joinedTelegram', reward: 500, target: 1, link: 'https://t.me/BlockSphere_Channel' }
+        { taskId: 'joinedTelegram', reward: 500, target: 1, link: 'https://t.me/BlockSphereOficial' }
     ];
 
     const userTaskStatus = allTasks.map(task => {
