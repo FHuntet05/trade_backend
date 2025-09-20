@@ -1,4 +1,4 @@
-// RUTA: backend/services/transactionMonitor.js (VERSIÓN "NEXUS - RPC UPGRADE")
+// RUTA: backend/services/transactionMonitor.js (VERSIÓN "NEXUS - BATCH SCANNING FIX")
 
 const { ethers } = require('ethers');
 const User = require('../models/userModel');
@@ -15,13 +15,17 @@ const USDT_INTERFACE = new ethers.utils.Interface(USDT_ABI);
 const USDT_TRANSFER_TOPIC = USDT_INTERFACE.getEventTopic('Transfer');
 const BSC_API_KEY = process.env.BSCSCAN_API_KEY;
 
-// --- FUNCIÓN CENTRAL DE PROCESAMIENTO DE DEPÓSITOS ---
+// [NEXUS BATCH FIX] - Constante para controlar el tamaño del lote de escaneo RPC.
+const RPC_BATCH_SIZE = 2000; // Un valor seguro para la mayoría de los proveedores RPC.
+
+// --- FUNCIÓN CENTRAL DE PROCESAMIENTO DE DEPÓSITOS (Sin cambios) ---
 async function processDeposit(wallet, amount, currency, txHash, blockNumber, fromAddress) {
     const existingTx = await Transaction.findOne({ 'metadata.txid': txHash });
     if (existingTx) return;
 
     console.log(`[ProcessDeposit] Procesando nuevo depósito: ${amount} ${currency} para usuario ${wallet.user} (TXID: ${txHash})`);
-
+    
+    // Asumimos que la lógica de precio y comisiones funciona como se diseñó.
     const amountInUSDT = currency === 'USDT' ? amount : (amount * (await blockchainService.getPrice('BNB')));
     if (amountInUSDT === null) {
         console.error(`[ProcessDeposit] No se pudo obtener el precio para ${currency}. Saltando TX ${txHash}`);
@@ -67,20 +71,18 @@ async function processDeposit(wallet, amount, currency, txHash, blockNumber, fro
     }
 }
 
-// --- NUEVO ESCÁNER RPC PARA USDT ---
+// --- ESCÁNER RPC PARA USDT (Sin cambios) ---
 async function scanUsdtDepositsRpc(wallets, startBlock, endBlock) {
     if (startBlock > endBlock) return;
-    console.log(`[Monitor RPC] Escaneando eventos USDT del bloque ${startBlock} al ${endBlock}...`);
+    console.log(`[Monitor RPC] Escaneando eventos USDT del bloque ${startBlock} al ${endBlock} (${endBlock - startBlock + 1} bloques)...`);
     
-    // Mapeamos wallets a minúsculas para comparaciones consistentes.
     const walletMap = new Map(wallets.map(w => [w.address.toLowerCase(), w]));
 
     const filter = {
         address: USDT_CONTRACT_ADDRESS,
         topics: [
             USDT_TRANSFER_TOPIC,
-            null, // Cualquier remitente
-            // Codificamos los destinatarios (nuestras wallets) en el topic3
+            null,
             Array.from(walletMap.keys()).map(address => ethers.utils.hexZeroPad(address, 32))
         ],
         fromBlock: startBlock,
@@ -94,16 +96,17 @@ async function scanUsdtDepositsRpc(wallets, startBlock, endBlock) {
             const toAddress = parsedLog.args.to.toLowerCase();
             const wallet = walletMap.get(toAddress);
             if (wallet) {
-                const amount = parseFloat(ethers.utils.formatUnits(parsedLog.args.value, 18)); // USDT tiene 18 decimales
+                const amount = parseFloat(ethers.utils.formatUnits(parsedLog.args.value, 18));
                 await processDeposit(wallet, amount, 'USDT', log.transactionHash, log.blockNumber, parsedLog.args.from);
             }
         }
     } catch (error) {
-        console.error(`[Monitor RPC] Error al obtener logs de eventos USDT: ${error.message}`);
+        console.error(`[Monitor RPC] Error al obtener logs de eventos USDT: ${error.message}`.red);
+        throw error; // Relanzamos el error para que el bucle principal lo maneje.
     }
 }
 
-// --- ESCÁNER DE COMPATIBILIDAD PARA BNB (vía BscScan) ---
+// --- ESCÁNER DE COMPATIBILIDAD PARA BNB (Sin cambios) ---
 async function scanBnbDepositsBscScan(wallet, startBlock, endBlock) {
     try {
         const url = `https://api.bscscan.com/api?module=account&action=txlist&address=${wallet.address}&startblock=${startBlock}&endblock=${endBlock}&sort=asc&apikey=${BSC_API_KEY}`;
@@ -122,9 +125,9 @@ async function scanBnbDepositsBscScan(wallet, startBlock, endBlock) {
     }
 }
 
-// --- ORQUESTADOR PRINCIPAL DEL MONITOREO ---
+// --- ORQUESTADOR PRINCIPAL DEL MONITOREO (REFACTORIZADO) ---
 const startMonitoring = () => {
-    console.log('✅ Iniciando servicio de monitoreo de transacciones (RPC-First)...'.green.bold);
+    console.log('✅ Iniciando servicio de monitoreo de transacciones (RPC-First con Batching)...'.green.bold);
 
     const runChecks = async () => {
         console.log("--- [Monitor] Iniciando ciclo de monitoreo ---");
@@ -136,27 +139,43 @@ const startMonitoring = () => {
 
         try {
             const currentNetworkBlock = await blockchainService.provider.getBlockNumber();
-            let lastScannedBlock = (await CryptoWallet.findOne({ chain: 'BSC' }).sort({ lastScannedBlock: -1 }).select('lastScannedBlock'))?.lastScannedBlock || currentNetworkBlock - 1;
+            let lastProcessedBlock = (await CryptoWallet.findOne({ chain: 'BSC' }).sort({ lastScannedBlock: -1 }).select('lastScannedBlock'))?.lastScannedBlock || currentNetworkBlock - 1;
             
-            const fromBlock = lastScannedBlock + 1;
+            let fromBlock = lastProcessedBlock + 1;
             const toBlock = currentNetworkBlock;
 
-            if (fromBlock <= toBlock) {
-                console.log(`[Monitor] Bloque de red actual: ${toBlock}. Escaneando desde: ${fromBlock}`);
-                await scanUsdtDepositsRpc(wallets, fromBlock, toBlock);
-                
-                // Escaneamos BNB para cada wallet individualmente
-                for (const wallet of wallets) {
-                    await scanBnbDepositsBscScan(wallet, fromBlock, toBlock);
-                    await new Promise(resolve => setTimeout(resolve, 300)); // Pequeña pausa para no saturar la API
-                }
-
-                await CryptoWallet.updateMany({ chain: 'BSC' }, { $set: { lastScannedBlock: toBlock } });
-                console.log(`[Monitor] Actualizado 'lastScannedBlock' a ${toBlock} para todas las wallets BSC.`);
-            } else {
+            if (fromBlock > toBlock) {
                 console.log('[Monitor] El sistema está sincronizado. No hay nuevos bloques para escanear.');
-            }
+            } else {
+                 console.log(`[Monitor] Bloque de red actual: ${toBlock}. Sincronizando desde: ${fromBlock}`);
 
+                // [NEXUS BATCH FIX] - Bucle de escaneo por lotes
+                while (fromBlock <= toBlock) {
+                    const batchEndBlock = Math.min(fromBlock + RPC_BATCH_SIZE - 1, toBlock);
+                    
+                    try {
+                        // Escaneamos el lote para USDT vía RPC
+                        await scanUsdtDepositsRpc(wallets, fromBlock, batchEndBlock);
+                        
+                        // Escaneamos el mismo lote para BNB vía BscScan
+                        for (const wallet of wallets) {
+                            await scanBnbDepositsBscScan(wallet, fromBlock, batchEndBlock);
+                            await new Promise(resolve => setTimeout(resolve, 250)); // Pausa entre wallets
+                        }
+                        
+                        // Si el lote se procesó sin errores, actualizamos el progreso
+                        await CryptoWallet.updateMany({ chain: 'BSC' }, { $set: { lastScannedBlock: batchEndBlock } });
+                        console.log(`[Monitor] Lote ${fromBlock}-${batchEndBlock} procesado. 'lastScannedBlock' actualizado a ${batchEndBlock}.`.green);
+                        
+                        fromBlock = batchEndBlock + 1; // Preparamos el inicio del siguiente lote
+                    } catch (batchError) {
+                        console.error(`[Monitor] Fallo crítico en el lote ${fromBlock}-${batchEndBlock}. El ciclo se reintentará en la próxima ejecución.`.red.bold);
+                        // Rompemos el bucle while para no continuar si un lote falla.
+                        // La próxima ejecución de runChecks comenzará desde el último 'lastProcessedBlock' guardado.
+                        break; 
+                    }
+                }
+            }
         } catch (error) {
             console.error('[Monitor] Error en el ciclo principal de monitoreo:', error);
         }
