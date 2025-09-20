@@ -1,17 +1,12 @@
-// RUTA: backend/controllers/taskController.js (VERSIÓN NEXUS - PERSISTENCIA ATÓMICA DEFINITIVA)
+// RUTA: backend/controllers/taskController.js (VERSIÓN "NEXUS - TASK LOGIC FIX")
 const asyncHandler = require('express-async-handler');
 const User = require('../models/userModel.js');
+const Tool = require('../models/toolModel.js'); // Importamos Tool para la lógica de populate
 
 /**
  * @desc Marca la tarea de Telegram como visitada y reclama la recompensa atómicamente.
  * @route POST /api/tasks/mark-as-visited
  * @access Private
- *
- * SOLUCIÓN ATÓMICA DEFINITIVA: La versión anterior fallaba en usuarios nuevos.
- * Esta nueva versión utiliza una consulta condicional robusta. La consulta
- * busca al usuario SOLO SI 'claimedTasks.joinedTelegram' NO ES EXACTAMENTE 'true'.
- * Esto cubre tanto el caso en que el campo no existe (es undefined) como el caso
- * en que es false. Es la única forma de garantizar un único reclamo.
  */
 const markTaskAsVisited = asyncHandler(async (req, res) => {
     const { taskId } = req.body;
@@ -21,31 +16,23 @@ const markTaskAsVisited = asyncHandler(async (req, res) => {
 
     const reward = 500;
 
-    // --- LA CORRECCIÓN ATÓMICA DEFINITIVA ---
-    const updatedUser = await User.findOneAndUpdate( // Usamos findOneAndUpdate para mayor control
+    const updatedUser = await User.findOneAndUpdate(
+        { _id: req.user.id, 'claimedTasks.joinedTelegram': { $ne: true } },
         {
-            _id: req.user.id,
-            'claimedTasks.joinedTelegram': { $ne: true } // La condición clave y correcta
-        },
-        {
-            $set: {
-                telegramVisited: true,
-                'claimedTasks.joinedTelegram': true
-            },
+            $set: { telegramVisited: true, 'claimedTasks.joinedTelegram': true },
             $inc: { 'balance.ntx': reward }
         },
         { new: true }
-    );
+    ).populate('activeTools.tool referrals');
 
     if (!updatedUser) {
-        res.status(400);
-        throw new Error('Esta tarea ya ha sido completada.');
+        res.status(400); throw new Error('Esta tarea ya ha sido completada.');
     }
 
     res.status(200).json({
         success: true,
         message: `¡+${reward} NTX reclamados!`,
-        user: updatedUser
+        user: updatedUser.toObject()
     });
 });
 
@@ -59,7 +46,8 @@ const claimTaskReward = asyncHandler(async (req, res) => {
     const { taskId } = req.body;
     const userId = req.user.id;
 
-    const user = await User.findById(userId).select('activeTools referrals');
+    // [NEXUS TASK LOGIC FIX] - Populamos las herramientas para la comprobación
+    const user = await User.findById(userId).select('activeTools referrals').populate('activeTools.tool');
     if (!user) { res.status(404); throw new Error('Usuario no encontrado'); }
 
     const taskRewards = { boughtUpgrade: 1500, inviteFriends: 1000 };
@@ -69,7 +57,9 @@ const claimTaskReward = asyncHandler(async (req, res) => {
     let isCompleted = false;
     switch (taskId) {
         case 'boughtUpgrade':
-            isCompleted = user.activeTools && user.activeTools.length > 0;
+            // [NEXUS TASK LOGIC FIX] - La comprobación ahora es inteligente
+            const purchasedToolsCount = user.activeTools.filter(t => t.tool && !t.tool.isFree).length;
+            isCompleted = purchasedToolsCount > 0;
             break;
         case 'inviteFriends':
             isCompleted = user.referrals && user.referrals.length >= 10;
@@ -78,25 +68,32 @@ const claimTaskReward = asyncHandler(async (req, res) => {
 
     if (!isCompleted) { res.status(400); throw new Error('La tarea aún no está completada.'); }
     
-    // --- LA CORRECCIÓN ATÓMICA DEFINITIVA ---
     const updatedUser = await User.findOneAndUpdate(
         { _id: userId, [`claimedTasks.${taskId}`]: { $ne: true } },
         { $inc: { 'balance.ntx': reward }, $set: { [`claimedTasks.${taskId}`]: true } },
         { new: true }
-    ).populate('referrals');
+    ).populate('activeTools.tool referrals');
 
     if (!updatedUser) {
         res.status(400);
         throw new Error('Ya has reclamado esta recompensa.');
     }
 
-    res.json({ message: `¡+${reward.toLocaleString()} NTX reclamados!`, user: updatedUser });
+    res.json({ message: `¡+${reward.toLocaleString()} NTX reclamados!`, user: updatedUser.toObject() });
 });
 
 
-// getTaskStatus se mantiene igual, es correcto.
+/**
+ * @desc Obtiene el estado actual de todas las tareas para el usuario.
+ * @route GET /api/tasks/status
+ * @access Private
+ */
 const getTaskStatus = asyncHandler(async (req, res) => {
-    const user = await User.findById(req.user.id).select('claimedTasks telegramVisited activeTools referrals');
+    // [NEXUS TASK LOGIC FIX] - La clave es popular 'activeTools.tool' para acceder a sus propiedades.
+    const user = await User.findById(req.user.id)
+        .select('claimedTasks telegramVisited activeTools referrals')
+        .populate('activeTools.tool'); // <-- ¡LA CORRECCIÓN MÁS IMPORTANTE!
+
     if (!user) { res.status(404); throw new Error('Usuario no encontrado'); }
 
     const allTasks = [
@@ -106,13 +103,16 @@ const getTaskStatus = asyncHandler(async (req, res) => {
     ];
 
     const userTaskStatus = allTasks.map(task => {
-        const isClaimed = user.claimedTasks?.get(task.taskId) || false; // Se usa .get() para Mapas
+        const isClaimed = user.claimedTasks?.get(task.taskId) || false;
         let progress = 0;
         let status = 'in_progress';
 
         switch (task.taskId) {
             case 'boughtUpgrade':
-                progress = user.activeTools && user.activeTools.length > 0 ? 1 : 0;
+                // [NEXUS TASK LOGIC FIX] - Ahora contamos solo las herramientas compradas (no gratuitas).
+                const purchasedToolsCount = user.activeTools.filter(t => t.tool && !t.tool.isFree).length;
+                progress = purchasedToolsCount > 0 ? 1 : 0;
+                
                 if (!isClaimed && progress >= task.target) status = 'claimable';
                 else if (!isClaimed) status = 'action_required';
                 break;
