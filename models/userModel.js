@@ -1,4 +1,4 @@
-// RUTA: backend/models/userModel.js (VERSIÓN "NEXUS - CORE CYCLE FIX")
+// RUTA: backend/models/userModel.js (VERSIÓN "NEXUS - DEPOSIT COMMISSIONS")
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
@@ -50,9 +50,17 @@ const userSchema = new mongoose.Schema({
     totalRecharge: { type: Number, default: 0 },
     totalWithdrawal: { type: Number, default: 0 },
     currentVipLevel: { type: Number, default: 0 },
+
+    // [NEXUS MONETIZATION] - INICIO DE LA CORRECCIÓN
+    // Este campo es el "interruptor" para la lógica de comisiones del primer depósito.
+    hasMadeFirstDeposit: {
+        type: Boolean,
+        default: false
+    },
+    // [NEXUS MONETIZATION] - FIN DE LA CORRECCIÓN
     
-    // [NEXUS CORE CYCLE FIX] - INICIO DE LA CORRECCIÓN
-    effectiveMiningRate: { type: Number, default: 0 }, // NTX por día
+    // --- Estado de Minado ---
+    effectiveMiningRate: { type: Number, default: 0 },
     miningStatus: {
         type: String,
         enum: ['IDLE', 'MINING', 'CLAIMABLE'],
@@ -62,7 +70,6 @@ const userSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     },
-    // [NEXUS CORE CYCLE FIX] - FIN DE LA CORRECCIÓN
 
     // --- Estado de Tareas y Progreso ---
     claimedTasks: {

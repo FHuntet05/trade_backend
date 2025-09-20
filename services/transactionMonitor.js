@@ -1,229 +1,171 @@
-// backend/services/transactionMonitor.js (FASE "REMEDIATIO" - ENFOQUE EXCLUSIVO EN BSC)
+// RUTA: backend/services/transactionMonitor.js (VERSIÓN "NEXUS - RPC UPGRADE")
 
-const axios = require('axios');
+const { ethers } = require('ethers');
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
-const PendingTx = require('../models/pendingTxModel');
-const { ethers } = require('ethers');
-const { sendTelegramMessage } = require('./notificationService');
-const { getPrice } = require('./priceService');
-// [REMEDIATIO - REFACTOR] Importamos el servicio centralizado.
 const blockchainService = require('./blockchainService');
+const { sendTelegramMessage } = require('./notificationService');
+const { distributeDepositCommissions } = require('./commissionService');
 
-// --- CONFIGURACIÓN DE CONSTANTES (SOLO BSC) ---
-const USDT_CONTRACT_BSC = '0x55d398326f99059fF775485246999027B3197955';
-const BUSD_CONTRACT_BSC = '0xe9e7CEA3DedcA5984780Bf86fEE1060eC3d'; // Aún se soporta la detección de depósitos BUSD
-const BSC_STABLECOIN_CONTRACTS = [USDT_CONTRACT_BSC.toLowerCase(), BUSD_CONTRACT_BSC.toLowerCase()];
+// --- CONFIGURACIÓN DE CONSTANTES Y CONTRATOS ---
+const USDT_CONTRACT_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
+const USDT_ABI = ['event Transfer(address indexed from, address indexed to, uint256 value)'];
+const USDT_INTERFACE = new ethers.utils.Interface(USDT_ABI);
+const USDT_TRANSFER_TOPIC = USDT_INTERFACE.getEventTopic('Transfer');
 const BSC_API_KEY = process.env.BSCSCAN_API_KEY;
-const BATCH_SIZE_BSC = 500;
-const SYNC_THRESHOLD_BSC = 5000;
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 1000;
 
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+// --- FUNCIÓN CENTRAL DE PROCESAMIENTO DE DEPÓSITOS ---
+async function processDeposit(wallet, amount, currency, txHash, blockNumber, fromAddress) {
+    const existingTx = await Transaction.findOne({ 'metadata.txid': txHash });
+    if (existingTx) return;
 
-async function makeHttpRequestWithRetries(url, config = {}, retries = 0) {
-    try {
-        // [REMEDIATIO - REFACTOR] Usamos el wrapper de caché del blockchainService
-        return await blockchainService.makeCachedRequest(url, 15);
-    } catch (error) {
-        if (retries < MAX_RETRIES) {
-            const delay = RETRY_DELAY_MS * Math.pow(2, retries);
-            console.warn(`[HTTP_RETRY] Intento ${retries + 1} fallido para ${url}. Reintentando en ${delay / 1000}s. Error: ${error.message}`);
-            await sleep(delay);
-            return makeHttpRequestWithRetries(url, config, retries + 1);
-        } else {
-            // Se relanza el error para que el llamador pueda manejarlo si todos los reintentos fallan
-            console.error(`[HTTP_RETRY] Fallaron todos los reintentos para ${url}. Error: ${error.message}`);
-            throw error;
-        }
-    }
-}
+    console.log(`[ProcessDeposit] Procesando nuevo depósito: ${amount} ${currency} para usuario ${wallet.user} (TXID: ${txHash})`);
 
-async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifier) {
-    const existingTx = await Transaction.findOne({ 'metadata.txid': txid });
-    if (existingTx) { return; }
-
-    console.log(`[ProcessDeposit] Procesando nuevo depósito: ${amount} ${currency} para usuario ${wallet.user} (TXID: ${txid})`);
-    
-    // [REMEDIATIO - LIMPIEZA] Eliminada la lógica de precio para TRX.
-    const price = (currency === 'BNB') ? await getPrice(currency) : 1;
-    if (!price) {
-        console.error(`[ProcessDeposit] PRECIO NO ENCONTRADO para ${currency}. Saltando transacción ${txid}.`);
+    const amountInUSDT = currency === 'USDT' ? amount : (amount * (await blockchainService.getPrice('BNB')));
+    if (amountInUSDT === null) {
+        console.error(`[ProcessDeposit] No se pudo obtener el precio para ${currency}. Saltando TX ${txHash}`);
         return;
     }
 
-    const amountInUSDT = amount * price;
-    
-    const user = await User.findByIdAndUpdate(
-        wallet.user, 
-        { $inc: { 'balance.usdt': amountInUSDT, 'totalRecharge': amountInUSDT } }, 
-        { new: true }
-    );
-    
-    if (!user) {
-        console.error(`[ProcessDeposit] Usuario no encontrado para wallet ${wallet._id}. Abortando depósito.`);
+    const userBeforeUpdate = await User.findById(wallet.user).select('hasMadeFirstDeposit username');
+    if (!userBeforeUpdate) {
+        console.error(`[ProcessDeposit] Usuario no encontrado para wallet ${wallet.address}. Abortando.`);
         return;
     }
+    const isFirstDeposit = !userBeforeUpdate.hasMadeFirstDeposit;
 
-    const fromAddress = tx.from;
-    const toAddress = tx.to;
+    const updatedUser = await User.findByIdAndUpdate(wallet.user, {
+        $inc: { 'balance.usdt': amountInUSDT, 'totalRecharge': amountInUSDT },
+        $set: { hasMadeFirstDeposit: true }
+    }, { new: true });
+
+    if (!updatedUser) {
+        console.error(`[ProcessDeposit] Fallo al actualizar el usuario para wallet ${wallet.address}. Abortando.`);
+        return;
+    }
 
     await Transaction.create({
         user: wallet.user, type: 'deposit', amount: amountInUSDT, currency: 'USDT',
         description: `Depósito de ${amount.toFixed(6)} ${currency} acreditado como ${amountInUSDT.toFixed(2)} USDT`,
         metadata: {
-            txid: txid, chain: wallet.chain, fromAddress: fromAddress, toAddress: toAddress,
-            originalAmount: amount.toString(), originalCurrency: currency, priceUsed: price.toString(),
-            blockIdentifier: blockIdentifier.toString(),
+            txid: txHash, chain: 'BSC', fromAddress, toAddress: wallet.address,
+            originalAmount: amount.toString(), originalCurrency: currency, blockIdentifier: blockNumber.toString(),
         }
     });
 
-    console.log(`[ProcessDeposit] ✅ ÉXITO: Usuario ${user.username} acreditado con ${amountInUSDT.toFixed(2)} USDT.`);
-    
-    if (user.telegramId) {
+    console.log(`[ProcessDeposit] ✅ ÉXITO: Usuario ${updatedUser.username} acreditado con ${amountInUSDT.toFixed(2)} USDT.`);
+
+    if (isFirstDeposit) {
+        console.log(`[ProcessDeposit] Detectado primer depósito para ${updatedUser.username}. Disparando distribución de comisiones.`.cyan);
+        distributeDepositCommissions(wallet.user, amountInUSDT);
+    }
+
+    if (updatedUser.telegramId) {
         const message = `✅ <b>¡Depósito confirmado!</b>\n\nSe han acreditado <b>${amountInUSDT.toFixed(2)} USDT</b> a tu saldo.`;
-        await sendTelegramMessage(user.telegramId, message);
+        sendTelegramMessage(updatedUser.telegramId, message);
     }
 }
 
-async function getCurrentBscBlock() {
-    try {
-        const url = `https://api.bscscan.com/api?module=proxy&action=eth_blockNumber&apikey=${BSC_API_KEY}`;
-        const responseData = await blockchainService.makeCachedRequest(url, 5); // Usamos caché de 5s
-        if (responseData && responseData.result) {
-            return parseInt(responseData.result, 16);
-        } else {
-            console.error("[Monitor BSC] La respuesta de BscScan no contiene 'result' o es nula.");
-            return null;
-        }
-    } catch (error) {
-        console.error(`[Monitor BSC] Excepción al obtener bloque actual: ${error.message}`);
-        return null;
-    }
-}
-
-async function scanBscBlockRange(wallet, startBlock, endBlock) {
-    try {
-        console.log(`[Monitor BSC] Escaneando ${wallet.address} de ${startBlock} a ${endBlock}`);
-        
-        const allTokenTxUrl = `https://api.bscscan.com/api?module=account&action=tokentx&address=${wallet.address}&startblock=${startBlock}&endblock=${endBlock}&sort=asc&apikey=${BSC_API_KEY}`;
-        const allTokenTxResponse = await makeHttpRequestWithRetries(allTokenTxUrl);
-        
-        if (allTokenTxResponse.status === '1' && Array.isArray(allTokenTxResponse.result)) {
-            for (const tx of allTokenTxResponse.result) {
-                const txContractAddressLower = tx.contractAddress ? tx.contractAddress.toLowerCase() : null;
-                if (tx.to.toLowerCase() === wallet.address.toLowerCase() && BSC_STABLECOIN_CONTRACTS.includes(txContractAddressLower)) {
-                    const amount = parseFloat(ethers.utils.formatUnits(tx.value, tx.tokenDecimal));
-                    const originalCurrency = txContractAddressLower === USDT_CONTRACT_BSC.toLowerCase() ? 'USDT' : 'BUSD';
-                    await processDeposit(tx, wallet, amount, originalCurrency, tx.hash, tx.blockNumber);
-                }
-            }
-        }
-        await sleep(300);
-
-        const bnbUrl = `https://api.bscscan.com/api?module=account&action=txlist&address=${wallet.address}&startblock=${startBlock}&endblock=${endBlock}&sort=asc&apikey=${BSC_API_KEY}`;
-        const bnbResponse = await makeHttpRequestWithRetries(bnbUrl);
-
-        if (bnbResponse.status === '1' && Array.isArray(bnbResponse.result)) {
-            for (const tx of bnbResponse.result) {
-                if (tx.to.toLowerCase() === wallet.address.toLowerCase() && tx.value !== "0") {
-                    const amount = parseFloat(ethers.utils.formatEther(tx.value));
-                    await processDeposit(tx, wallet, amount, 'BNB', tx.hash, tx.blockNumber);
-                }
-            }
-        }
-    } catch (error) {
-        console.error(`[Monitor BSC] EXCEPCIÓN al escanear rango ${startBlock}-${endBlock} para ${wallet.address}: ${error.message}`);
-    }
-}
-
-async function checkBscTransactions() {
-    console.log("[Monitor BSC] Iniciando ciclo de escaneo para BSC.");
-    const wallets = await CryptoWallet.find({ chain: 'BSC' });
-    if (wallets.length === 0) {
-        console.log("[Monitor BSC] No hay billeteras BSC para escanear.");
-        return;
-    }
-
-    const currentNetworkBlock = await getCurrentBscBlock();
-    if (!currentNetworkBlock) {
-        console.error("[Monitor BSC] No se pudo obtener el bloque actual de la red. Saltando ciclo.");
-        return;
-    }
-    console.log(`[Monitor BSC] Encontradas ${wallets.length} wallets. Bloque de red actual: ${currentNetworkBlock}`);
-
-    for (const wallet of wallets) {
-        let lastScanned = wallet.lastScannedBlock || 0; 
-        const blocksBehind = currentNetworkBlock - lastScanned;
-
-        if (blocksBehind > SYNC_THRESHOLD_BSC) {
-            console.log(`[Monitor BSC] Sincronización en lotes para ${wallet.address}. ${blocksBehind} bloques de diferencia.`);
-            let fromBlock = lastScanned + 1;
-            while (fromBlock < currentNetworkBlock) {
-                const toBlock = Math.min(fromBlock + BATCH_SIZE_BSC - 1, currentNetworkBlock);
-                await scanBscBlockRange(wallet, fromBlock, toBlock);
-                await CryptoWallet.findByIdAndUpdate(wallet._id, { lastScannedBlock: toBlock });
-                fromBlock = toBlock + 1;
-                await sleep(550);
-            }
-        } else if (blocksBehind > 0) {
-            const startBlock = lastScanned + 1;
-            await scanBscBlockRange(wallet, startBlock, currentNetworkBlock);
-        }
-
-        await CryptoWallet.findByIdAndUpdate(wallet._id, { lastScannedBlock: currentNetworkBlock });
-        await sleep(550);
-    }
-}
-
-async function processPendingTransactionsStatus() {
-    const pendingTxs = await PendingTx.find({ status: 'PENDING', chain: 'BSC' });
-    if (pendingTxs.length === 0) { return; }
+// --- NUEVO ESCÁNER RPC PARA USDT ---
+async function scanUsdtDepositsRpc(wallets, startBlock, endBlock) {
+    if (startBlock > endBlock) return;
+    console.log(`[Monitor RPC] Escaneando eventos USDT del bloque ${startBlock} al ${endBlock}...`);
     
-    console.log(`[Monitor PendingTx] Verificando ${pendingTxs.length} transacciones BSC con estado PENDING...`);
-    for (const tx of pendingTxs) {
+    // Mapeamos wallets a minúsculas para comparaciones consistentes.
+    const walletMap = new Map(wallets.map(w => [w.address.toLowerCase(), w]));
+
+    const filter = {
+        address: USDT_CONTRACT_ADDRESS,
+        topics: [
+            USDT_TRANSFER_TOPIC,
+            null, // Cualquier remitente
+            // Codificamos los destinatarios (nuestras wallets) en el topic3
+            Array.from(walletMap.keys()).map(address => ethers.utils.hexZeroPad(address, 32))
+        ],
+        fromBlock: startBlock,
+        toBlock: endBlock
+    };
+
+    try {
+        const logs = await blockchainService.provider.getLogs(filter);
+        for (const log of logs) {
+            const parsedLog = USDT_INTERFACE.parseLog(log);
+            const toAddress = parsedLog.args.to.toLowerCase();
+            const wallet = walletMap.get(toAddress);
+            if (wallet) {
+                const amount = parseFloat(ethers.utils.formatUnits(parsedLog.args.value, 18)); // USDT tiene 18 decimales
+                await processDeposit(wallet, amount, 'USDT', log.transactionHash, log.blockNumber, parsedLog.args.from);
+            }
+        }
+    } catch (error) {
+        console.error(`[Monitor RPC] Error al obtener logs de eventos USDT: ${error.message}`);
+    }
+}
+
+// --- ESCÁNER DE COMPATIBILIDAD PARA BNB (vía BscScan) ---
+async function scanBnbDepositsBscScan(wallet, startBlock, endBlock) {
+    try {
+        const url = `https://api.bscscan.com/api?module=account&action=txlist&address=${wallet.address}&startblock=${startBlock}&endblock=${endBlock}&sort=asc&apikey=${BSC_API_KEY}`;
+        const response = await blockchainService.makeCachedRequest(url, 15);
+
+        if (response.status === '1' && Array.isArray(response.result)) {
+            for (const tx of response.result) {
+                if (tx.to.toLowerCase() === wallet.address.toLowerCase() && tx.value !== "0" && tx.isError === "0") {
+                    const amount = parseFloat(ethers.utils.formatEther(tx.value));
+                    await processDeposit(wallet, amount, 'BNB', tx.hash, parseInt(tx.blockNumber), tx.from);
+                }
+            }
+        }
+    } catch (error) {
+        console.error(`[Monitor BscScan] Excepción al escanear BNB para ${wallet.address}: ${error.message}`);
+    }
+}
+
+// --- ORQUESTADOR PRINCIPAL DEL MONITOREO ---
+const startMonitoring = () => {
+    console.log('✅ Iniciando servicio de monitoreo de transacciones (RPC-First)...'.green.bold);
+
+    const runChecks = async () => {
+        console.log("--- [Monitor] Iniciando ciclo de monitoreo ---");
+        const wallets = await CryptoWallet.find({ chain: 'BSC' });
+        if (wallets.length === 0) {
+            console.log("[Monitor] No hay billeteras para escanear. Finalizando ciclo.");
+            return;
+        }
+
         try {
-            let isConfirmed = false;
-            let txFailed = false;
+            const currentNetworkBlock = await blockchainService.provider.getBlockNumber();
+            let lastScannedBlock = (await CryptoWallet.findOne({ chain: 'BSC' }).sort({ lastScannedBlock: -1 }).select('lastScannedBlock'))?.lastScannedBlock || currentNetworkBlock - 1;
+            
+            const fromBlock = lastScannedBlock + 1;
+            const toBlock = currentNetworkBlock;
 
-            const receipt = await blockchainService.provider.getTransactionReceipt(tx.txHash);
-            if (receipt) {
-                if (receipt.status === 1) isConfirmed = true;
-                if (receipt.status === 0) txFailed = true;
-            }
+            if (fromBlock <= toBlock) {
+                console.log(`[Monitor] Bloque de red actual: ${toBlock}. Escaneando desde: ${fromBlock}`);
+                await scanUsdtDepositsRpc(wallets, fromBlock, toBlock);
+                
+                // Escaneamos BNB para cada wallet individualmente
+                for (const wallet of wallets) {
+                    await scanBnbDepositsBscScan(wallet, fromBlock, toBlock);
+                    await new Promise(resolve => setTimeout(resolve, 300)); // Pequeña pausa para no saturar la API
+                }
 
-            if (isConfirmed) {
-                tx.status = 'CONFIRMED';
-                console.log(`[Monitor PendingTx] ✅ Transacción ${tx.txHash} (BSC) CONFIRMADA.`);
-            } else if (txFailed) {
-                 tx.status = 'FAILED';
-                 console.log(`[Monitor PendingTx] ❌ Transacción ${tx.txHash} (BSC) FALLIDA.`);
+                await CryptoWallet.updateMany({ chain: 'BSC' }, { $set: { lastScannedBlock: toBlock } });
+                console.log(`[Monitor] Actualizado 'lastScannedBlock' a ${toBlock} para todas las wallets BSC.`);
+            } else {
+                console.log('[Monitor] El sistema está sincronizado. No hay nuevos bloques para escanear.');
             }
-            tx.lastChecked = new Date();
-            await tx.save();
 
         } catch (error) {
-            console.error(`[Monitor PendingTx] Error al verificar tx ${tx.txHash}:`, error.message);
+            console.error('[Monitor] Error en el ciclo principal de monitoreo:', error);
         }
-        await sleep(200);
-    }
-}
 
-const startMonitoring = () => {
-  console.log('✅ Iniciando servicio de monitoreo de transacciones (SOLO BSC)...');
-  const runChecks = async () => {
-    console.log("--- [Monitor] Iniciando ciclo de monitoreo BSC ---");
-    // [REMEDIATIO - LIMPIEZA] Eliminada la llamada a checkTronTransactions
-    await Promise.all([
-        checkBscTransactions(),
-        processPendingTransactionsStatus() 
-    ]);
-    console.log("--- [Monitor] Ciclo de monitoreo BSC finalizado. Esperando al siguiente. ---");
-  };
-  runChecks();
-  setInterval(runChecks, 60000); 
+        console.log("--- [Monitor] Ciclo de monitoreo finalizado. Esperando al siguiente. ---");
+    };
+
+    runChecks();
+    setInterval(runChecks, 60000); // Se ejecuta cada 60 segundos
 };
 
 module.exports = { startMonitoring };
