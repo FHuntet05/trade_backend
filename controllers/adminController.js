@@ -16,6 +16,7 @@ const PendingTx = require('../models/pendingTxModel');
 const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const crypto = require('crypto');
 const blockchainService = require('../services/blockchainService');
+const Transaction = require('../models/transactionModel');
 
 // --- Constantes y Helpers (sin cambios) ---
 const PLACEHOLDER_AVATAR_URL = 'https://i.postimg.cc/mD21B6r7/user-avatar-placeholder.png';
@@ -48,17 +49,50 @@ async function _getBalancesForAddress(address, chain) {
   }
 }
 
-// --- Endpoints del Dashboard (sin cambios) ---
+// [NEXUS REPORTING OVERHAUL] - CORRECCIÓN DE FUENTE DE DATOS PARA DASHBOARD
 const getDashboardStats = asyncHandler(async (req, res) => {
-  const totalDepositVolumePromise = User.aggregate([ { $unwind: '$transactions' }, { $match: { 'transactions.type': 'deposit' } }, { $group: { _id: null, total: { $sum: '$transactions.amount' } } } ]);
+  // --- CONSULTA CORRECTA: Se apunta al modelo 'Transaction' ---
+  const totalDepositVolumePromise = Transaction.aggregate([
+    { $match: { type: 'deposit', status: 'completed' } }, // Solo depósitos completados
+    { $group: { _id: null, total: { $sum: '$amount' } } }
+  ]);
+
+  // --- CONSULTA CORRECTA: Se apunta al modelo 'Transaction' ---
+  const pendingWithdrawalsPromise = Transaction.countDocuments({
+    type: 'withdrawal',
+    status: 'pending'
+  });
+
+  // Las siguientes consultas ya son correctas y se mantienen sin cambios.
   const userGrowthDataPromise = User.aggregate([ { $match: { createdAt: { $gte: new Date(new Date().setDate(new Date().getDate() - 14)) } } }, { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, count: { $sum: 1 } } }, { $sort: { _id: 1 } } ]).then(data => data.map(item => ({ date: item._id, NuevosUsuarios: item.count })));
   const totalUsersPromise = User.countDocuments();
-  const pendingWithdrawalsPromise = User.aggregate([ { $unwind: '$transactions' }, { $match: { 'transactions.type': 'withdrawal', 'transactions.status': 'pending' } }, { $count: 'total' } ]);
   const centralWalletBalancesPromise = (async () => { try { const { bscWallet } = transactionService.getCentralWallets(); const balances = await _getBalancesForAddress(bscWallet.address, 'BSC'); return { usdt: balances.usdt, bnb: balances.bnb }; } catch (error) { console.error("Error al obtener balance de billetera central:", error); return { usdt: 0, bnb: 0 }; } })();
-  const [ totalUsers, totalDepositVolumeResult, pendingWithdrawalsResult, centralWalletBalances, userGrowthData ] = await Promise.all([ totalUsersPromise, totalDepositVolumePromise, pendingWithdrawalsPromise, centralWalletBalancesPromise, userGrowthDataPromise ]);
+  
+  // Ejecutamos todas las promesas en paralelo para máxima eficiencia.
+  const [ 
+    totalUsers, 
+    totalDepositVolumeResult, 
+    pendingWithdrawals, 
+    centralWalletBalances, 
+    userGrowthData 
+  ] = await Promise.all([ 
+    totalUsersPromise, 
+    totalDepositVolumePromise, 
+    pendingWithdrawalsPromise, 
+    centralWalletBalancesPromise, 
+    userGrowthDataPromise 
+  ]);
+  
+  // Extraemos el resultado de la agregación.
   const totalDepositVolume = totalDepositVolumeResult.length > 0 ? totalDepositVolumeResult[0].total : 0;
-  const pendingWithdrawals = pendingWithdrawalsResult.length > 0 ? pendingWithdrawalsResult[0].total : 0;
-  res.json({ totalUsers, totalDepositVolume, pendingWithdrawals, centralWalletBalances, userGrowthData });
+  
+  res.json({ 
+    totalUsers, 
+    totalDepositVolume, 
+    pendingWithdrawals, // Este valor ya no es un array, es un número directo.
+    centralWalletBalances, 
+    userGrowthData 
+  });
 });
 
 // --- Gestión de Retiros (sin cambios) ---
@@ -263,63 +297,66 @@ const getAllTransactions = asyncHandler(async (req, res) => {
     const search = req.query.search || '';
     const type = req.query.type || '';
 
-    // 1. Etapa de 'match' para filtrar transacciones DESPUÉS de ser aplanadas.
-    // Esta es la lógica correcta: se construye el filtro para aplicar sobre la lista global.
+    // 1. Construimos la etapa de 'match' para filtrar la lista global.
     const matchStage = {};
     if (type) {
         matchStage.type = type;
     }
     if (search) {
-        // Buscamos en el nombre de usuario anidado o en la descripción de la transacción.
         matchStage.$or = [
             { 'user.username': { $regex: search, $options: 'i' } },
             { 'description': { $regex: search, $options: 'i' } }
         ];
     }
 
-    // 2. Reconstrucción completa de la Aggregation Pipeline (Arquitectura Correcta).
+    // 2. Pipeline de agregación sobre la colección 'Transaction' (la correcta).
     const aggregationPipeline = [
-        // ETAPA 1: Desenrollar TODAS las transacciones de TODOS los usuarios en una lista plana.
-        // Este es el paso más crucial. Ahora operamos sobre transacciones, no sobre usuarios.
-        { $unwind: '$transactions' },
+        // ETAPA 1: Ordenar primero para una paginación consistente.
+        { $sort: { createdAt: -1 } },
 
-        // ETAPA 2: Reemplazar la raíz del documento.
-        // Promovemos la transacción al nivel superior y adjuntamos la info del usuario.
-        // Esto crea un documento limpio por cada transacción.
+        // ETAPA 2: Unir con la colección de usuarios para obtener el nombre de usuario.
         {
-            $replaceRoot: {
-                newRoot: {
-                    $mergeObjects: [
-                        '$transactions',
-                        { user: { _id: '$_id', username: '$username' } }
-                    ]
-                }
+            $lookup: {
+                from: 'users',
+                localField: 'user',
+                foreignField: '_id',
+                as: 'userDetails'
+            }
+        },
+        
+        // ETAPA 3: Desenrollar el resultado del lookup.
+        // Usamos preserveNullAndEmptyArrays por si alguna transacción no tiene usuario asociado (caso de sistema).
+        {
+            $unwind: {
+                path: '$userDetails',
+                preserveNullAndEmptyArrays: true
             }
         },
 
-        // ETAPA 3: Ordenar la lista global de transacciones por fecha de creación.
-        // Es importante ordenar ANTES de filtrar y paginar para consistencia.
-        { $sort: { createdAt: -1 } },
+        // ETAPA 4: Proyectar un formato limpio, compatible con el frontend.
+        {
+          $project: {
+            _id: 1, amount: 1, currency: 1, type: 1, description: 1, status: 1, createdAt: 1,
+            // Creamos el objeto 'user' que el frontend espera.
+            user: { _id: '$userDetails._id', username: '$userDetails.username' }
+          }
+        },
 
-        // ETAPA 4: Aplicar los filtros de búsqueda y tipo sobre la lista plana.
-        // Si matchStage está vacío, esta etapa no hace nada, devolviendo todas las transacciones.
+        // ETAPA 5: Aplicar los filtros de búsqueda y tipo.
         { $match: matchStage },
 
-        // ETAPA 5: Utilizar $facet para ejecutar la paginación y el conteo total en una sola pasada.
-        // Esto es mucho más eficiente que ejecutar dos queries separadas.
+        // ETAPA 6: Usar $facet para paginación y conteo eficientes.
         {
             $facet: {
-                // Rama para los metadatos (conteo total)
                 metadata: [{ $count: 'total' }],
-                // Rama para los datos de la página actual
                 data: [{ $skip: (page - 1) * limit }, { $limit: limit }]
             }
         }
     ];
 
-    const result = await User.aggregate(aggregationPipeline);
+    // Ejecutamos la consulta sobre el modelo Transaction.
+    const result = await Transaction.aggregate(aggregationPipeline);
 
-    // 3. Extraer y formatear los resultados del $facet.
     const transactions = result[0].data;
     const total = result[0].metadata.length > 0 ? result[0].metadata[0].total : 0;
     
