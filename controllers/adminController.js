@@ -263,57 +263,65 @@ const getAllTransactions = asyncHandler(async (req, res) => {
     const search = req.query.search || '';
     const type = req.query.type || '';
 
-    // 1. Construimos la etapa de 'match' inicial basada en los filtros.
+    // 1. Etapa de 'match' para filtrar transacciones DESPUÉS de ser aplanadas.
+    // Esta es la lógica correcta: se construye el filtro para aplicar sobre la lista global.
     const matchStage = {};
     if (type) {
-        matchStage['transactions.type'] = type;
+        matchStage.type = type;
     }
     if (search) {
-        const searchRegex = { $regex: search, $options: 'i' };
+        // Buscamos en el nombre de usuario anidado o en la descripción de la transacción.
         matchStage.$or = [
-            { 'username': searchRegex },
-            { 'transactions.description': searchRegex }
+            { 'user.username': { $regex: search, $options: 'i' } },
+            { 'description': { $regex: search, $options: 'i' } }
         ];
     }
 
-    // 2. Creamos la pipeline de agregación principal.
+    // 2. Reconstrucción completa de la Aggregation Pipeline (Arquitectura Correcta).
     const aggregationPipeline = [
-        { $match: matchStage },
+        // ETAPA 1: Desenrollar TODAS las transacciones de TODOS los usuarios en una lista plana.
+        // Este es el paso más crucial. Ahora operamos sobre transacciones, no sobre usuarios.
         { $unwind: '$transactions' },
-        ...(type ? [{ $match: { 'transactions.type': type } }] : []),
-        ...(search ? [{ $match: { $or: [{ 'username': { $regex: search, $options: 'i' } }, { 'transactions.description': { $regex: search, $options: 'i' } }] } }] : []),
-        { $sort: { 'transactions.createdAt': -1 } },
+
+        // ETAPA 2: Reemplazar la raíz del documento.
+        // Promovemos la transacción al nivel superior y adjuntamos la info del usuario.
+        // Esto crea un documento limpio por cada transacción.
         {
-            $project: {
-                _id: '$transactions._id',
-                amount: '$transactions.amount',
-                currency: '$transactions.currency',
-                type: '$transactions.type',
-                description: '$transactions.description',
-                status: '$transactions.status',
-                createdAt: '$transactions.createdAt',
-                user: { _id: '$_id', username: '$username' }
+            $replaceRoot: {
+                newRoot: {
+                    $mergeObjects: [
+                        '$transactions',
+                        { user: { _id: '$_id', username: '$username' } }
+                    ]
+                }
+            }
+        },
+
+        // ETAPA 3: Ordenar la lista global de transacciones por fecha de creación.
+        // Es importante ordenar ANTES de filtrar y paginar para consistencia.
+        { $sort: { createdAt: -1 } },
+
+        // ETAPA 4: Aplicar los filtros de búsqueda y tipo sobre la lista plana.
+        // Si matchStage está vacío, esta etapa no hace nada, devolviendo todas las transacciones.
+        { $match: matchStage },
+
+        // ETAPA 5: Utilizar $facet para ejecutar la paginación y el conteo total en una sola pasada.
+        // Esto es mucho más eficiente que ejecutar dos queries separadas.
+        {
+            $facet: {
+                // Rama para los metadatos (conteo total)
+                metadata: [{ $count: 'total' }],
+                // Rama para los datos de la página actual
+                data: [{ $skip: (page - 1) * limit }, { $limit: limit }]
             }
         }
     ];
-    
-    // 3. Creamos una pipeline separada para contar el total de documentos.
-    const countPipeline = [...aggregationPipeline, { $count: 'total' }];
 
-    // 4. Aplicamos la paginación a la pipeline principal.
-    const paginatedPipeline = [
-        ...aggregationPipeline,
-        { $skip: (page - 1) * limit },
-        { $limit: limit }
-    ];
+    const result = await User.aggregate(aggregationPipeline);
 
-    // 5. Ejecutamos ambas pipelines en paralelo.
-    const [totalResult, transactions] = await Promise.all([
-        User.aggregate(countPipeline),
-        User.aggregate(paginatedPipeline)
-    ]);
-
-    const total = totalResult.length > 0 ? totalResult[0].total : 0;
+    // 3. Extraer y formatear los resultados del $facet.
+    const transactions = result[0].data;
+    const total = result[0].metadata.length > 0 ? result[0].metadata[0].total : 0;
     
     res.json({
         transactions: transactions || [],

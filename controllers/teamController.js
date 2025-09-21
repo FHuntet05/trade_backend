@@ -1,38 +1,38 @@
-// RUTA: backend/controllers/teamController.js (VERSIÓN "NEXUS - REPORTING OVERHAUL")
+// RUTA: backend/controllers/teamController.js (VERSIÓN "NEXUS - ATOMIC DECOUPLING")
 
 const User = require('../models/userModel');
 const mongoose = require('mongoose');
 
-// La función 'getTeamStats' ha sido completamente refactorizada para usar una única consulta atómica y eficiente.
+// La función 'getTeamStats' ha sido reconstruida para garantizar la integridad de los datos
+// mediante el desacoplamiento de las consultas de comisiones y estadísticas del equipo.
 const getTeamStats = async (req, res) => {
     try {
         const userId = new mongoose.Types.ObjectId(req.user.id);
 
-        const aggregationPipeline = [
-            // 1. Empezamos con el usuario actual.
+        // --- Consulta 1: Comisión del Usuario (Aislada y Atómica) ---
+        // Esta consulta es simple y directa, garantizando que siempre sea correcta.
+        const commissionPipeline = [
             { $match: { _id: userId } },
-            
-            // 2. Calculamos la comisión total del usuario directamente en la base de datos.
+            { $unwind: "$transactions" },
+            { $match: { "transactions.type": "referral_commission" } },
             {
-                $project: {
-                    totalCommission: {
-                        $reduce: {
-                            input: {
-                                $filter: {
-                                    input: "$transactions",
-                                    as: "tx",
-                                    cond: { $eq: ["$$tx.type", "referral_commission"] }
-                                }
-                            },
-                            initialValue: 0,
-                            in: { $add: ["$$value", "$$this.amount"] }
-                        }
-                    },
-                    referrals: 1 // Pasamos el array de referidos a la siguiente etapa.
+                $group: {
+                    _id: "$_id",
+                    totalCommission: { $sum: "$transactions.amount" }
                 }
             },
-            
-            // 3. Obtenemos todos los referidos hasta 3 niveles usando $graphLookup.
+            {
+                $project: {
+                    _id: 0,
+                    totalCommission: 1
+                }
+            }
+        ];
+        
+        // --- Consulta 2: Estadísticas del Equipo (Enfoque Dedicado) ---
+        // Esta consulta ahora se enfoca únicamente en agregar los datos del equipo.
+        const teamStatsPipeline = [
+            { $match: { _id: userId } },
             {
                 $graphLookup: {
                     from: 'users',
@@ -44,16 +44,10 @@ const getTeamStats = async (req, res) => {
                     depthField: 'level'
                 }
             },
-            
-            // 4. "Desenrrollamos" los miembros del equipo para poder procesarlos individualmente.
-            // preserveNullAndEmptyArrays asegura que el pipeline no se detenga si un usuario no tiene equipo.
             { $unwind: { path: "$teamMembers", preserveNullAndEmptyArrays: true } },
-
-            // 5. Agrupamos todos los resultados para sumar los totales y contar miembros.
             {
                 $group: {
                     _id: "$_id",
-                    totalCommission: { $first: "$totalCommission" },
                     totalTeamMembers: { $sum: { $cond: ["$teamMembers._id", 1, 0] } },
                     totalTeamRecharge: { $sum: { $ifNull: ["$teamMembers.totalRecharge", 0] } },
                     totalTeamWithdrawals: { $sum: { $ifNull: ["$teamMembers.totalWithdrawal", 0] } },
@@ -65,12 +59,9 @@ const getTeamStats = async (req, res) => {
                     level3Valid: { $sum: { $cond: [{ $and: [ { $eq: ['$teamMembers.level', 2] }, { $gt: ['$teamMembers.totalRecharge', 0] } ] }, 1, 0] } }
                 }
             },
-
-            // 6. Proyectamos el resultado final en el formato que espera el frontend.
             {
                 $project: {
                     _id: 0,
-                    totalCommission: 1,
                     totalTeamMembers: 1,
                     totalTeamRecharge: 1,
                     totalTeamWithdrawals: 1,
@@ -82,33 +73,38 @@ const getTeamStats = async (req, res) => {
                 }
             }
         ];
-        
-        const result = await User.aggregate(aggregationPipeline);
-        
-        const finalStats = result[0];
 
-        // Si el usuario no existe en el resultado (caso extremo), devolvemos un objeto por defecto.
-        if (!finalStats) {
-            return res.status(404).json({
-                totalCommission: 0,
-                totalTeamMembers: 0,
-                totalTeamRecharge: 0,
-                totalTeamWithdrawals: 0,
-                levels: [
-                    { level: 1, totalMembers: 0, validMembers: 0 },
-                    { level: 2, totalMembers: 0, validMembers: 0 },
-                    { level: 3, totalMembers: 0, validMembers: 0 },
-                ],
-            });
-        }
+        // Ejecutar ambas consultas en paralelo para máxima eficiencia.
+        const [commissionResult, teamStatsResult] = await Promise.all([
+            User.aggregate(commissionPipeline),
+            User.aggregate(teamStatsPipeline)
+        ]);
+
+        // Combinar los resultados en una única respuesta, manejando casos de borde.
+        const totalCommission = commissionResult.length > 0 ? commissionResult[0].totalCommission : 0;
         
-        res.json(finalStats);
+        const defaultTeamStats = {
+            totalTeamMembers: 0, totalTeamRecharge: 0, totalTeamWithdrawals: 0,
+            levels: [
+                { level: 1, totalMembers: 0, validMembers: 0 },
+                { level: 2, totalMembers: 0, validMembers: 0 },
+                { level: 3, totalMembers: 0, validMembers: 0 },
+            ],
+        };
+
+        const teamStats = teamStatsResult.length > 0 ? teamStatsResult[0] : defaultTeamStats;
+
+        res.json({
+            totalCommission,
+            ...teamStats
+        });
 
     } catch (error) {
         console.error("Error al obtener estadísticas del equipo:", error);
         res.status(500).json({ message: 'Error interno del servidor' });
     }
 };
+
 
 // La función getLevelDetails no requiere cambios y se mantiene intacta.
 const getLevelDetails = async (req, res) => {
