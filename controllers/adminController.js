@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS - TYPECAST & UI SYNC FIX")
+// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS - REPORTING OVERHAUL - COMPLETA")
 const User = require('../models/userModel');
 const Factory = require('../models/toolModel');
 const Setting =require('../models/settingsModel');
@@ -61,7 +61,7 @@ const getDashboardStats = asyncHandler(async (req, res) => {
   res.json({ totalUsers, totalDepositVolume, pendingWithdrawals, centralWalletBalances, userGrowthData });
 });
 
-// --- Gestión de Retiros ---
+// --- Gestión de Retiros (sin cambios) ---
 const getPendingWithdrawals = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
@@ -71,9 +71,6 @@ const getPendingWithdrawals = asyncHandler(async (req, res) => {
     { $match: { 'transactions.type': 'withdrawal', 'transactions.status': 'pending' } },
     { $sort: { 'transactions.createdAt': -1 } },
     {
-      // [NEXUS TYPECAST FIX] - INICIO DE LA CORRECCIÓN CRÍTICA
-      // Se utiliza $toDouble para forzar la conversión del string guardado en metadata a un número.
-      // Luego, $ifNull actúa como fallback si el campo no existe, asegurando que el resultado siempre sea un número.
       $project: {
         _id: '$transactions._id',
         grossAmount: { $abs: '$transactions.amount' },
@@ -85,7 +82,6 @@ const getPendingWithdrawals = asyncHandler(async (req, res) => {
         createdAt: '$transactions.createdAt',
         user: { _id: '$_id', username: '$username', telegramId: '$telegramId', photoFileId: '$photoFileId' }
       }
-      // [NEXUS TYPECAST FIX] - FIN DE LA CORRECCIÓN CRÍTICA
     }
   ];
   const countPipeline = [...aggregationPipeline, { $count: 'total' }];
@@ -100,7 +96,6 @@ const getPendingWithdrawals = asyncHandler(async (req, res) => {
   res.json({ withdrawals: withdrawalsWithDetails, page, pages: Math.ceil(total / limit), total });
 });
 
-// --- RESTO DEL ARCHIVO (SIN CAMBIOS) ---
 const processWithdrawal = asyncHandler(async (req, res) => {
   const { status, adminNotes } = req.body;
   const { id: transactionId } = req.params;
@@ -136,6 +131,7 @@ const processWithdrawal = asyncHandler(async (req, res) => {
   }
 });
 
+// --- Tesorería (sin cambios) ---
 const sweepFunds = asyncHandler(async (req, res) => {
   const { walletsToSweep } = req.body;
   const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
@@ -193,6 +189,7 @@ const dispatchGas = asyncHandler(async (req, res) => {
   res.json(report);
 });
 
+// --- Gestión de Usuarios (sin cambios) ---
 const getAllUsers = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
@@ -259,30 +256,81 @@ const resetAdminPassword = asyncHandler(async (req, res) => {
   res.json({ message: `Contraseña reseteada para ${adminUser.username}.`, temporaryPassword });
 });
 
+// [NEXUS REPORTING OVERHAUL] - INICIO DE LA REFACTORIZACIÓN CRÍTICA
 const getAllTransactions = asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 15;
     const search = req.query.search || '';
     const type = req.query.type || '';
-    let matchQuery = { 'transactions': { $exists: true, $ne: [] } };
-    if (type) { matchQuery['transactions.type'] = type; }
-    if (search) { const searchRegex = { $regex: search, $options: 'i' }; matchQuery.$or = [ { 'username': searchRegex }, { 'transactions.description': searchRegex } ]; }
-    const aggregationPipeline = [ { $match: matchQuery }, { $unwind: '$transactions' }, ...(type ? [{ $match: { 'transactions.type': type } }] : []), ...(search ? [{ $match: { $or: [{ 'username': { $regex: search, $options: 'i' } }, { 'transactions.description': { $regex: search, $options: 'i' } }] } }] : []), { $sort: { 'transactions.createdAt': -1 } }, { $project: { _id: '$transactions._id', amount: '$transactions.amount', currency: '$transactions.currency', type: '$transactions.type', description: '$transactions.description', status: '$transactions.status', createdAt: '$transactions.createdAt', user: { _id: '$_id', username: '$username' } } } ];
-    const countPipeline = [...aggregationPipeline, { $count: 'total' }];
-    const paginatedPipeline = [...aggregationPipeline, { $skip: (page - 1) * limit }, { $limit: limit }];
-    const [totalResult, transactions] = await Promise.all([ User.aggregate(countPipeline), User.aggregate(paginatedPipeline) ]);
-    const total = totalResult.length > 0 ? totalResult[0].total : 0;
-    res.json({ transactions: transactions || [], page, pages: Math.ceil(total / limit), total });
-});
 
+    // 1. Construimos la etapa de 'match' inicial basada en los filtros.
+    const matchStage = {};
+    if (type) {
+        matchStage['transactions.type'] = type;
+    }
+    if (search) {
+        const searchRegex = { $regex: search, $options: 'i' };
+        matchStage.$or = [
+            { 'username': searchRegex },
+            { 'transactions.description': searchRegex }
+        ];
+    }
+
+    // 2. Creamos la pipeline de agregación principal.
+    const aggregationPipeline = [
+        { $match: matchStage },
+        { $unwind: '$transactions' },
+        ...(type ? [{ $match: { 'transactions.type': type } }] : []),
+        ...(search ? [{ $match: { $or: [{ 'username': { $regex: search, $options: 'i' } }, { 'transactions.description': { $regex: search, $options: 'i' } }] } }] : []),
+        { $sort: { 'transactions.createdAt': -1 } },
+        {
+            $project: {
+                _id: '$transactions._id',
+                amount: '$transactions.amount',
+                currency: '$transactions.currency',
+                type: '$transactions.type',
+                description: '$transactions.description',
+                status: '$transactions.status',
+                createdAt: '$transactions.createdAt',
+                user: { _id: '$_id', username: '$username' }
+            }
+        }
+    ];
+    
+    // 3. Creamos una pipeline separada para contar el total de documentos.
+    const countPipeline = [...aggregationPipeline, { $count: 'total' }];
+
+    // 4. Aplicamos la paginación a la pipeline principal.
+    const paginatedPipeline = [
+        ...aggregationPipeline,
+        { $skip: (page - 1) * limit },
+        { $limit: limit }
+    ];
+
+    // 5. Ejecutamos ambas pipelines en paralelo.
+    const [totalResult, transactions] = await Promise.all([
+        User.aggregate(countPipeline),
+        User.aggregate(paginatedPipeline)
+    ]);
+
+    const total = totalResult.length > 0 ? totalResult[0].total : 0;
+    
+    res.json({
+        transactions: transactions || [],
+        page,
+        pages: Math.ceil(total / limit),
+        total
+    });
+});
+// [NEXUS REPORTING OVERHAUL] - FIN DE LA REFACTORIZACIÓN CRÍTICA
+
+// --- Fábricas y Ajustes (sin cambios) ---
 const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
   const pendingTxs = await PendingTx.find().lean(); res.json(pendingTxs);
 });
-
 const getAllFactories = asyncHandler(async (req, res) => {
   const factories = await Factory.find(); res.json(factories);
 });
-
 const createFactory = asyncHandler(async (req, res) => {
   const { isFree, ...factoryData } = req.body;
   const session = await mongoose.startSession();
@@ -300,7 +348,6 @@ const createFactory = asyncHandler(async (req, res) => {
     session.endSession();
   }
 });
-
 const updateFactory = asyncHandler(async (req, res) => {
   const { isFree, ...factoryData } = req.body;
   const session = await mongoose.startSession();
@@ -320,13 +367,11 @@ const updateFactory = asyncHandler(async (req, res) => {
     session.endSession();
   }
 });
-
 const deleteFactory = asyncHandler(async (req, res) => {
   const factory = await Factory.findById(req.params.id);
   if (!factory) { res.status(404); throw new Error('Fábrica no encontrada'); }
   await factory.deleteOne(); res.json({ message: 'Fábrica eliminada' });
 });
-
 const getSettings = asyncHandler(async (req, res) => {
   const settings = await Setting.findOne(); res.json(settings);
 });
@@ -335,7 +380,6 @@ const updateSettings = asyncHandler(async (req, res) => {
   if (!settings) { res.status(404); throw new Error('Configuración no encontrada'); }
   Object.assign(settings, req.body); const updatedSettings = await settings.save(); res.json(updatedSettings);
 });
-
 const generateTwoFactorSecret = asyncHandler(async (req, res) => {
   const secret = speakeasy.generateSecret({ name: 'Nexus Security App' });
   const qrCodeDataURL = await qrCodeToDataURLPromise(secret.otpauth_url);
@@ -347,7 +391,6 @@ const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
   if (!verified) { res.status(400); throw new Error('Token inválido'); }
   req.user.twoFactorEnabled = true; req.user.twoFactorSecret = secret; await req.user.save(); res.json({ message: '2FA habilitado con éxito' });
 });
-
 const sendBroadcastNotification = asyncHandler(async (req, res) => {
   const { message, imageUrl, buttonUrl, buttonText } = req.body;
   if (!message) { res.status(400); throw new Error('El mensaje es requerido.'); }

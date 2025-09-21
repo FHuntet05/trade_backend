@@ -1,9 +1,9 @@
-// RUTA: backend/controllers/teamController.js (VERSIÓN "NEXUS - ATOMIC AGGREGATION FIX")
+// RUTA: backend/controllers/teamController.js (VERSIÓN "NEXUS - REPORTING OVERHAUL")
 
 const User = require('../models/userModel');
 const mongoose = require('mongoose');
 
-// [NEXUS REPORTING V2] - La función 'getTeamStats' ha sido refactorizada para usar una única consulta atómica.
+// La función 'getTeamStats' ha sido completamente refactorizada para usar una única consulta atómica y eficiente.
 const getTeamStats = async (req, res) => {
     try {
         const userId = new mongoose.Types.ObjectId(req.user.id);
@@ -12,8 +12,7 @@ const getTeamStats = async (req, res) => {
             // 1. Empezamos con el usuario actual.
             { $match: { _id: userId } },
             
-            // 2. [NEXUS REPORTING V2] - Calculamos la comisión total del usuario ANTES de cualquier otra cosa.
-            // Esto asegura que leemos las transacciones más recientes.
+            // 2. Calculamos la comisión total del usuario directamente en la base de datos.
             {
                 $project: {
                     totalCommission: {
@@ -33,7 +32,7 @@ const getTeamStats = async (req, res) => {
                 }
             },
             
-            // 3. Obtenemos todos los referidos hasta 3 niveles.
+            // 3. Obtenemos todos los referidos hasta 3 niveles usando $graphLookup.
             {
                 $graphLookup: {
                     from: 'users',
@@ -46,18 +45,18 @@ const getTeamStats = async (req, res) => {
                 }
             },
             
-            // 4. Si el usuario no tiene equipo, 'teamMembers' estará vacío. Necesitamos manejar este caso.
-            // Usamos $unwind de forma segura.
+            // 4. "Desenrrollamos" los miembros del equipo para poder procesarlos individualmente.
+            // preserveNullAndEmptyArrays asegura que el pipeline no se detenga si un usuario no tiene equipo.
             { $unwind: { path: "$teamMembers", preserveNullAndEmptyArrays: true } },
 
-            // 5. Agrupamos los resultados para sumar los totales y contar miembros por nivel.
+            // 5. Agrupamos todos los resultados para sumar los totales y contar miembros.
             {
                 $group: {
                     _id: "$_id",
-                    totalCommission: { $first: "$totalCommission" }, // Mantenemos la comisión que ya calculamos.
+                    totalCommission: { $first: "$totalCommission" },
                     totalTeamMembers: { $sum: { $cond: ["$teamMembers._id", 1, 0] } },
-                    totalTeamRecharge: { $sum: "$teamMembers.totalRecharge" },
-                    totalTeamWithdrawals: { $sum: "$teamMembers.totalWithdrawal" },
+                    totalTeamRecharge: { $sum: { $ifNull: ["$teamMembers.totalRecharge", 0] } },
+                    totalTeamWithdrawals: { $sum: { $ifNull: ["$teamMembers.totalWithdrawal", 0] } },
                     level1Members: { $sum: { $cond: [{ $eq: ['$teamMembers.level', 0] }, 1, 0] } },
                     level2Members: { $sum: { $cond: [{ $eq: ['$teamMembers.level', 1] }, 1, 0] } },
                     level3Members: { $sum: { $cond: [{ $eq: ['$teamMembers.level', 2] }, 1, 0] } },
@@ -86,29 +85,23 @@ const getTeamStats = async (req, res) => {
         
         const result = await User.aggregate(aggregationPipeline);
         
-        // Si el usuario no tiene equipo, la agregación podría devolver un resultado vacío o parcial.
-        // Nos aseguramos de devolver siempre una estructura de datos completa.
-        const finalStats = result[0] || {
-            totalCommission: 0,
-            totalTeamMembers: 0,
-            totalTeamRecharge: 0,
-            totalTeamWithdrawals: 0,
-            levels: [
-                { level: 1, totalMembers: 0, validMembers: 0 },
-                { level: 2, totalMembers: 0, validMembers: 0 },
-                { level: 3, totalMembers: 0, validMembers: 0 },
-            ],
-        };
+        const finalStats = result[0];
 
-        // En el caso improbable de que un usuario no tenga equipo pero sí comisiones,
-        // necesitamos obtener su totalCommission por separado si la agregación principal no lo devuelve.
-        if (!result[0]) {
-             const currentUser = await User.findById(userId).select('transactions').lean();
-             finalStats.totalCommission = currentUser.transactions
-                .filter(tx => tx.type === 'referral_commission')
-                .reduce((sum, tx) => sum + tx.amount, 0);
+        // Si el usuario no existe en el resultado (caso extremo), devolvemos un objeto por defecto.
+        if (!finalStats) {
+            return res.status(404).json({
+                totalCommission: 0,
+                totalTeamMembers: 0,
+                totalTeamRecharge: 0,
+                totalTeamWithdrawals: 0,
+                levels: [
+                    { level: 1, totalMembers: 0, validMembers: 0 },
+                    { level: 2, totalMembers: 0, validMembers: 0 },
+                    { level: 3, totalMembers: 0, validMembers: 0 },
+                ],
+            });
         }
-
+        
         res.json(finalStats);
 
     } catch (error) {
@@ -117,7 +110,7 @@ const getTeamStats = async (req, res) => {
     }
 };
 
-// La función getLevelDetails no requiere cambios.
+// La función getLevelDetails no requiere cambios y se mantiene intacta.
 const getLevelDetails = async (req, res) => {
     try {
         const userId = new mongoose.Types.ObjectId(req.user.id);
