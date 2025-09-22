@@ -1,4 +1,5 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS - TREASURY RESTORATION")
+// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS - FINAL WITHDRAWAL UNIFICATION")
+
 const User = require('../models/userModel');
 const Factory = require('../models/toolModel');
 const Setting =require('../models/settingsModel');
@@ -18,7 +19,6 @@ const crypto = require('crypto');
 const blockchainService = require('../services/blockchainService');
 const Transaction = require('../models/transactionModel');
 
-// --- Constantes y Helpers ---
 const PLACEHOLDER_AVATAR_URL = 'https://i.postimg.cc/mD21B6r7/user-avatar-placeholder.png';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
 const USDT_ABI = ['function balanceOf(address) view returns (uint256)'];
@@ -60,46 +60,128 @@ const getDashboardStats = asyncHandler(async (req, res) => {
   res.json({ totalUsers, totalDepositVolume, pendingWithdrawals, centralWalletBalances, userGrowthData });
 });
 
+// ======================= INICIO DE LA REFACTORIZACIÓN CRÍTICA DE RETIROS =======================
 const getPendingWithdrawals = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
-  const aggregationPipeline = [ { $match: { 'transactions.type': 'withdrawal', 'transactions.status': 'pending' } }, { $unwind: '$transactions' }, { $match: { 'transactions.type': 'withdrawal', 'transactions.status': 'pending' } }, { $sort: { 'transactions.createdAt': -1 } }, { $project: { _id: '$transactions._id', grossAmount: { $abs: '$transactions.amount' }, feeAmount: { $ifNull: [ { $toDouble: '$transactions.metadata.feeAmount' }, 0 ] }, netAmount: { $ifNull: [ { $toDouble: '$transactions.metadata.netAmount' }, 0 ] }, walletAddress: '$transactions.metadata.walletAddress', currency: '$transactions.currency', status: '$transactions.status', createdAt: '$transactions.createdAt', user: { _id: '$_id', username: '$username', telegramId: '$telegramId', photoFileId: '$photoFileId' } } } ];
+
+  // La nueva pipeline consulta la colección Transaction, la fuente de verdad.
+  const aggregationPipeline = [
+    // 1. Filtrar solo retiros pendientes
+    { $match: { type: 'withdrawal', status: 'pending' } },
+    // 2. Ordenar por fecha de creación para mostrar los más recientes primero
+    { $sort: { createdAt: -1 } },
+    // 3. Unir con la colección de usuarios para obtener los detalles del solicitante
+    {
+        $lookup: {
+            from: 'users',
+            localField: 'user',
+            foreignField: '_id',
+            as: 'userDetails'
+        }
+    },
+    // 4. Desenvolver el array de userDetails (siempre será de 1 elemento)
+    { $unwind: '$userDetails' },
+    // 5. Proyectar los datos en el formato EXACTO que el frontend espera
+    {
+      $project: {
+        _id: 1, // El ID de la transacción
+        grossAmount: { $abs: '$amount' },
+        feeAmount: { $ifNull: [ { $toDouble: '$metadata.feeAmount' }, 0 ] },
+        netAmount: { $ifNull: [ { $toDouble: '$metadata.netAmount' }, 0 ] },
+        walletAddress: '$metadata.walletAddress',
+        currency: '$currency',
+        status: '$status',
+        createdAt: '$createdAt',
+        user: { // Objeto de usuario anidado
+            _id: '$userDetails._id',
+            username: '$userDetails.username',
+            telegramId: '$userDetails.telegramId',
+            photoFileId: '$userDetails.photoFileId'
+        }
+      }
+    }
+  ];
+
   const countPipeline = [...aggregationPipeline, { $count: 'total' }];
   const paginatedPipeline = [...aggregationPipeline, { $skip: (page - 1) * limit }, { $limit: limit }];
-  const [totalResult, paginatedItems] = await Promise.all([ User.aggregate(countPipeline), User.aggregate(paginatedPipeline) ]);
+
+  const [totalResult, paginatedItems] = await Promise.all([
+    Transaction.aggregate(countPipeline),
+    Transaction.aggregate(paginatedPipeline)
+  ]);
+
   const total = totalResult.length > 0 ? totalResult[0].total : 0;
-  if (total === 0) return res.json({ withdrawals: [], page: 1, pages: 0, total: 0 });
-  const withdrawalsWithDetails = await Promise.all(paginatedItems.map(async (w) => { const photoUrl = await getTemporaryPhotoUrl(w.user.photoFileId); return { ...w, user: { ...w.user, photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL } }; }));
-  res.json({ withdrawals: withdrawalsWithDetails, page, pages: Math.ceil(total / limit), total });
+  if (total === 0) {
+    return res.json({ withdrawals: [], page: 1, pages: 0, total: 0 });
+  }
+
+  // Enriquecemos los resultados con la URL de la foto temporal
+  const withdrawalsWithDetails = await Promise.all(paginatedItems.map(async (w) => {
+    const photoUrl = await getTemporaryPhotoUrl(w.user.photoFileId);
+    return { ...w, user: { ...w.user, photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL } };
+  }));
+
+  res.json({
+    withdrawals: withdrawalsWithDetails,
+    page,
+    pages: Math.ceil(total / limit),
+    total
+  });
 });
 
 const processWithdrawal = asyncHandler(async (req, res) => {
   const { status, adminNotes } = req.body;
   const { id: transactionId } = req.params;
-  if (!['completed', 'rejected'].includes(status)) { res.status(400); throw new Error("El estado debe ser 'completed' o 'rejected'."); }
+
+  if (!['completed', 'rejected'].includes(status)) {
+    res.status(400);
+    throw new Error("El estado debe ser 'completed' o 'rejected'.");
+  }
+
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
-    const user = await User.findOne({ 'transactions._id': transactionId, 'transactions.status': 'pending' }).session(session);
-    if (!user) throw new Error('Retiro no encontrado o ya ha sido procesado.');
-    const withdrawal = user.transactions.id(transactionId);
+    
+    // La nueva lógica busca la transacción en la colección correcta.
+    const withdrawal = await Transaction.findOne({ _id: transactionId, status: 'pending' }).session(session);
+    if (!withdrawal) {
+      throw new Error('Retiro no encontrado o ya ha sido procesado.');
+    }
+    
+    const user = await User.findById(withdrawal.user).session(session);
+    if (!user) {
+        throw new Error('Usuario asociado al retiro no encontrado.');
+    }
+
     let notificationMessage = '';
+
     if (status === 'completed') {
       withdrawal.status = 'completed';
       withdrawal.description = `Retiro completado por el administrador.`;
+      // El saldo ya fue descontado al solicitar, no se necesita acción aquí.
       notificationMessage = `✅ <b>¡Retiro Aprobado!</b>\n\nTu solicitud de retiro por <b>${Math.abs(withdrawal.amount)} USDT</b> ha sido aprobada.`;
-    } else {
-      user.balance.usdt += Math.abs(withdrawal.amount);
+    } else { // 'rejected'
+      user.balance.usdt += Math.abs(withdrawal.amount); // Devolvemos los fondos al usuario.
       withdrawal.status = 'rejected';
       withdrawal.description = `Retiro rechazado. Fondos devueltos al saldo.`;
       notificationMessage = `❌ <b>Retiro Rechazado</b>\n\nTu solicitud de retiro por <b>${Math.abs(withdrawal.amount)} USDT</b> ha sido rechazada.\n\n<b>Motivo:</b> ${adminNotes || 'Contacta a soporte.'}`;
     }
-    withdrawal.metadata.adminNotes = adminNotes || 'N/A';
-    withdrawal.metadata.processedBy = req.user.username;
+
+    withdrawal.metadata.set('adminNotes', adminNotes || 'N/A');
+    withdrawal.metadata.set('processedBy', req.user.username);
+    
     await user.save({ session });
+    await withdrawal.save({ session });
+
     await session.commitTransaction();
-    if (user.telegramId && notificationMessage) { await sendTelegramMessage(user.telegramId, notificationMessage); }
+
+    if (user.telegramId && notificationMessage) {
+      await sendTelegramMessage(user.telegramId, notificationMessage);
+    }
+
     res.json({ message: `Retiro marcado como '${status}' exitosamente.`, withdrawal });
+
   } catch (error) {
     await session.abortTransaction();
     res.status(500).json({ message: error.message || "Error del servidor al procesar el retiro." });
@@ -107,107 +189,51 @@ const processWithdrawal = asyncHandler(async (req, res) => {
     session.endSession();
   }
 });
+// ======================== FIN DE LA REFACTORIZACIÓN CRÍTICA DE RETIROS =========================
 
-// --- Tesorería ---
-// [NEXUS TREASURY RESTORATION] - INICIO DE LA RECONSTRUCCIÓN DE LA FUNCIÓN
 const getTreasuryWalletsList = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 15;
-  const search = req.query.search || ''; // Aunque el frontend no lo usa, lo dejamos preparado.
-  
+  const search = req.query.search || '';
   let query = { chain: 'BSC' };
   if (search) {
       const userQuery = { username: { $regex: search, $options: 'i' } };
       const users = await User.find(userQuery).select('_id');
-      query.$or = [
-          { address: { $regex: search, $options: 'i' } },
-          { user: { $in: users.map(u => u._id) } }
-      ];
+      query.$or = [ { address: { $regex: search, $options: 'i' } }, { user: { $in: users.map(u => u._id) } } ];
   }
-  
-  const [totalWallets, wallets] = await Promise.all([
-      CryptoWallet.countDocuments(query),
-      CryptoWallet.find(query)
-          .populate('user', 'username')
-          .sort({ createdAt: -1 })
-          .skip((page - 1) * limit)
-          .limit(limit)
-          .lean()
-  ]);
-
+  const [totalWallets, wallets] = await Promise.all([ CryptoWallet.countDocuments(query), CryptoWallet.find(query).populate('user', 'username').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean() ]);
   if (totalWallets === 0) {
-      return res.json({
-          wallets: [],
-          pagination: { currentPage: 1, totalPages: 0, totalWallets: 0 },
-          summary: { usdt: 0, bnb: 0 }
-      });
+      return res.json({ wallets: [], pagination: { currentPage: 1, totalPages: 0, totalWallets: 0 }, summary: { usdt: 0, bnb: 0 } });
   }
-
-  const walletsWithDetails = await Promise.all(
-      wallets.map(async (wallet) => {
+  const walletsWithDetails = await Promise.all( wallets.map(async (wallet) => {
           try {
               const balances = await _getBalancesForAddress(wallet.address, wallet.chain);
               let estimatedRequiredGas = 0;
-              if (balances.usdt > 0.000001) {
-                  estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt);
-              }
-              return {
-                  ...wallet,
-                  usdtBalance: balances.usdt,
-                  gasBalance: balances.bnb,
-                  estimatedRequiredGas
-              };
+              if (balances.usdt > 0.000001) { estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt); }
+              return { ...wallet, usdtBalance: balances.usdt, gasBalance: balances.bnb, estimatedRequiredGas };
           } catch (error) {
-              return {
-                  ...wallet,
-                  usdtBalance: 0,
-                  gasBalance: 0,
-                  estimatedRequiredGas: 0,
-                  error: `Fallo al obtener balance: ${error.message}`
-              };
+              return { ...wallet, usdtBalance: 0, gasBalance: 0, estimatedRequiredGas: 0, error: `Fallo al obtener balance: ${error.message}` };
           }
       })
   );
-
-  const summary = walletsWithDetails.reduce((acc, wallet) => {
-      acc.usdt += wallet.usdtBalance || 0;
-      acc.bnb += wallet.gasBalance || 0;
-      return acc;
-  }, { usdt: 0, bnb: 0 });
-
-  res.json({
-      wallets: walletsWithDetails,
-      pagination: {
-          currentPage: page,
-          totalPages: Math.ceil(totalWallets / limit),
-          totalWallets
-      },
-      summary
-  });
+  const summary = walletsWithDetails.reduce((acc, wallet) => { acc.usdt += wallet.usdtBalance || 0; acc.bnb += wallet.gasBalance || 0; return acc; }, { usdt: 0, bnb: 0 });
+  res.json({ wallets: walletsWithDetails, pagination: { currentPage: page, totalPages: Math.ceil(totalWallets / limit), totalWallets }, summary });
 });
-// [NEXUS TREASURY RESTORATION] - FIN DE LA RECONSTRUCCIÓN
 
 const sweepFunds = asyncHandler(async (req, res) => {
   const { walletsToSweep } = req.body;
-  
-  // [NEXUS SWEEP FIX] - Corrección 1: Se lee la variable de entorno correcta.
   const SWEEP_DESTINATION_WALLET = process.env.TREASURY_WALLET_ADDRESS;
-
-  // [NEXUS SWEEP HARDENING] - Corrección 2: Manejo de error robusto.
   if (!SWEEP_DESTINATION_WALLET) {
     console.error('[CRITICAL CONFIG ERROR] La variable TREASURY_WALLET_ADDRESS no está definida.');
     return res.status(500).json({ message: 'Error crítico de configuración de seguridad del servidor.' });
   }
-  
   if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
     return res.status(400).json({ message: "Parámetro inválido. Se requiere 'walletsToSweep' (array)." });
   }
-
   const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
   if (wallets.length === 0) {
     return res.json({ message: "Ninguna de las wallets candidatas fue encontrada...", summary: {}, details: [] });
   }
-
   const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
   for (const wallet of wallets) {
     try {
@@ -222,28 +248,20 @@ const sweepFunds = asyncHandler(async (req, res) => {
   res.json(report);
 });
 
-
 const sweepGas = asyncHandler(async (req, res) => {
   const { walletsToSweep } = req.body;
-  
-  // [NEXUS SWEEP FIX] - Corrección 1: Se lee la variable de entorno correcta.
   const SWEEP_DESTINATION_WALLET = process.env.TREASURY_WALLET_ADDRESS;
-
-  // [NEXUS SWEEP HARDENING] - Corrección 2: Manejo de error robusto.
   if (!SWEEP_DESTINATION_WALLET) {
     console.error('[CRITICAL CONFIG ERROR] La variable TREASURY_WALLET_ADDRESS no está definida.');
     return res.status(500).json({ message: 'Error crítico de configuración de seguridad del servidor.' });
   }
-
   if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
     return res.status(400).json({ message: "Parámetro inválido. Se requiere 'walletsToSweep' (array)." });
   }
-
   const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
   if (wallets.length === 0) {
     return res.json({ message: "Ninguna wallet candidata encontrada...", summary: {}, details: [] });
   }
-
   const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
   for (const wallet of wallets) {
     try {
@@ -278,7 +296,6 @@ const dispatchGas = asyncHandler(async (req, res) => {
   res.json(report);
 });
 
-// --- Gestión de Usuarios (con Búsqueda Mejorada) ---
 const getAllUsers = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
@@ -360,13 +377,14 @@ const getAllTransactions = asyncHandler(async (req, res) => {
     res.json({ transactions: transactions || [], page, pages: Math.ceil(total / limit), total });
 });
 
-// --- Fábricas y Ajustes ---
 const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
   const pendingTxs = await PendingTx.find().lean(); res.json(pendingTxs);
 });
+
 const getAllFactories = asyncHandler(async (req, res) => {
   const factories = await Factory.find(); res.json(factories);
 });
+
 const createFactory = asyncHandler(async (req, res) => {
   const { isFree, ...factoryData } = req.body;
   const session = await mongoose.startSession();
@@ -384,6 +402,7 @@ const createFactory = asyncHandler(async (req, res) => {
     session.endSession();
   }
 });
+
 const updateFactory = asyncHandler(async (req, res) => {
   const { isFree, ...factoryData } = req.body;
   const session = await mongoose.startSession();
@@ -403,30 +422,36 @@ const updateFactory = asyncHandler(async (req, res) => {
     session.endSession();
   }
 });
+
 const deleteFactory = asyncHandler(async (req, res) => {
   const factory = await Factory.findById(req.params.id);
   if (!factory) { res.status(404); throw new Error('Fábrica no encontrada'); }
   await factory.deleteOne(); res.json({ message: 'Fábrica eliminada' });
 });
+
 const getSettings = asyncHandler(async (req, res) => {
   const settings = await Setting.findOne(); res.json(settings);
 });
+
 const updateSettings = asyncHandler(async (req, res) => {
   const settings = await Setting.findOne();
   if (!settings) { res.status(404); throw new Error('Configuración no encontrada'); }
   Object.assign(settings, req.body); const updatedSettings = await settings.save(); res.json(updatedSettings);
 });
+
 const generateTwoFactorSecret = asyncHandler(async (req, res) => {
   const secret = speakeasy.generateSecret({ name: 'Nexus Security App' });
   const qrCodeDataURL = await qrCodeToDataURLPromise(secret.otpauth_url);
   res.json({ secret: secret.base32, qrCodeDataURL });
 });
+
 const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
   const { token, secret } = req.body;
   const verified = speakeasy.totp.verify({ secret, encoding: 'base32', token });
   if (!verified) { res.status(400); throw new Error('Token inválido'); }
   req.user.twoFactorEnabled = true; req.user.twoFactorSecret = secret; await req.user.save(); res.json({ message: '2FA habilitado con éxito' });
 });
+
 const sendBroadcastNotification = asyncHandler(async (req, res) => {
   const { message, imageUrl, buttonUrl, buttonText } = req.body;
   if (!message) { res.status(400); throw new Error('El mensaje es requerido.'); }
@@ -440,7 +465,6 @@ const sendBroadcastNotification = asyncHandler(async (req, res) => {
   res.json({ message: `Notificación enviada. Éxitos: ${successfulSends}, Fallos: ${failedSends}.`, details: { successful: successfulSends, failed: failedSends } });
 });
 
-// [NEXUS TREASURY RESTORATION] - La función reconstruida ahora se exporta correctamente.
 module.exports = {
   getDashboardStats,
   getPendingWithdrawals,
@@ -460,7 +484,7 @@ module.exports = {
   updateSettings,
   generateTwoFactorSecret,
   verifyAndEnableTwoFactor,
-  getTreasuryWalletsList, // <-- ¡REACTIVADA!
+  getTreasuryWalletsList,
   sweepFunds,
   sweepGas,
   analyzeGasNeeds,
