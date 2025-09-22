@@ -158,7 +158,7 @@ const processWithdrawal = asyncHandler(async (req, res) => {
 
     if (status === 'completed') {
       withdrawal.status = 'completed';
-      withdrawal.description = `Retiro completado por el administrador.`;
+      withdrawal.description = `Retiro completado.`;
       // El saldo ya fue descontado al solicitar, no se necesita acción aquí.
       notificationMessage = `✅ <b>¡Retiro Aprobado!</b>\n\nTu solicitud de retiro por <b>${Math.abs(withdrawal.amount)} USDT</b> ha sido aprobada.`;
     } else { // 'rejected'
