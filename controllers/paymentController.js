@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/paymentController.js (VERSIÓN "NEXUS - HÍBRIDA")
+// RUTA: backend/controllers/paymentController.js (VERSIÓN "NEXUS - STATIC BNB ARCHITECTURE")
 
 const { ethers } = require('ethers');
 const CryptoWallet = require('../models/cryptoWalletModel');
@@ -8,23 +8,17 @@ const asyncHandler = require('express-async-handler');
 
 const hdNode = ethers.utils.HDNode.fromMnemonic(process.env.MASTER_SEED_PHRASE);
 
-/**
- * [PRIVADO] Función interna para generar o recuperar una dirección de depósito BSC para un usuario.
- * No se exporta como controlador, se usa internamente.
- */
 const getOrCreateUserBscAddress = async (userId) => {
   let wallet = await CryptoWallet.findOne({ user: userId, chain: 'BSC' });
   if (wallet) {
     return wallet.address;
   }
-
   console.log(`[WalletGen] Creando nueva wallet BSC para el usuario ${userId}`);
   const lastWallet = await CryptoWallet.findOne().sort({ derivationIndex: -1 });
   const newIndex = lastWallet ? lastWallet.derivationIndex + 1 : 0;
   const derivedNode = hdNode.derivePath(`m/44'/60'/0'/0/${newIndex}`);
   const newAddress = derivedNode.address;
   const currentBlock = await blockchainService.provider.getBlockNumber();
-
   wallet = new CryptoWallet({
     user: userId,
     chain: 'BSC',
@@ -33,59 +27,53 @@ const getOrCreateUserBscAddress = async (userId) => {
     lastScannedBlock: currentBlock,
   });
   await wallet.save();
-  
   return newAddress;
 };
 
-
-/**
- * @desc    Obtiene todas las opciones de depósito (dinámicas y estáticas).
- * @route   GET /api/payment/deposit-options
- * @access  Protected
- */
 const getDepositOptions = asyncHandler(async (req, res) => {
     const userId = req.user.id;
-
-    // 1. Obtener la dirección BSC dinámica del usuario.
     const bscAddress = await getOrCreateUserBscAddress(userId);
 
-    // 2. Leer las direcciones estáticas desde las variables de entorno.
+    // [NEXUS REFINEMENT] - INICIO DE LA MODIFICACIÓN
+    // 1. Añadimos STATIC_WALLET_BNB a la lista de wallets a leer del entorno.
     const staticWallets = {
         TRC20_USDT: process.env.STATIC_WALLET_TRC20_USDT || null,
         TRX: process.env.STATIC_WALLET_TRX || null,
         LTC: process.env.STATIC_WALLET_LTC || null,
-        // Puede añadir más aquí en el futuro.
+        BNB: process.env.STATIC_WALLET_BNB || null, // Se añade BNB aquí.
     };
     
-    // 3. Construir la respuesta.
     const depositOptions = [
         {
             id: 'bep20-usdt',
             name: 'BEP20-USDT',
             logo: 'https://i.postimg.cc/Qd05p24c/usdt.png',
             chain: 'BSC',
-            type: 'dynamic', // Indica que es una wallet única para el usuario.
+            type: 'dynamic',
             address: bscAddress,
             memo: null,
             warning: 'Esta es tu dirección única. Solo envía USDT en la red BEP20 (Binance Smart Chain).',
         },
-        {
+        // 2. Eliminamos la entrada de BNB que usaba la dirección dinámica.
+        // ...(El antiguo objeto de BNB ha sido eliminado)
+
+        // 3. Añadimos BNB como una opción estática, igual que las demás.
+        ...(staticWallets.BNB ? [{
             id: 'bep20-bnb',
             name: 'BNB',
             logo: 'https://i.postimg.cc/R01Gw1bC/bnb.png',
             chain: 'BSC',
-            type: 'dynamic',
-            address: bscAddress,
+            type: 'static_manual', // Su tipo ahora es estático.
+            address: staticWallets.BNB, // Usa la dirección del .env
             memo: null,
-            warning: 'Esta es tu dirección única. Solo envía BNB en la red BEP20 (Binance Smart Chain).',
-        },
-        // Si la variable de entorno para una wallet estática no existe, no se incluirá en la respuesta.
+            warning: 'Depósito manual. Tras pagar, contacta a soporte con el TXID para acreditar tu saldo.', // Mensaje estandarizado.
+        }] : []),
         ...(staticWallets.TRC20_USDT ? [{
             id: 'trc20-usdt',
             name: 'TRC20-USDT',
             logo: 'https://i.postimg.cc/Qd05p24c/usdt.png',
             chain: 'TRON',
-            type: 'static_manual', // Indica que es una wallet fija y requiere confirmación manual.
+            type: 'static_manual',
             address: staticWallets.TRC20_USDT,
             memo: null,
             warning: 'Depósito manual. Tras pagar, contacta a soporte con el TXID para acreditar tu saldo.',
@@ -111,40 +99,32 @@ const getDepositOptions = asyncHandler(async (req, res) => {
             warning: 'Depósito manual. Tras pagar, contacta a soporte con el TXID para acreditar tu saldo.',
         }] : []),
     ];
+    // [NEXUS REFINEMENT] - FIN DE LA MODIFICACIÓN
 
     res.json(depositOptions);
 });
 
-
-/**
- * @deprecated La lógica ahora está centralizada en getDepositOptions.
- */
 const generateAddress = async (req, res) => {
   res.status(410).json({ message: 'Este endpoint ha sido deprecado. Usa GET /payment/deposit-options en su lugar.' });
 };
 
-/**
- * Devuelve los precios actuales de las criptomonedas soportadas.
- */
 const getPrices = asyncHandler(async (req, res) => {
     const [bnbPrice, trxPrice, ltcPrice] = await Promise.all([
         getPrice('BNB'),
         getPrice('TRX'),
         getPrice('LTC'),
     ]);
-
     const prices = {
         BNB: bnbPrice,
         TRX: trxPrice,
         LTC: ltcPrice,
         USDT: 1,
     };
-
     res.status(200).json(prices);
 });
 
 module.exports = {
-  getDepositOptions, // Exportamos la nueva función.
+  getDepositOptions,
   generateAddress,
   getPrices,
 };
