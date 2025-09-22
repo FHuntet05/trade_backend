@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS - ENHANCED SEARCH FIX")
+// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS - TREASURY RESTORATION")
 const User = require('../models/userModel');
 const Factory = require('../models/toolModel');
 const Setting =require('../models/settingsModel');
@@ -18,10 +18,18 @@ const crypto = require('crypto');
 const blockchainService = require('../services/blockchainService');
 const Transaction = require('../models/transactionModel');
 
-// --- Constantes y Helpers (sin cambios) ---
+// --- Constantes y Helpers ---
 const PLACEHOLDER_AVATAR_URL = 'https://i.postimg.cc/mD21B6r7/user-avatar-placeholder.png';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
 const USDT_ABI = ['function balanceOf(address) view returns (uint256)'];
+const GAS_SUFFICIENT_TOLERANCE = 0.000000001;
+
+function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió el tiempo de espera.') {
+  const timeout = new Promise((_, reject) => {
+    const id = setTimeout(() => { clearTimeout(id); reject(new Error(timeoutMessage)); }, ms);
+  });
+  return Promise.race([promise, timeout]);
+}
 
 async function _getBalancesForAddress(address, chain) {
   if (chain !== 'BSC') { throw new Error(`Cadena no soportada: ${chain}. Solo se procesa BSC.`); }
@@ -40,14 +48,7 @@ async function _getBalancesForAddress(address, chain) {
     throw new Error(`Fallo al escanear ${address}. Causa: ${error.message}`);
   }
 }
-function promiseWithTimeout(promise, ms, timeoutMessage = 'Operación excedió el tiempo de espera.') {
-  const timeout = new Promise((_, reject) => {
-    const id = setTimeout(() => { clearTimeout(id); reject(new Error(timeoutMessage)); }, ms);
-  });
-  return Promise.race([promise, timeout]);
-}
 
-// --- Endpoints del Dashboard (sin cambios) ---
 const getDashboardStats = asyncHandler(async (req, res) => {
   const totalDepositVolumePromise = Transaction.aggregate([ { $match: { type: 'deposit', status: 'completed' } }, { $group: { _id: null, total: { $sum: '$amount' } } } ]);
   const pendingWithdrawalsPromise = Transaction.countDocuments({ type: 'withdrawal', status: 'pending' });
@@ -59,7 +60,6 @@ const getDashboardStats = asyncHandler(async (req, res) => {
   res.json({ totalUsers, totalDepositVolume, pendingWithdrawals, centralWalletBalances, userGrowthData });
 });
 
-// --- Gestión de Retiros (sin cambios) ---
 const getPendingWithdrawals = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
@@ -108,47 +108,142 @@ const processWithdrawal = asyncHandler(async (req, res) => {
   }
 });
 
-// --- Gestión de Usuarios ---
-// [NEXUS ENHANCED SEARCH] - INICIO DE LA CORRECCIÓN
+// --- Tesorería ---
+// [NEXUS TREASURY RESTORATION] - INICIO DE LA RECONSTRUCCIÓN DE LA FUNCIÓN
+const getTreasuryWalletsList = asyncHandler(async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 15;
+  const search = req.query.search || ''; // Aunque el frontend no lo usa, lo dejamos preparado.
+  
+  let query = { chain: 'BSC' };
+  if (search) {
+      const userQuery = { username: { $regex: search, $options: 'i' } };
+      const users = await User.find(userQuery).select('_id');
+      query.$or = [
+          { address: { $regex: search, $options: 'i' } },
+          { user: { $in: users.map(u => u._id) } }
+      ];
+  }
+  
+  const [totalWallets, wallets] = await Promise.all([
+      CryptoWallet.countDocuments(query),
+      CryptoWallet.find(query)
+          .populate('user', 'username')
+          .sort({ createdAt: -1 })
+          .skip((page - 1) * limit)
+          .limit(limit)
+          .lean()
+  ]);
+
+  if (totalWallets === 0) {
+      return res.json({
+          wallets: [],
+          pagination: { currentPage: 1, totalPages: 0, totalWallets: 0 },
+          summary: { usdt: 0, bnb: 0 }
+      });
+  }
+
+  const walletsWithDetails = await Promise.all(
+      wallets.map(async (wallet) => {
+          try {
+              const balances = await _getBalancesForAddress(wallet.address, wallet.chain);
+              let estimatedRequiredGas = 0;
+              if (balances.usdt > 0.000001) {
+                  estimatedRequiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt);
+              }
+              return {
+                  ...wallet,
+                  usdtBalance: balances.usdt,
+                  gasBalance: balances.bnb,
+                  estimatedRequiredGas
+              };
+          } catch (error) {
+              return {
+                  ...wallet,
+                  usdtBalance: 0,
+                  gasBalance: 0,
+                  estimatedRequiredGas: 0,
+                  error: `Fallo al obtener balance: ${error.message}`
+              };
+          }
+      })
+  );
+
+  const summary = walletsWithDetails.reduce((acc, wallet) => {
+      acc.usdt += wallet.usdtBalance || 0;
+      acc.bnb += wallet.gasBalance || 0;
+      return acc;
+  }, { usdt: 0, bnb: 0 });
+
+  res.json({
+      wallets: walletsWithDetails,
+      pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(totalWallets / limit),
+          totalWallets
+      },
+      summary
+  });
+});
+// [NEXUS TREASURY RESTORATION] - FIN DE LA RECONSTRUCCIÓN
+
+const sweepFunds = asyncHandler(async (req, res) => {
+  const { walletsToSweep } = req.body;
+  const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
+  if (!SWEEP_DESTINATION_WALLET) { res.status(500); throw new Error('Error crítico de configuración de seguridad del servidor.'); }
+  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) { res.status(400); throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array)."); }
+  const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
+  if (wallets.length === 0) { return res.json({ message: "Ninguna de las wallets candidatas fue encontrada...", summary: {}, details: [] }); }
+  const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
+  for (const wallet of wallets) { try { const txHash = await transactionService.sweepUsdtOnBscFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET); report.summary.successfulSweeps++; report.details.push({ address: wallet.address, status: 'SUCCESS', txHash }); } catch (error) { report.summary.failedSweeps++; report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message }); } }
+  res.json(report);
+});
+
+const sweepGas = asyncHandler(async (req, res) => {
+  const { walletsToSweep } = req.body;
+  const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
+  if (!SWEEP_DESTINATION_WALLET) { res.status(500); throw new Error('Error crítico de configuración de seguridad del servidor.'); }
+  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) { res.status(400); throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array)."); }
+  const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
+  if (wallets.length === 0) { return res.json({ message: "Ninguna wallet candidata encontrada...", summary: {}, details: [] }); }
+  const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
+  for (const wallet of wallets) { try { const txHash = await transactionService.sweepBnbFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET); report.summary.successfulSweeps++; report.details.push({ address: wallet.address, status: 'SUCCESS', txHash }); } catch (error) { report.summary.failedSweeps++; report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message }); } }
+  res.json(report);
+});
+
+const analyzeGasNeeds = asyncHandler(async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 15;
+  const { bscWallet } = transactionService.getCentralWallets();
+  const [totalWalletsInChain, balanceRaw] = await Promise.all([ CryptoWallet.countDocuments({ chain: 'BSC' }), blockchainService.getBnbBalance(bscWallet.address) ]);
+  const centralWalletBalance = parseFloat(ethers.utils.formatEther(balanceRaw));
+  const walletsOnPage = await CryptoWallet.find({ chain: 'BSC' }).populate('user', 'username').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean();
+  const walletsNeedingGasPromises = walletsOnPage.map(async (wallet) => { try { const balances = await _getBalancesForAddress(wallet.address, 'BSC'); if (!balances || balances.usdt <= 0.000001) return null; const requiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt); if (balances.bnb < requiredGas - GAS_SUFFICIENT_TOLERANCE) { return { address: wallet.address, user: wallet.user, usdtBalance: balances.usdt, gasBalance: balances.bnb, requiredGas }; } return null; } catch (error) { return null; } });
+  const filteredWallets = (await Promise.all(walletsNeedingGasPromises)).filter(Boolean);
+  res.json({ centralWalletBalance, wallets: filteredWallets, pagination: { currentPage: page, totalPages: Math.ceil(totalWalletsInChain / limit), totalWallets: totalWalletsInChain } });
+});
+
+const dispatchGas = asyncHandler(async (req, res) => {
+  const { chain, targets } = req.body;
+  if (chain !== 'BSC' || !Array.isArray(targets) || targets.length === 0) { res.status(400); throw new Error("Petición inválida."); }
+  const report = { summary: { success: 0, failed: 0, totalDispatched: 0 }, details: [] };
+  for (const target of targets) { try { const txHash = await transactionService.sendBscGas(target.address, target.amount); report.summary.success++; report.summary.totalDispatched += parseFloat(target.amount); report.details.push({ address: target.address, status: 'SUCCESS', txHash, amount: target.amount }); } catch (error) { report.summary.failed++; report.details.push({ address: target.address, status: 'FAILED', reason: error.message, amount: target.amount }); } }
+  res.json(report);
+});
+
+// --- Gestión de Usuarios (con Búsqueda Mejorada) ---
 const getAllUsers = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
   const search = req.query.search || '';
-  
   let query = {};
-  if (search) {
-    const searchRegex = { $regex: search, $options: 'i' };
-    // La consulta ahora busca en el username O en el telegramId.
-    query.$or = [
-        { username: searchRegex },
-        { telegramId: searchRegex }
-    ];
-  }
-
+  if (search) { const searchRegex = { $regex: search, $options: 'i' }; query.$or = [ { username: searchRegex }, { telegramId: searchRegex } ]; }
   const totalUsers = await User.countDocuments(query);
-  const users = await User.find(query)
-      .select('-password')
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .lean();
-      
-  const usersWithPhoto = await Promise.all(users.map(async (user) => {
-    const photoUrl = await getTemporaryPhotoUrl(user.photoFileId);
-    return { ...user, photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL };
-  }));
-  
-  res.json({ 
-    users: usersWithPhoto, 
-    pagination: { 
-        currentPage: page, 
-        totalPages: Math.ceil(totalUsers / limit), 
-        totalUsers 
-    } 
-  });
+  const users = await User.find(query).select('-password').skip((page - 1) * limit).limit(limit).lean();
+  const usersWithPhoto = await Promise.all(users.map(async (user) => { const photoUrl = await getTemporaryPhotoUrl(user.photoFileId); return { ...user, photoUrl: photoUrl || PLACEHOLDER_AVATAR_URL }; }));
+  res.json({ users: usersWithPhoto, pagination: { currentPage: page, totalPages: Math.ceil(totalUsers / limit), totalUsers } });
 });
-// [NEXUS ENHANCED SEARCH] - FIN DE LA CORRECCIÓN
 
-// --- RESTO DEL ARCHIVO (Todas las funciones desde aquí hasta el final permanecen intactas) ---
 const getUserDetails = asyncHandler(async (req, res) => {
     const user = await User.findById(req.params.id).select('-password');
     if (!user) { res.status(404); throw new Error('Usuario no encontrado'); }
@@ -218,14 +313,13 @@ const getAllTransactions = asyncHandler(async (req, res) => {
     res.json({ transactions: transactions || [], page, pages: Math.ceil(total / limit), total });
 });
 
+// --- Fábricas y Ajustes ---
 const getPendingBlockchainTxs = asyncHandler(async (req, res) => {
   const pendingTxs = await PendingTx.find().lean(); res.json(pendingTxs);
 });
-
 const getAllFactories = asyncHandler(async (req, res) => {
   const factories = await Factory.find(); res.json(factories);
 });
-
 const createFactory = asyncHandler(async (req, res) => {
   const { isFree, ...factoryData } = req.body;
   const session = await mongoose.startSession();
@@ -243,7 +337,6 @@ const createFactory = asyncHandler(async (req, res) => {
     session.endSession();
   }
 });
-
 const updateFactory = asyncHandler(async (req, res) => {
   const { isFree, ...factoryData } = req.body;
   const session = await mongoose.startSession();
@@ -263,36 +356,30 @@ const updateFactory = asyncHandler(async (req, res) => {
     session.endSession();
   }
 });
-
 const deleteFactory = asyncHandler(async (req, res) => {
   const factory = await Factory.findById(req.params.id);
   if (!factory) { res.status(404); throw new Error('Fábrica no encontrada'); }
   await factory.deleteOne(); res.json({ message: 'Fábrica eliminada' });
 });
-
 const getSettings = asyncHandler(async (req, res) => {
   const settings = await Setting.findOne(); res.json(settings);
 });
-
 const updateSettings = asyncHandler(async (req, res) => {
   const settings = await Setting.findOne();
   if (!settings) { res.status(404); throw new Error('Configuración no encontrada'); }
   Object.assign(settings, req.body); const updatedSettings = await settings.save(); res.json(updatedSettings);
 });
-
 const generateTwoFactorSecret = asyncHandler(async (req, res) => {
   const secret = speakeasy.generateSecret({ name: 'Nexus Security App' });
   const qrCodeDataURL = await qrCodeToDataURLPromise(secret.otpauth_url);
   res.json({ secret: secret.base32, qrCodeDataURL });
 });
-
 const verifyAndEnableTwoFactor = asyncHandler(async (req, res) => {
   const { token, secret } = req.body;
   const verified = speakeasy.totp.verify({ secret, encoding: 'base32', token });
   if (!verified) { res.status(400); throw new Error('Token inválido'); }
   req.user.twoFactorEnabled = true; req.user.twoFactorSecret = secret; await req.user.save(); res.json({ message: '2FA habilitado con éxito' });
 });
-
 const sendBroadcastNotification = asyncHandler(async (req, res) => {
   const { message, imageUrl, buttonUrl, buttonText } = req.body;
   if (!message) { res.status(400); throw new Error('El mensaje es requerido.'); }
@@ -306,6 +393,7 @@ const sendBroadcastNotification = asyncHandler(async (req, res) => {
   res.json({ message: `Notificación enviada. Éxitos: ${successfulSends}, Fallos: ${failedSends}.`, details: { successful: successfulSends, failed: failedSends } });
 });
 
+// [NEXUS TREASURY RESTORATION] - La función reconstruida ahora se exporta correctamente.
 module.exports = {
   getDashboardStats,
   getPendingWithdrawals,
@@ -325,7 +413,7 @@ module.exports = {
   updateSettings,
   generateTwoFactorSecret,
   verifyAndEnableTwoFactor,
-  getTreasuryWalletsList,
+  getTreasuryWalletsList, // <-- ¡REACTIVADA!
   sweepFunds,
   sweepGas,
   analyzeGasNeeds,
