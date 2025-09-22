@@ -1,8 +1,9 @@
-// RUTA: backend/controllers/walletController.js (VERSIÓN "NEXUS - UNIFIED TRANSACTION LOGGING")
+// RUTA: backend/controllers/walletController.js (VERSIÓN "NEXUS - WITHDRAWAL HOTFIX")
 
 const mongoose = require('mongoose');
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
+const Transaction = require('../models/transactionModel'); // <-- [NEXUS WITHDRAWAL HOTFIX] - LÍNEA AÑADIDA
 const { createTransaction } = require('../utils/transactionLogger');
 const asyncHandler = require('express-async-handler');
 
@@ -67,7 +68,7 @@ const claim = asyncHandler(async (req, res) => {
 const swapNtxToUsdt = asyncHandler(async (req, res) => {
   const { ntxAmount } = req.body;
   const userId = req.user.id;
-  const SWAP_RATE = 10000; // 1 USDT = 10,000 NTX
+  const SWAP_RATE = 10000;
 
   const session = await mongoose.startSession();
   try {
@@ -97,9 +98,6 @@ const swapNtxToUsdt = asyncHandler(async (req, res) => {
     user.balance.ntx -= numericNtxAmount;
     user.balance.usdt += usdtToReceive;
     
-    // [NEXUS AUDIT FIX] - INICIO DE LA CORRECCIÓN
-    // Se elimina la llamada al array obsoleto user.transactions.push()
-    // y se reemplaza por una llamada al logger centralizado.
     await createTransaction(
         userId,
         'swap_ntx_to_usdt',
@@ -109,7 +107,6 @@ const swapNtxToUsdt = asyncHandler(async (req, res) => {
         { ntxAmount: numericNtxAmount.toString(), feeAmount: feeAmount.toString() },
         session
     );
-    // [NEXUS AUDIT FIX] - FIN DE LA CORRECCIÓN
 
     await user.save({ session });
     await session.commitTransaction();
@@ -118,7 +115,7 @@ const swapNtxToUsdt = asyncHandler(async (req, res) => {
     res.status(200).json({ message: `¡Intercambio exitoso!`, user: updatedUser.toObject() });
   } catch (error) {
     await session.abortTransaction();
-    throw error; // Dejamos que el errorHandler lo capture.
+    throw error;
   } finally {
     session.endSession();
   }
@@ -169,10 +166,6 @@ const requestWithdrawal = asyncHandler(async (req, res) => {
     const feeAmount = numericAmount * (settings.withdrawalFeePercent / 100);
     const netAmount = numericAmount - feeAmount;
     
-    // [NEXUS AUDIT FIX] - INICIO DE LA CORRECCIÓN
-    // Se elimina la llamada al array obsoleto user.transactions.push()
-    // y se reemplaza por una llamada al logger centralizado.
-    // Creamos la transacción con estado 'pending' en la colección global.
     const newTransaction = new Transaction({
         user: userId,
         type: 'withdrawal',
@@ -189,7 +182,6 @@ const requestWithdrawal = asyncHandler(async (req, res) => {
         }
     });
     await newTransaction.save({ session });
-    // [NEXUS AUDIT FIX] - FIN DE LA CORRECCIÓN
 
     await user.save({ session });
     await session.commitTransaction();
@@ -208,7 +200,6 @@ const requestWithdrawal = asyncHandler(async (req, res) => {
   }
 });
 
-// [DEPRECATED] - Esta función ahora es obsoleta. La nueva lógica residirá en userController.
 const getHistory = asyncHandler(async (req, res) => {
     const transactions = (req.user.transactions || []).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 50);
     res.json(transactions);
