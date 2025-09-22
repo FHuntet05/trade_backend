@@ -1,6 +1,8 @@
-// backend/controllers/userController.js (FASE "PERFECTIO" + LÓGICA DE FILTRADO DE EJEMPLO)
+// RUTA: backend/controllers/userController.js (VERSIÓN "NEXUS - UNIFIED TRANSACTION SOURCE")
+
 const axios = require('axios');
 const User = require('../models/userModel');
+const Transaction = require('../models/transactionModel'); // <-- IMPORTANTE: Se añade el modelo Transaction.
 const asyncHandler = require('express-async-handler');
 
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
@@ -42,37 +44,26 @@ const getUserPhoto = asyncHandler(async (req, res) => {
 });
 
 
-// ======================= INICIO DE LA LÓGICA DE EJEMPLO =======================
-// [NEXUS ENFORCEMENT] - ¡ATENCIÓN!
-// Esta función es un EJEMPLO. La lógica real de sincronización de usuario
-// está en su `authController.js`. Deberá aplicar este mismo filtro allí.
-const getMyProfile_EXAMPLE = asyncHandler(async (req, res) => {
-    // 1. Encuentra al usuario (en su caso, esto ya sucede en la función de sync/login)
-    const user = await User.findById(req.user.id);
+// [NEXUS UNIFICATION] - INICIO DE LA NUEVA FUNCIÓN
+/**
+ * @desc    Obtiene el historial de transacciones de un usuario desde la colección centralizada.
+ * @route   (Deberá ser enlazada a GET /api/wallet/history en su archivo de rutas)
+ * @access  Private
+ */
+const getUserTransactions = asyncHandler(async (req, res) => {
+    const transactions = await Transaction.find({ user: req.user.id })
+        .sort({ createdAt: -1 }) // Ordenar de más reciente a más antiguo
+        .limit(100) // Limitar a las últimas 100 transacciones para performance
+        .lean(); // Usar .lean() para una consulta más rápida de solo lectura
 
-    if (user) {
-        // 2. Antes de enviar la respuesta, filtramos las transacciones
-        const filteredTransactions = user.transactions.filter(
-            (tx) => tx.type !== 'admin_action'
-        );
-
-        // Creamos un objeto de usuario seguro para enviar al frontend
-        const safeUser = {
-            ...user.toObject(), // Convertimos el documento de Mongoose a un objeto plano
-            transactions: filteredTransactions, // Reemplazamos con las transacciones filtradas
-        };
-        
-        // 3. Envía el objeto de usuario "limpio"
-        res.json(safeUser);
-    } else {
-        res.status(404);
-        throw new Error('Usuario no encontrado');
-    }
+    res.status(200).json(transactions);
 });
-// ======================== FIN DE LA LÓGICA DE EJEMPLO =========================
+// [NEXUS UNIFICATION] - FIN DE LA NUEVA FUNCIÓN
 
+// [OBSOLETO] - La función de ejemplo getMyProfile_EXAMPLE se elimina ya que su lógica será reemplazada.
 
 module.exports = {
     getUserPhoto,
-    getTemporaryPhotoUrl
+    getTemporaryPhotoUrl,
+    getUserTransactions // <-- Se exporta la nueva función.
 };

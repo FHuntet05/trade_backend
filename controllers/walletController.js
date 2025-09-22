@@ -1,12 +1,10 @@
-// RUTA: backend/controllers/walletController.js (VERSIÓN COMPLETA "NEXUS - SETTINGS AWARE")
+// RUTA: backend/controllers/walletController.js (VERSIÓN "NEXUS - UNIFIED TRANSACTION LOGGING")
 
 const mongoose = require('mongoose');
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
 const { createTransaction } = require('../utils/transactionLogger');
 const asyncHandler = require('express-async-handler');
-
-// [NEXUS SETTINGS AWARE] - Se eliminan todas las referencias a CryptoCloud y otros imports innecesarios.
 
 const startMining = asyncHandler(async (req, res) => {
   const user = await User.findById(req.user.id);
@@ -22,7 +20,6 @@ const startMining = asyncHandler(async (req, res) => {
   user.lastMiningClaim = new Date();
   await user.save();
   
-  // Usamos populate para enviar los datos completos de las herramientas activas.
   const updatedUser = await User.findById(req.user.id).populate('activeTools.tool');
   res.status(200).json({
     message: '¡Ciclo de minado iniciado!',
@@ -56,7 +53,6 @@ const claim = asyncHandler(async (req, res) => {
 
   user.balance.ntx = (user.balance.ntx || 0) + earnedNtx;
   user.miningStatus = 'IDLE';
-  // No reiniciamos lastMiningClaim aquí, se reinicia al hacer 'startMining'.
   
   await createTransaction(req.user.id, 'mining_claim', earnedNtx, 'NTX', 'Reclamo de ciclo de minería');
   await user.save();
@@ -101,14 +97,19 @@ const swapNtxToUsdt = asyncHandler(async (req, res) => {
     user.balance.ntx -= numericNtxAmount;
     user.balance.usdt += usdtToReceive;
     
-    user.transactions.push({
-        type: 'swap_ntx_to_usdt',
-        amount: -numericNtxAmount,
-        currency: 'NTX',
-        description: `Intercambio a ${usdtToReceive.toFixed(4)} USDT`,
-        status: 'completed',
-        metadata: { feeAmount, usdtReceived: usdtToReceive }
-    });
+    // [NEXUS AUDIT FIX] - INICIO DE LA CORRECCIÓN
+    // Se elimina la llamada al array obsoleto user.transactions.push()
+    // y se reemplaza por una llamada al logger centralizado.
+    await createTransaction(
+        userId,
+        'swap_ntx_to_usdt',
+        usdtToReceive,
+        'USDT',
+        `Intercambio de ${numericNtxAmount.toLocaleString()} NTX`,
+        { ntxAmount: numericNtxAmount.toString(), feeAmount: feeAmount.toString() },
+        session
+    );
+    // [NEXUS AUDIT FIX] - FIN DE LA CORRECCIÓN
 
     await user.save({ session });
     await session.commitTransaction();
@@ -136,21 +137,19 @@ const requestWithdrawal = asyncHandler(async (req, res) => {
         throw new Error('La configuración del sistema no está disponible.');
     }
     
-    // [NEXUS SETTINGS AWARE] - Verificación #1: ¿Están los retiros habilitados globalmente?
     if (!settings.withdrawalsEnabled) {
-        res.status(403); // 403 Forbidden es más apropiado.
+        res.status(403);
         throw new Error('Los retiros están deshabilitados temporalmente. Por favor, intente más tarde.');
     }
 
     const numericAmount = parseFloat(amount);
     
-    // [NEXUS SETTINGS AWARE] - Verificación #2: ¿El monto cumple con el mínimo?
     if (isNaN(numericAmount) || numericAmount < settings.minimumWithdrawal) {
       res.status(400);
       throw new Error(`El retiro mínimo es ${settings.minimumWithdrawal} USDT.`);
     }
     
-    if (!walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) { // Validación simple de dirección EVM
+    if (!walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
       res.status(400);
       throw new Error('La dirección de billetera (BEP20) es inválida.');
     }
@@ -165,28 +164,32 @@ const requestWithdrawal = asyncHandler(async (req, res) => {
       throw new Error('Saldo USDT insuficiente.');
     }
 
-    // Descontamos el saldo del usuario INMEDIATAMENTE de forma atómica.
     user.balance.usdt -= numericAmount;
     
-    // [NEXUS SETTINGS AWARE] - Cálculo #3: Usamos la comisión de la configuración.
     const feeAmount = numericAmount * (settings.withdrawalFeePercent / 100);
     const netAmount = numericAmount - feeAmount;
     
-    // Creamos la transacción anidada.
-    user.transactions.push({
+    // [NEXUS AUDIT FIX] - INICIO DE LA CORRECCIÓN
+    // Se elimina la llamada al array obsoleto user.transactions.push()
+    // y se reemplaza por una llamada al logger centralizado.
+    // Creamos la transacción con estado 'pending' en la colección global.
+    const newTransaction = new Transaction({
+        user: userId,
         type: 'withdrawal',
         status: 'pending',
-        amount: -numericAmount, // Los retiros son negativos
+        amount: -numericAmount,
         currency: 'USDT',
         description: `Solicitud de retiro a ${walletAddress}`,
         metadata: { 
             walletAddress, 
             network: 'USDT-BEP20', 
-            feePercent: settings.withdrawalFeePercent, 
+            feePercent: settings.withdrawalFeePercent.toString(), 
             feeAmount: feeAmount.toFixed(4), 
             netAmount: netAmount.toFixed(4) 
         }
     });
+    await newTransaction.save({ session });
+    // [NEXUS AUDIT FIX] - FIN DE LA CORRECCIÓN
 
     await user.save({ session });
     await session.commitTransaction();
@@ -199,14 +202,14 @@ const requestWithdrawal = asyncHandler(async (req, res) => {
 
   } catch (error) {
     await session.abortTransaction();
-    throw error; // Dejamos que el errorHandler lo capture.
+    throw error;
   } finally {
     session.endSession();
   }
 });
 
+// [DEPRECATED] - Esta función ahora es obsoleta. La nueva lógica residirá en userController.
 const getHistory = asyncHandler(async (req, res) => {
-    // Esta función es simple y no depende de los ajustes. Se mantiene igual.
     const transactions = (req.user.transactions || []).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 50);
     res.json(transactions);
 });

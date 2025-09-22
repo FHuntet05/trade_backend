@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - STATE SYNC FIX")
+// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - DEPRECATE OLD TX ARRAY")
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
@@ -24,7 +24,6 @@ const syncUser = async (req, res) => {
     }
     
     try {
-        // [NEXUS SYNC FIX] - Paso 1: Obtenemos los settings. Esto ya se hacía para el modo mantenimiento.
         const settings = await Setting.findOne({ singleton: 'global_settings' }).lean();
 
         if (settings && settings.maintenanceMode) {
@@ -60,8 +59,6 @@ const syncUser = async (req, res) => {
                 user.effectiveMiningRate = freeTool.miningBoost;
                 user.miningStatus = 'IDLE';
                 user.lastMiningClaim = now;
-            } else {
-                console.error('[Auth Sync] ERROR CRÍTICO: No se encontró la herramienta gratuita. El nuevo usuario no tendrá poder de minado.'.red.bold);
             }
         }
         
@@ -75,19 +72,18 @@ const syncUser = async (req, res) => {
         const userObject = user.toObject();
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
         
-        const filteredTransactions = (userObject.transactions || []).filter(
-            tx => tx.type !== 'admin_action'
-        );
-        userObject.transactions = filteredTransactions;
+        // [NEXUS UNIFICATION] - INICIO DE LA CORRECCIÓN
+        // Eliminamos el array obsoleto del objeto de usuario. El frontend deberá
+        // usar el endpoint /history para obtener un historial completo y real.
+        delete userObject.transactions;
+        // [NEXUS UNIFICATION] - FIN DE LA CORRECCIÓN
 
         const token = generateUserToken(user._id);
 
-        // [NEXUS SYNC FIX] - Paso 2: La respuesta ahora incluye el objeto 'settings'.
-        // Esto asegura que el frontend del usuario siempre tenga la configuración más reciente.
         res.status(200).json({ 
             token, 
             user: userObject, 
-            settings: settings || {} // Enviamos un objeto vacío como fallback por seguridad.
+            settings: settings || {}
         });
 
     } catch (error) {
@@ -101,15 +97,12 @@ const getUserProfile = async (req, res) => {
         const user = await User.findById(req.user.id).populate('referredBy', 'username fullName');
         if (!user) { return res.status(404).json({ message: 'Usuario no encontrado' }); }
         
-        // La configuración también se envía aquí para mantener la consistencia.
         const settings = await Setting.findOne({ singleton: 'global_settings' });
         
         const userObject = user.toObject();
 
-        const filteredTransactions = (userObject.transactions || []).filter(
-            tx => tx.type !== 'admin_action'
-        );
-        userObject.transactions = filteredTransactions;
+        // [NEXUS UNIFICATION] - Se aplica la misma limpieza aquí por consistencia.
+        delete userObject.transactions;
 
         res.json({ user: userObject, settings: settings || {} });
 

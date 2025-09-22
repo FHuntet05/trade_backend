@@ -189,25 +189,72 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
 
 const sweepFunds = asyncHandler(async (req, res) => {
   const { walletsToSweep } = req.body;
-  const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
-  if (!SWEEP_DESTINATION_WALLET) { res.status(500); throw new Error('Error crítico de configuración de seguridad del servidor.'); }
-  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) { res.status(400); throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array)."); }
+  
+  // [NEXUS SWEEP FIX] - Corrección 1: Se lee la variable de entorno correcta.
+  const SWEEP_DESTINATION_WALLET = process.env.TREASURY_WALLET_ADDRESS;
+
+  // [NEXUS SWEEP HARDENING] - Corrección 2: Manejo de error robusto.
+  if (!SWEEP_DESTINATION_WALLET) {
+    console.error('[CRITICAL CONFIG ERROR] La variable TREASURY_WALLET_ADDRESS no está definida.');
+    return res.status(500).json({ message: 'Error crítico de configuración de seguridad del servidor.' });
+  }
+  
+  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
+    return res.status(400).json({ message: "Parámetro inválido. Se requiere 'walletsToSweep' (array)." });
+  }
+
   const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
-  if (wallets.length === 0) { return res.json({ message: "Ninguna de las wallets candidatas fue encontrada...", summary: {}, details: [] }); }
+  if (wallets.length === 0) {
+    return res.json({ message: "Ninguna de las wallets candidatas fue encontrada...", summary: {}, details: [] });
+  }
+
   const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
-  for (const wallet of wallets) { try { const txHash = await transactionService.sweepUsdtOnBscFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET); report.summary.successfulSweeps++; report.details.push({ address: wallet.address, status: 'SUCCESS', txHash }); } catch (error) { report.summary.failedSweeps++; report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message }); } }
+  for (const wallet of wallets) {
+    try {
+      const txHash = await transactionService.sweepUsdtOnBscFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET);
+      report.summary.successfulSweeps++;
+      report.details.push({ address: wallet.address, status: 'SUCCESS', txHash });
+    } catch (error) {
+      report.summary.failedSweeps++;
+      report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message });
+    }
+  }
   res.json(report);
 });
 
+
 const sweepGas = asyncHandler(async (req, res) => {
   const { walletsToSweep } = req.body;
-  const SWEEP_DESTINATION_WALLET = process.env.SWEEP_DESTINATION_WALLET;
-  if (!SWEEP_DESTINATION_WALLET) { res.status(500); throw new Error('Error crítico de configuración de seguridad del servidor.'); }
-  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) { res.status(400); throw new Error("Parámetro inválido. Se requiere 'walletsToSweep' (array)."); }
+  
+  // [NEXUS SWEEP FIX] - Corrección 1: Se lee la variable de entorno correcta.
+  const SWEEP_DESTINATION_WALLET = process.env.TREASURY_WALLET_ADDRESS;
+
+  // [NEXUS SWEEP HARDENING] - Corrección 2: Manejo de error robusto.
+  if (!SWEEP_DESTINATION_WALLET) {
+    console.error('[CRITICAL CONFIG ERROR] La variable TREASURY_WALLET_ADDRESS no está definida.');
+    return res.status(500).json({ message: 'Error crítico de configuración de seguridad del servidor.' });
+  }
+
+  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
+    return res.status(400).json({ message: "Parámetro inválido. Se requiere 'walletsToSweep' (array)." });
+  }
+
   const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
-  if (wallets.length === 0) { return res.json({ message: "Ninguna wallet candidata encontrada...", summary: {}, details: [] }); }
+  if (wallets.length === 0) {
+    return res.json({ message: "Ninguna wallet candidata encontrada...", summary: {}, details: [] });
+  }
+
   const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
-  for (const wallet of wallets) { try { const txHash = await transactionService.sweepBnbFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET); report.summary.successfulSweeps++; report.details.push({ address: wallet.address, status: 'SUCCESS', txHash }); } catch (error) { report.summary.failedSweeps++; report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message }); } }
+  for (const wallet of wallets) {
+    try {
+      const txHash = await transactionService.sweepBnbFromDerivedWallet(wallet.derivationIndex, SWEEP_DESTINATION_WALLET);
+      report.summary.successfulSweeps++;
+      report.details.push({ address: wallet.address, status: 'SUCCESS', txHash });
+    } catch (error) {
+      report.summary.failedSweeps++;
+      report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message });
+    }
+  }
   res.json(report);
 });
 
