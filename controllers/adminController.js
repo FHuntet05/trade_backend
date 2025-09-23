@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS - BIFURCATED SWEEP LOGIC")
+// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS - VALIDACIÓN REFORZADA")
 
 const User = require('../models/userModel');
 const Factory = require('../models/factoryModel');
@@ -48,12 +48,75 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => { const page = p
 const analyzeGasNeeds = asyncHandler(async (req, res) => { const page = parseInt(req.query.page) || 1; const limit = parseInt(req.query.limit) || 15; const chain = 'BSC'; const { bscWallet } = transactionService.getCentralWallets(); const centralAddress = bscWallet.address; const [totalWalletsInChain, balanceRaw] = await Promise.all([ CryptoWallet.countDocuments({ chain }), new ethers.providers.JsonRpcProvider('https://bsc-dataseed.binance.org/').getBalance(centralAddress) ]).catch(err => { console.error("Fallo al obtener datos iniciales (Dispensador):", err); throw new Error("Error de red al contactar nodo Blockchain."); }); const centralWalletBalance = parseFloat(ethers.utils.formatEther(balanceRaw)); const walletsOnPage = await CryptoWallet.find({ chain }).populate('user', 'username').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(); const walletsNeedingGasPromises = walletsOnPage.map(async (wallet) => { try { const balances = await _getBalancesForAddress(wallet.address, chain); if (!balances || balances.usdt <= 0.000001) return null; const requiredGas = await gasEstimatorService.estimateBscSweepCost(wallet.address, balances.usdt); const gasBalance = balances.bnb; if (gasBalance < requiredGas - GAS_SUFFICIENT_TOLERANCE) { return { address: wallet.address, user: wallet.user, usdtBalance: balances.usdt, gasBalance, requiredGas }; } return null; } catch (error) { console.error(`Error analizando gas para wallet ${wallet.address}: ${error.message}`); return null; } }); const filteredWallets = (await Promise.all(walletsNeedingGasPromises)).filter(Boolean); res.json({ centralWalletBalance, wallets: filteredWallets, pagination: { currentPage: page, totalPages: Math.ceil(totalWalletsInChain / limit), totalWallets: totalWalletsInChain } }); });
 const dispatchGas = asyncHandler(async (req, res) => { const { chain, targets } = req.body; if (chain !== 'BSC') { res.status(400); throw new Error("Petición inválida. Solo se soporta BSC."); } if (!Array.isArray(targets) || targets.length === 0) { res.status(400); throw new Error("Petición inválida, se requiere un array de 'targets'."); } const report = { summary: { success: 0, failed: 0, totalDispatched: 0 }, details: [] }; for (const target of targets) { try { const txHash = await transactionService.sendBscGas(target.address, target.amount); report.summary.success++; report.summary.totalDispatched += parseFloat(target.amount); report.details.push({ address: target.address, status: 'SUCCESS', txHash, amount: target.amount }); } catch (error) { report.summary.failed++; report.details.push({ address: target.address, status: 'FAILED', reason: error.message, amount: target.amount }); } } res.json(report); });
 const sendBroadcastNotification = asyncHandler(async (req, res) => { const { message, target, imageUrl, buttons } = req.body; if (!message || !target) { res.status(400); throw new Error("Mensaje y público objetivo son requeridos."); } let usersToNotify = []; if (target.type === 'all') { usersToNotify = await User.find({ status: 'active' }).select('telegramId').lean(); } else if (target.type === 'id' && target.value) { const user = await User.findOne({ telegramId: target.value }).select('telegramId').lean(); if (user) usersToNotify.push(user); } if (usersToNotify.length === 0) { return res.json({ message: "No se encontraron usuarios para notificar." }); } res.status(202).json({ message: `Enviando notificación a ${usersToNotify.length} usuarios. Este proceso puede tardar.` }); (async () => { let successCount = 0; for (const user of usersToNotify) { const result = await sendTelegramMessage(user.telegramId, message, { imageUrl, buttons }); if(result.success) successCount++; await new Promise(resolve => setTimeout(resolve, 100)); } console.log(`[Broadcast] Notificación completada. ${successCount}/${usersToNotify.length} envíos exitosos.`); })(); });
-const sweepFunds = asyncHandler(async (req, res) => { console.log('[Sweep] Solicitud de barrido de fondos recibida.'); const { walletsToSweep, recipientAddress } = req.body; if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0 || !recipientAddress) { res.status(400); throw new Error("Parámetros de barrido inválidos. Se requiere 'walletsToSweep' (array) y 'recipientAddress'."); } const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean(); if (wallets.length === 0) { return res.json({ message: "Ninguna de las wallets candidatas fue encontrada en la base de datos para barrido.", summary: {}, details: [] }); } const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] }; for (const wallet of wallets) { try { const txHash = await transactionService.sweepUsdtOnBscFromDerivedWallet(wallet.derivationIndex, recipientAddress); report.summary.successfulSweeps++; report.details.push({ address: wallet.address, status: 'SUCCESS', txHash }); console.log(`[Sweep] Éxito en barrido de ${wallet.address}. Hash: ${txHash}`); } catch (error) { report.summary.failedSweeps++; report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message }); console.error(`[Sweep] Fallo en barrido de ${wallet.address}: ${error.message}`); } } res.json(report); });
-const sweepGas = asyncHandler(async (req, res) => { console.log('[SweepGas] Solicitud de barrido de gas (BNB) recibida.'); const { walletsToSweep, recipientAddress } = req.body; if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0 || !recipientAddress) { res.status(400); throw new Error("Parámetros de barrido inválidos. Se requiere 'walletsToSweep' (array) y 'recipientAddress'."); } const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean(); if (wallets.length === 0) { return res.json({ message: "Ninguna de las wallets candidatas fue encontrada en la base de datos para barrido de gas.", summary: {}, details: [] }); } const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] }; for (const wallet of wallets) { try { const txHash = await transactionService.sweepBnbFromDerivedWallet(wallet.derivationIndex, recipientAddress); report.summary.successfulSweeps++; report.details.push({ address: wallet.address, status: 'SUCCESS', txHash }); console.log(`[SweepGas] Éxito en barrido de gas de ${wallet.address}. Hash: ${txHash}`); } catch (error) { report.summary.failedSweeps++; report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message }); console.error(`[SweepGas] Fallo en barrido de gas de ${wallet.address}: ${error.message}`); } } res.json(report); });
+
+// ======================= INICIO DE LA LÓGICA DE BARRIDO BIFURCADA =======================
+const sweepFunds = asyncHandler(async (req, res) => {
+    // Lógica para USDT: Destino Dinámico
+    const { walletsToSweep, recipientAddress } = req.body;
+    if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
+        return res.status(400).json({ message: "Parámetros inválidos. Se requiere 'walletsToSweep' (array)." });
+    }
+    // [NEXUS] Validación de seguridad reforzada para la dirección de destino.
+    if (!recipientAddress || !ethers.utils.isAddress(recipientAddress)) {
+        return res.status(400).json({ message: "La dirección de destino 'recipientAddress' es requerida y debe ser válida." });
+    }
+
+    const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
+    if (wallets.length === 0) {
+        return res.json({ message: "Ninguna de las wallets candidatas fue encontrada.", summary: {}, details: [] });
+    }
+
+    const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
+    for (const wallet of wallets) {
+        try {
+            const txHash = await transactionService.sweepUsdtOnBscFromDerivedWallet(wallet.derivationIndex, recipientAddress);
+            report.summary.successfulSweeps++;
+            report.details.push({ address: wallet.address, status: 'SUCCESS', txHash });
+        } catch (error) {
+            report.summary.failedSweeps++;
+            report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message });
+        }
+    }
+    res.json(report);
+});
+
+const sweepGas = asyncHandler(async (req, res) => {
+    // Lógica para BNB: Destino Estático
+    const { walletsToSweep } = req.body;
+    const TREASURY_WALLET = process.env.TREASURY_WALLET_ADDRESS;
+
+    if (!TREASURY_WALLET || !ethers.utils.isAddress(TREASURY_WALLET)) {
+        console.error('[CRITICAL CONFIG ERROR] La variable TREASURY_WALLET_ADDRESS no está definida o es inválida para el barrido de gas.');
+        return res.status(500).json({ message: 'Error crítico de configuración del servidor (destino de barrido no definido o inválido).' });
+    }
+    if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
+        return res.status(400).json({ message: "Parámetro inválido. Se requiere 'walletsToSweep' (array)." });
+    }
+
+    const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
+    if (wallets.length === 0) {
+        return res.json({ message: "Ninguna de las wallets candidatas fue encontrada.", summary: {}, details: [] });
+    }
+
+    const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
+    for (const wallet of wallets) {
+        try {
+            const txHash = await transactionService.sweepBnbFromDerivedWallet(wallet.derivationIndex, TREASURY_WALLET);
+            report.summary.successfulSweeps++;
+            report.details.push({ address: wallet.address, status: 'SUCCESS', txHash });
+        } catch (error) {
+            report.summary.failedSweeps++;
+            report.details.push({ address: wallet.address, status: 'FAILED', reason: error.message });
+        }
+    }
+    res.json(report);
+});
+// ======================== FIN DE LA LÓGICA DE BARRIDO BIFURCADA =========================
+
 const cancelTransaction = asyncHandler(async (req, res) => { res.status(501).json({ message: 'Funcionalidad de cancelación aún en desarrollo. Requiere infraestructura de seguimiento de nonces.' }); });
 const speedUpTransaction = asyncHandler(async (req, res) => { res.status(501).json({ message: 'Funcionalidad de aceleración aún en desarrollo. Requiere infraestructura de seguimiento de nonces.' }); });
 const promoteUserToAdmin = asyncHandler(async (req, res) => { const { userId } = req.body; if (!userId) { res.status(400); throw new Error('Se requiere el ID del usuario.'); } const user = await User.findById(userId); if (!user) { res.status(404); throw new Error('Usuario no encontrado.'); } if (user.role === 'admin') { return res.status(400).json({ message: 'El usuario ya es un administrador.' }); } user.role = 'admin'; await user.save(); console.log(`[AdminMgmt] Usuario ${user.username} (ID: ${userId}) promovido a administrador por ${req.user.username}.`); res.json({ message: `El usuario ${user.username} ha sido promovido a administrador.` }); });
-const resetAdminPassword = asyncHandler(async (req, res) => { const { adminId } = req.body; if (!adminId) { res.status(400); throw new Error('Se requiere el ID del administrador.'); } const admin = await User.findById(adminId); if (!admin || admin.role !== 'admin') { res.status(404); throw new Error('Administrador no encontrado.'); } const temporaryPassword = crypto.randomBytes(8).toString('hex'); admin.password = temporaryPassword; await admin.save(); console.log(`[AdminMgmt] Contraseña del admin ${admin.username} (ID: ${adminId}) reseteada por ${req.user.username}.`); res.json({ message: `Contraseña reseteada exitosamente para ${admin.username}.`, temporaryPassword: temporaryPassword }); });
+const resetAdminPassword = asyncHandler(async (req, res) => { const { adminId } = req.body; if (!adminId) { res.status(400); throw new Error('Se requiere el ID del administrador.'); } const admin = await User.findById(adminId); if (!admin || admin.role !== 'admin') { res.status(404). throw new Error('Administrador no encontrado.'); } const temporaryPassword = crypto.randomBytes(8).toString('hex'); admin.password = temporaryPassword; await admin.save(); console.log(`[AdminMgmt] Contraseña del admin ${admin.username} (ID: ${adminId}) reseteada por ${req.user.username}.`); res.json({ message: `Contraseña reseteada exitosamente para ${admin.username}.`, temporaryPassword: temporaryPassword }); });
 const demoteAdminToUser = asyncHandler(async (req, res) => { const { adminId } = req.body; if (!adminId) { res.status(400); throw new Error('Se requiere el ID del administrador.'); } if (req.user.id === adminId) { res.status(400); throw new Error('No puedes degradarte a ti mismo.'); } const admin = await User.findById(adminId); if (!admin) { res.status(404); throw new Error('Administrador no encontrado.'); } if (admin.role !== 'admin') { return res.status(400).json({ message: 'La cuenta seleccionada no es un administrador.' }); } admin.role = 'user'; await admin.save(); console.log(`[AdminMgmt] Administrador ${admin.username} (ID: ${adminId}) degradado a usuario por ${req.user.username}.`); res.json({ message: `El administrador ${admin.username} ha sido degradado a usuario.` }); });
 
 module.exports = {
