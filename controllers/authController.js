@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - DIAGNOSTIC INSTRUMENTATION")
+// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - DIAGNOSTIC INSTRUMENTATION V2 - HOTFIX")
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
@@ -82,8 +82,9 @@ const syncUser = async (req, res) => {
             settings: settings || {}
         });
 
-    } catch (error) => {
-        console.error('[Auth Sync] ERROR FATAL:'.red.bold, error);
+    } catch (error) { // <-- SINTAXIS CORREGIDA AQUÍ
+        // La versión anterior tenía un `=>` incorrecto aquí.
+        console.error('[Auth Sync] ERROR FATAL:', error);
         return res.status(500).json({ message: 'Error interno del servidor.', details: error.message });
     }
 };
