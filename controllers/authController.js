@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - DEPRECATE OLD TX ARRAY")
+// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - DIAGNOSTIC INSTRUMENTATION")
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
@@ -72,11 +72,7 @@ const syncUser = async (req, res) => {
         const userObject = user.toObject();
         userObject.photoUrl = await getTemporaryPhotoUrl(userObject.photoFileId) || PLACEHOLDER_AVATAR_URL;
         
-        // [NEXUS UNIFICATION] - INICIO DE LA CORRECCIÓN
-        // Eliminamos el array obsoleto del objeto de usuario. El frontend deberá
-        // usar el endpoint /history para obtener un historial completo y real.
         delete userObject.transactions;
-        // [NEXUS UNIFICATION] - FIN DE LA CORRECCIÓN
 
         const token = generateUserToken(user._id);
 
@@ -86,7 +82,7 @@ const syncUser = async (req, res) => {
             settings: settings || {}
         });
 
-    } catch (error) {
+    } catch (error) => {
         console.error('[Auth Sync] ERROR FATAL:'.red.bold, error);
         return res.status(500).json({ message: 'Error interno del servidor.', details: error.message });
     }
@@ -101,7 +97,6 @@ const getUserProfile = async (req, res) => {
         
         const userObject = user.toObject();
 
-        // [NEXUS UNIFICATION] - Se aplica la misma limpieza aquí por consistencia.
         delete userObject.transactions;
 
         res.json({ user: userObject, settings: settings || {} });
@@ -109,17 +104,34 @@ const getUserProfile = async (req, res) => {
     } catch (error) { res.status(500).json({ message: 'Error del servidor' }); }
 };
 
+// ======================= INICIO DE LA INSTRUMENTACIÓN DE DIAGNÓSTICO =======================
 const loginAdmin = async (req, res) => {
     const { username, password } = req.body;
+    
+    // LOG 1: Inicio de la función.
+    console.log(`[DIAGNÓSTICO LOGIN 1/5] Intento de login para usuario: '${username}'`);
+
     try {
+        // LOG 2: Justo antes de la consulta a la base de datos.
+        console.log(`[DIAGNÓSTICO LOGIN 2/5] Ejecutando User.findOne con rol 'admin' para '${username}'`);
+        
         const adminUser = await User.findOne({ 
             $or: [{ username }, { telegramId: username }],
             role: 'admin'
-        }).select('+password username role telegramId');
+        }).select('+password'); // Seleccionamos la contraseña para la comparación.
 
+        // LOG 3: Resultado de la consulta.
+        if (adminUser) {
+            console.log(`[DIAGNÓSTICO LOGIN 3/5] Usuario encontrado en la BD. ID: ${adminUser._id}. Procediendo a comparar contraseñas.`);
+        } else {
+            console.log(`[DIAGNÓSTICO LOGIN 3/5] User.findOne devolvió NULL. Ningún usuario con rol 'admin' coincide con '${username}'.`);
+        }
+        
+        // LOG 4: Evaluación de la condición completa.
         if (adminUser && (await adminUser.matchPassword(password))) {
+            console.log(`[DIAGNÓSTICO LOGIN 4/5] ÉXITO. Contraseña coincide. Generando token.`);
             const token = generateAdminToken(adminUser._id);
-            const adminData = adminUser.toObject({ getters: true, virtuals: true });
+            const adminData = adminUser.toObject();
             delete adminData.password;
 
             res.json({
@@ -127,12 +139,15 @@ const loginAdmin = async (req, res) => {
                 admin: adminData
             });
         } else {
+            console.log(`[DIAGNÓSTICO LOGIN 4/5] FALLO. Usuario no encontrado o contraseña no coincide. Enviando error 401.`);
             res.status(401).json({ message: 'Credenciales inválidas.' });
         }
     } catch (error) {
-        console.error(`[Admin Login] Error: ${error.message}`);
-        res.status(500).json({ message: 'Error del servidor' });
+        // LOG 5: Captura de cualquier error inesperado en el proceso.
+        console.error(`[DIAGNÓSTICO LOGIN 5/5] ERROR INESPERADO en el bloque try...catch:`, error);
+        res.status(500).json({ message: 'Error crítico del servidor durante el login.' });
     }
 };
+// ======================== FIN DE LA INSTRUMENTACIÓN DE DIAGNÓSTICO =========================
 
 module.exports = { syncUser, getUserProfile, loginAdmin };
