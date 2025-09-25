@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN "NEXUS - RATE LIMITER HOTFIX")
+// backend/index.js (VERSIÓN CORREGIDA Y DE DIAGNÓSTICO)
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -82,13 +82,16 @@ const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 app.set('trust proxy', 1);
-app.use(express.json());
-app.use(helmet());
 
-// --- Configuración de CORS ---
+// ======================= INICIO DE LOS CAMBIOS CRÍTICOS =======================
+
+// --- [CAMBIO 1] Configuración de CORS ---
+// Se mueve al PRINCIPIO de la cadena de middlewares.
+// Esto asegura que las peticiones OPTIONS de pre-vuelo sean manejadas PRIMERO.
 const clientUrl = process.env.CLIENT_URL;
 const corsOptions = {
     origin: (origin, callback) => {
+        // Para depuración, permitimos peticiones sin origen (como las de Postman o curl)
         if (!origin || origin === clientUrl) {
             callback(null, true);
         } else {
@@ -101,12 +104,23 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
-// ======================= INICIO DE LA CORRECCIÓN DE RATE LIMITER =======================
-// La ruta de Health Check se declara ANTES del limitador global.
-// Esto la excluye del límite y permite que Render verifique el estado del servicio sin ser bloqueado.
-app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+// --- [CAMBIO 2] "Log Canario" ---
+// Este log es ahora lo PRIMERO que se ejecuta. Si no ves este log para una petición,
+// significa que la petición fue bloqueada ANTES de llegar a Node.js (probablemente por el proxy de Render).
+app.use((req, res, next) => {
+  console.log(`[CANARY LOG] Petición entrante: ${req.method} ${req.path} desde ${req.ip}`);
+  next();
+});
 
-// --- Rate Limiting ---
+// --- [CAMBIO 3] Middlewares de JSON y Seguridad ---
+// Se ejecutan DESPUÉS de CORS.
+app.use(express.json());
+
+// Se comenta HELMET temporalmente. Es el principal sospechoso de bloquear la petición OPTIONS.
+// app.use(helmet()); 
+
+// Se comenta RATE LIMITER temporalmente para simplificar la depuración.
+/*
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 200,
@@ -114,19 +128,22 @@ const globalLimiter = rateLimit({
     legacyHeaders: false,
     message: 'Demasiadas peticiones desde esta IP, por favor intente de nuevo después de 15 minutos.'
 });
-app.use(globalLimiter); // Ahora el limitador se aplica a todas las rutas EXCEPTO a /health.
+app.use(globalLimiter);
 
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
     message: 'Demasiados intentos de autenticación desde esta IP. Por seguridad, su acceso ha sido bloqueado temporalmente.'
 });
-// ======================== FIN DE LA CORRECCIÓN DE RATE LIMITER =========================
+*/
 
+// ======================== FIN DE LOS CAMBIOS CRÍTICOS =========================
 
 // --- REGISTRO DE RUTAS DE LA API ---
-// Se elimina la declaración de /health de aquí porque ya fue declarada antes del limiter.
-app.use('/api/auth', authLimiter, authRoutes); 
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+
+// app.use('/api/auth', authLimiter, authRoutes); // Versión con rate limiter comentada
+app.use('/api/auth', authRoutes); // Versión simplificada sin rate limiter
 app.use('/api/tools', toolRoutes);
 app.use('/api/ranking', rankingRoutes);
 app.use('/api/wallet', walletRoutes);
@@ -137,7 +154,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
 app.use('/api/users', userRoutes);
 
-// --- LÓGICA DEL BOT DE TELEGRAM ---
+// --- LÓGICA DEL BOT DE TELEGRAM (sin cambios) ---
 const WELCOME_MESSAGE = `
 🌐🚀 NEW PROJECT: BlockSphere 🚀🌐\n\n  
 📢 Official launch: September 22 2025 
