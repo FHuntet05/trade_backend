@@ -1,4 +1,4 @@
-// RUTA: backend/services/transactionMonitor.js (VERSIÓN "NEXUS - BATCH SCANNING FIX")
+// RUTA: backend/services/transactionMonitor.js (VERSIÓN "NEXUS - STABILITY HARDENING")
 
 const { ethers } = require('ethers');
 const User = require('../models/userModel');
@@ -15,17 +15,16 @@ const USDT_INTERFACE = new ethers.utils.Interface(USDT_ABI);
 const USDT_TRANSFER_TOPIC = USDT_INTERFACE.getEventTopic('Transfer');
 const BSC_API_KEY = process.env.BSCSCAN_API_KEY;
 
-// [NEXUS BATCH FIX] - Constante para controlar el tamaño del lote de escaneo RPC.
-const RPC_BATCH_SIZE = 2000; // Un valor seguro para la mayoría de los proveedores RPC.
+// [NEXUS STABILITY] - Constante para controlar el tamaño del lote. 2000 es un valor conservador y seguro.
+const RPC_BATCH_SIZE = 2000;
 
-// --- FUNCIÓN CENTRAL DE PROCESAMIENTO DE DEPÓSITOS (Sin cambios) ---
+// --- FUNCIÓN CENTRAL DE PROCESAMIENTO DE DEPÓSITOS ---
 async function processDeposit(wallet, amount, currency, txHash, blockNumber, fromAddress) {
     const existingTx = await Transaction.findOne({ 'metadata.txid': txHash });
     if (existingTx) return;
 
     console.log(`[ProcessDeposit] Procesando nuevo depósito: ${amount} ${currency} para usuario ${wallet.user} (TXID: ${txHash})`);
     
-    // Asumimos que la lógica de precio y comisiones funciona como se diseñó.
     const amountInUSDT = currency === 'USDT' ? amount : (amount * (await blockchainService.getPrice('BNB')));
     if (amountInUSDT === null) {
         console.error(`[ProcessDeposit] No se pudo obtener el precio para ${currency}. Saltando TX ${txHash}`);
@@ -71,7 +70,7 @@ async function processDeposit(wallet, amount, currency, txHash, blockNumber, fro
     }
 }
 
-// --- ESCÁNER RPC PARA USDT (Sin cambios) ---
+// --- ESCÁNER RPC PARA USDT ---
 async function scanUsdtDepositsRpc(wallets, startBlock, endBlock) {
     if (startBlock > endBlock) return;
     console.log(`[Monitor RPC] Escaneando eventos USDT del bloque ${startBlock} al ${endBlock} (${endBlock - startBlock + 1} bloques)...`);
@@ -89,6 +88,7 @@ async function scanUsdtDepositsRpc(wallets, startBlock, endBlock) {
         toBlock: endBlock
     };
 
+    // [NEXUS STABILITY] - El try/catch se mantiene aquí para manejar errores específicos de esta función.
     try {
         const logs = await blockchainService.provider.getLogs(filter);
         for (const log of logs) {
@@ -101,12 +101,13 @@ async function scanUsdtDepositsRpc(wallets, startBlock, endBlock) {
             }
         }
     } catch (error) {
-        console.error(`[Monitor RPC] Error al obtener logs de eventos USDT: ${error.message}`.red);
-        throw error; // Relanzamos el error para que el bucle principal lo maneje.
+        console.error(`[Monitor RPC] Error específico al obtener logs de eventos USDT: ${error.message}`.red);
+        // Relanzamos el error para que el bucle principal lo capture y detenga el procesamiento del lote.
+        throw error; 
     }
 }
 
-// --- ESCÁNER DE COMPATIBILIDAD PARA BNB (Sin cambios) ---
+// --- ESCÁNER DE COMPATIBILIDAD PARA BNB ---
 async function scanBnbDepositsBscScan(wallet, startBlock, endBlock) {
     try {
         const url = `https://api.bscscan.com/api?module=account&action=txlist&address=${wallet.address}&startblock=${startBlock}&endblock=${endBlock}&sort=asc&apikey=${BSC_API_KEY}`;
@@ -125,19 +126,21 @@ async function scanBnbDepositsBscScan(wallet, startBlock, endBlock) {
     }
 }
 
-// --- ORQUESTADOR PRINCIPAL DEL MONITOREO (REFACTORIZADO) ---
+// --- ORQUESTADOR PRINCIPAL DEL MONITOREO ---
 const startMonitoring = () => {
     console.log('✅ Iniciando servicio de monitoreo de transacciones (RPC-First con Batching)...'.green.bold);
 
     const runChecks = async () => {
         console.log("--- [Monitor] Iniciando ciclo de monitoreo ---");
-        const wallets = await CryptoWallet.find({ chain: 'BSC' });
-        if (wallets.length === 0) {
-            console.log("[Monitor] No hay billeteras para escanear. Finalizando ciclo.");
-            return;
-        }
-
+        
+        // [NEXUS STABILITY] - Se envuelve TODA la lógica en un try/catch para prevenir cualquier crash.
         try {
+            const wallets = await CryptoWallet.find({ chain: 'BSC' });
+            if (wallets.length === 0) {
+                console.log("[Monitor] No hay billeteras para escanear. Finalizando ciclo.");
+                return;
+            }
+
             const currentNetworkBlock = await blockchainService.provider.getBlockNumber();
             let lastProcessedBlock = (await CryptoWallet.findOne({ chain: 'BSC' }).sort({ lastScannedBlock: -1 }).select('lastScannedBlock'))?.lastScannedBlock || currentNetworkBlock - 1;
             
@@ -149,42 +152,38 @@ const startMonitoring = () => {
             } else {
                  console.log(`[Monitor] Bloque de red actual: ${toBlock}. Sincronizando desde: ${fromBlock}`);
 
-                // [NEXUS BATCH FIX] - Bucle de escaneo por lotes
                 while (fromBlock <= toBlock) {
                     const batchEndBlock = Math.min(fromBlock + RPC_BATCH_SIZE - 1, toBlock);
                     
                     try {
-                        // Escaneamos el lote para USDT vía RPC
                         await scanUsdtDepositsRpc(wallets, fromBlock, batchEndBlock);
                         
-                        // Escaneamos el mismo lote para BNB vía BscScan
                         for (const wallet of wallets) {
                             await scanBnbDepositsBscScan(wallet, fromBlock, batchEndBlock);
-                            await new Promise(resolve => setTimeout(resolve, 250)); // Pausa entre wallets
+                            await new Promise(resolve => setTimeout(resolve, 250));
                         }
                         
-                        // Si el lote se procesó sin errores, actualizamos el progreso
                         await CryptoWallet.updateMany({ chain: 'BSC' }, { $set: { lastScannedBlock: batchEndBlock } });
                         console.log(`[Monitor] Lote ${fromBlock}-${batchEndBlock} procesado. 'lastScannedBlock' actualizado a ${batchEndBlock}.`.green);
                         
-                        fromBlock = batchEndBlock + 1; // Preparamos el inicio del siguiente lote
+                        fromBlock = batchEndBlock + 1;
                     } catch (batchError) {
-                        console.error(`[Monitor] Fallo crítico en el lote ${fromBlock}-${batchEndBlock}. El ciclo se reintentará en la próxima ejecución.`.red.bold);
-                        // Rompemos el bucle while para no continuar si un lote falla.
-                        // La próxima ejecución de runChecks comenzará desde el último 'lastProcessedBlock' guardado.
+                        // El error ya fue logueado dentro de scanUsdtDepositsRpc, aquí solo lo confirmamos.
+                        console.error(`[Monitor] Fallo en el lote ${fromBlock}-${batchEndBlock}. Deteniendo el escaneo para este ciclo. Se reintentará en 60s.`.red.bold);
+                        // Rompemos el bucle 'while' para no continuar si un lote falla.
                         break; 
                     }
                 }
             }
-        } catch (error) {
-            console.error('[Monitor] Error en el ciclo principal de monitoreo:', error);
+        } catch (mainCycleError) {
+            console.error('[Monitor] ERROR CATASTRÓFICO en el ciclo principal de monitoreo. El servidor seguirá funcionando. Se reintentará en 60s.'.red.bgWhite.bold, mainCycleError);
         }
 
         console.log("--- [Monitor] Ciclo de monitoreo finalizado. Esperando al siguiente. ---");
     };
 
     runChecks();
-    setInterval(runChecks, 60000); // Se ejecuta cada 60 segundos
+    setInterval(runChecks, 60000);
 };
 
 module.exports = { startMonitoring };
