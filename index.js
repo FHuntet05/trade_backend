@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN "NEXUS - CORS & STABILITY HOTFIX")
+// backend/index.js (VERSIÓN "NEXUS - RATE LIMITER HOTFIX")
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -45,7 +45,6 @@ const provisionFreeTool = async () => {
             console.log('[SISTEMA] ✅ Herramienta gratuita ya existe en la base de datos.'.green);
             return;
         }
-
         console.log('[SISTEMA] ⚠️ No se encontró herramienta gratuita. Creando una por defecto...'.yellow);
         const newFreeTool = new Tool({
             name: "Miner Gratuito de Inicio",
@@ -58,7 +57,6 @@ const provisionFreeTool = async () => {
         });
         await newFreeTool.save();
         console.log('[SISTEMA] ✅ Herramienta gratuita creada y guardada en la base de datos.'.green.bold);
-
     } catch (error) {
         console.error('❌ ERROR FATAL al provisionar la herramienta gratuita:'.red.bold, error);
     }
@@ -85,23 +83,12 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 app.set('trust proxy', 1);
 app.use(express.json());
-
-app.use((req, res, next) => {
-    console.log(`[REQUEST LOG] Origen: ${req.headers.origin} | Método: ${req.method} | URL: ${req.url}`.magenta);
-    next();
-});
-
 app.use(helmet());
 
-// ======================= INICIO DE LA CORRECCIÓN DE CORS =======================
-// La configuración se alinea con la versión funcional para garantizar estabilidad.
-
+// --- Configuración de CORS ---
 const clientUrl = process.env.CLIENT_URL;
-
 const corsOptions = {
     origin: (origin, callback) => {
-        // Permitimos peticiones sin `origin` (como Postman) y las que vienen de nuestro cliente.
-        // La lógica `!origin` es crucial para pruebas y algunas configuraciones de proxy.
         if (!origin || origin === clientUrl) {
             callback(null, true);
         } else {
@@ -112,12 +99,12 @@ const corsOptions = {
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     credentials: true,
 };
-
-// Se elimina la línea redundante `app.options('*', cors(corsOptions));`
-// `app.use(cors(corsOptions))` maneja correctamente tanto las peticiones preflight (OPTIONS) como las peticiones reales.
 app.use(cors(corsOptions));
-// ======================== FIN DE LA CORRECCIÓN DE CORS =========================
 
+// ======================= INICIO DE LA CORRECCIÓN DE RATE LIMITER =======================
+// La ruta de Health Check se declara ANTES del limitador global.
+// Esto la excluye del límite y permite que Render verifique el estado del servicio sin ser bloqueado.
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
 // --- Rate Limiting ---
 const globalLimiter = rateLimit({
@@ -127,16 +114,18 @@ const globalLimiter = rateLimit({
     legacyHeaders: false,
     message: 'Demasiadas peticiones desde esta IP, por favor intente de nuevo después de 15 minutos.'
 });
-app.use(globalLimiter);
+app.use(globalLimiter); // Ahora el limitador se aplica a todas las rutas EXCEPTO a /health.
 
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
     message: 'Demasiados intentos de autenticación desde esta IP. Por seguridad, su acceso ha sido bloqueado temporalmente.'
 });
+// ======================== FIN DE LA CORRECCIÓN DE RATE LIMITER =========================
+
 
 // --- REGISTRO DE RUTAS DE LA API ---
-app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+// Se elimina la declaración de /health de aquí porque ya fue declarada antes del limiter.
 app.use('/api/auth', authLimiter, authRoutes); 
 app.use('/api/tools', toolRoutes);
 app.use('/api/ranking', rankingRoutes);
@@ -151,11 +140,9 @@ app.use('/api/users', userRoutes);
 // --- LÓGICA DEL BOT DE TELEGRAM ---
 const WELCOME_MESSAGE = `
 🌐🚀 NEW PROJECT: BlockSphere 🚀🌐\n\n  
-
 📢 Official launch: September 22 2025 
 ✔️ PERMANENT project, fully backed by blockchain.
 🔒 All funds are protected and managed with complete security.\n
-
 💰 Guaranteed daily earnings:\n  
 📦 Active investment/mining packages:
 🔹 Package 1: 3 USDT → 1.5 USDT daily 
@@ -163,7 +150,6 @@ const WELCOME_MESSAGE = `
 🔹 Package 3: 16 USDT → 8 USDT daily
 🔹 Package 4: 32 USDT → 16 USDT daily
 🔹 Package 5: 75 USDT → 37.5 USDT daily\n 
-
 ✨ This project is here to stay. 
 📈 BlockSphere will provide steady earnings and grow permanently. 
 🔥 A solid and transparent system that truly makes a difference in the market.`;
@@ -182,8 +168,6 @@ bot.command('start', async (ctx) => {
             }
         }
         
-        console.log(`[Bot /start] Petición de inicio. Usuario: ${referredId}. Potencial Referente: ${referrerId}`.cyan);
-
         let referredUser = await User.findOne({ telegramId: referredId });
         if (!referredUser) {
             const username = ctx.from.username || `user_${referredId}`;
@@ -194,28 +178,19 @@ bot.command('start', async (ctx) => {
         const canBeReferred = referrerId && referrerId !== referredId && !referredUser.referredBy;
 
         if (canBeReferred) {
-            console.log(`[Bot /start] Intentando asignar referente ${referrerId} al nuevo usuario ${referredId}.`.yellow);
             const referrerUser = await User.findOne({ telegramId: referrerId });
             
             if (referrerUser) {
                 referredUser.referredBy = referrerUser._id;
-                console.log(`[Bot /start] Referente ${referrerUser.username} (${referrerId}) encontrado. Asignando...`.green);
-
                 const isAlreadyReferred = referrerUser.referrals.some(ref => ref.user.equals(referredUser._id));
                 if (!isAlreadyReferred) {
                     referrerUser.referrals.push({ level: 1, user: referredUser._id });
                     await referrerUser.save();
-                    console.log(`[Bot /start] Nuevo usuario ${referredUser.username} añadido a la lista de referidos de ${referrerUser.username}.`.green.bold);
-                } else {
-                     console.log(`[Bot /start] El usuario ${referredUser.username} ya estaba en la lista de referidos de ${referrerUser.username}. No se realizan cambios.`.yellow);
                 }
-            } else {
-                console.log(`[Bot /start] ADVERTENCIA: El ID de referente ${referrerId} no fue encontrado en la base de datos.`.red);
             }
         }
 
         await referredUser.save();
-        console.log(`[Bot /start] Perfil del usuario ${referredId} guardado/actualizado en la BD.`);
         
         const imageUrl = 'https://i.postimg.cc/XqqqFR0C/photo-2025-09-20-02-42-29.jpg';
         const webAppUrl = process.env.CLIENT_URL;
