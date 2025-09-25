@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN "NEXUS - AUTO PROVISIONING & REFERRAL FIX")
+// backend/index.js (VERSIÓN "NEXUS - CORS & STABILITY HOTFIX")
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -10,7 +10,7 @@ const dotenv = require('dotenv');
 const colors = require('colors');
 const connectDB = require('./config/db');
 const User = require('./models/userModel');
-const Tool = require('./models/toolModel'); // [NEXUS PROVISIONING] Importamos el modelo de herramientas.
+const Tool = require('./models/toolModel');
 const { startMonitoring } = require('./services/transactionMonitor.js');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -38,7 +38,6 @@ checkEnvVariables();
 // --- CONEXIÓN A BASE DE DATOS ---
 connectDB();
 
-// [NEXUS PROVISIONING] - INICIO DE LA LÓGICA DE PROVISIÓN AUTOMÁTICA
 const provisionFreeTool = async () => {
     try {
         const freeToolExists = await Tool.findOne({ isFree: true });
@@ -52,9 +51,9 @@ const provisionFreeTool = async () => {
             name: "Miner Gratuito de Inicio",
             vipLevel: 0,
             price: 0,
-            miningBoost: 500, // 500 NTX por día
-            durationDays: 5,   // Dura 5 días
-            imageUrl: "https://i.postimg.cc/pLgD5gYq/free-miner.png", // URL de imagen genérica
+            miningBoost: 500,
+            durationDays: 5,
+            imageUrl: "https://i.postimg.cc/pLgD5gYq/free-miner.png",
             isFree: true,
         });
         await newFreeTool.save();
@@ -62,13 +61,9 @@ const provisionFreeTool = async () => {
 
     } catch (error) {
         console.error('❌ ERROR FATAL al provisionar la herramienta gratuita:'.red.bold, error);
-        // En un entorno de producción, podría decidir si detener el servidor es necesario.
-        // process.exit(1); 
     }
 };
-// Ejecutamos la provisión después de conectar a la BD.
 provisionFreeTool();
-// [NEXUS PROVISIONING] - FIN DE LA LÓGICA DE PROVISIÓN AUTOMÁTICA
 
 
 // --- IMPORTACIÓN DE RUTAS DE LA API ---
@@ -98,14 +93,19 @@ app.use((req, res, next) => {
 
 app.use(helmet());
 
-// --- Configuración de CORS ---
-const whitelist = [process.env.CLIENT_URL];
+// ======================= INICIO DE LA CORRECCIÓN DE CORS =======================
+// La configuración se alinea con la versión funcional para garantizar estabilidad.
+
+const clientUrl = process.env.CLIENT_URL;
+
 const corsOptions = {
     origin: (origin, callback) => {
-        if (whitelist.includes(origin) || !origin) {
+        // Permitimos peticiones sin `origin` (como Postman) y las que vienen de nuestro cliente.
+        // La lógica `!origin` es crucial para pruebas y algunas configuraciones de proxy.
+        if (!origin || origin === clientUrl) {
             callback(null, true);
         } else {
-            console.error(`[CORS] ❌ Origen RECHAZADO: '${origin}' no está en la whitelist.`.red.bold);
+            console.error(`[CORS] ❌ Origen RECHAZADO: '${origin}' no coincide con CLIENT_URL.`.red.bold);
             callback(new Error(`Origen no permitido por CORS: ${origin}`));
         }
     },
@@ -113,8 +113,11 @@ const corsOptions = {
     credentials: true,
 };
 
-app.options('*', cors(corsOptions));
+// Se elimina la línea redundante `app.options('*', cors(corsOptions));`
+// `app.use(cors(corsOptions))` maneja correctamente tanto las peticiones preflight (OPTIONS) como las peticiones reales.
 app.use(cors(corsOptions));
+// ======================== FIN DE LA CORRECCIÓN DE CORS =========================
+
 
 // --- Rate Limiting ---
 const globalLimiter = rateLimit({
@@ -146,7 +149,6 @@ app.use('/api/treasury', treasuryRoutes);
 app.use('/api/users', userRoutes);
 
 // --- LÓGICA DEL BOT DE TELEGRAM ---
-
 const WELCOME_MESSAGE = `
 🌐🚀 NEW PROJECT: BlockSphere 🚀🌐\n\n  
 
@@ -189,7 +191,6 @@ bot.command('start', async (ctx) => {
             referredUser = new User({ telegramId: referredId, username, fullName: fullName || username, language: ctx.from.language_code || 'es' });
         }
 
-        // [NEXUS REFERRAL FIX] - INICIO DE LA LÓGICA DE REFERIDOS CORREGIDA
         const canBeReferred = referrerId && referrerId !== referredId && !referredUser.referredBy;
 
         if (canBeReferred) {
@@ -212,7 +213,6 @@ bot.command('start', async (ctx) => {
                 console.log(`[Bot /start] ADVERTENCIA: El ID de referente ${referrerId} no fue encontrado en la base de datos.`.red);
             }
         }
-        // [NEXUS REFERRAL FIX] - FIN DE LA LÓGICA DE REFERIDOS CORREGIDA
 
         await referredUser.save();
         console.log(`[Bot /start] Perfil del usuario ${referredId} guardado/actualizado en la BD.`);
