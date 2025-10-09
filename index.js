@@ -234,7 +234,18 @@ bot.command('start', async (ctx) => {
 bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
 const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
 const secretPath = `/api/telegram-webhook/${secretToken}`;
-app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
+app.post(secretPath, (req, res) => {
+  if (req.headers['x-telegram-bot-api-secret-token'] !== secretToken) {
+    console.error('❌ Webhook rechazado: token inválido');
+    return res.status(401).send('Unauthorized');
+  }
+  bot.handleUpdate(req.body, res);
+});
+
+const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
+bot.telegram.setWebhook(webhookUrl, { secret_token: secretToken, drop_pending_updates: true })
+  .then(() => console.log(`[SERVIDOR] ✅ Webhook configurado en: ${webhookUrl}`))
+  .catch(err => console.error(`[SERVIDOR] ❌ Error al configurar el webhook: ${err.message}`));
 
 // --- MIDDLEWARE DE ERRORES Y ARRANQUE DEL SERVIDOR ---
 app.use(notFound);
