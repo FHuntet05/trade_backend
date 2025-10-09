@@ -141,6 +141,9 @@ const authLimiter = rateLimit({
 
 // --- REGISTRO DE RUTAS DE LA API ---
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+app.get('/', (req, res) => {
+  res.json({ message: 'API funcionando correctamente' });
+});
 
 // app.use('/api/auth', authLimiter, authRoutes); // Versión con rate limiter comentada
 app.use('/api/auth', authRoutes); // Versión simplificada sin rate limiter
