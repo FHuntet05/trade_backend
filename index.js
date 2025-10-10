@@ -1,4 +1,4 @@
-// backend/index.js (VERSIÓN CORREGIDA Y DE DIAGNÓSTICO)
+// backend/index.js (VERSIÓN CORREGIDA Y OPTIMIZADA PARA VERCEL)
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -28,8 +28,9 @@ function checkEnvVariables() {
     ];
     const missingVars = requiredVars.filter(v => !process.env[v]);
     if (missingVars.length > 0) {
+        // En un entorno serverless, esto detendrá la ejecución de la función.
         console.error(`!! ERROR FATAL: FALTAN VARIABLES DE ENTORNO: ${missingVars.join(', ')}`.red.bold);
-        process.exit(1);
+        throw new Error(`Variables de entorno faltantes: ${missingVars.join(', ')}`);
     }
     console.log('[SISTEMA] ✅ Todas las variables de entorno críticas están presentes.');
 }
@@ -83,15 +84,10 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 app.set('trust proxy', 1);
 
-// ======================= INICIO DE LOS CAMBIOS CRÍTICOS =======================
-
-// --- [CAMBIO 1] Configuración de CORS ---
-// Se mueve al PRINCIPIO de la cadena de middlewares.
-// Esto asegura que las peticiones OPTIONS de pre-vuelo sean manejadas PRIMERO.
+// --- Configuración de CORS ---
 const clientUrl = process.env.CLIENT_URL;
 const corsOptions = {
     origin: (origin, callback) => {
-        // Para depuración, permitimos peticiones sin origen (como las de Postman o curl)
         if (!origin || origin === clientUrl) {
             callback(null, true);
         } else {
@@ -104,40 +100,8 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
-// --- [CAMBIO 2] "Log Canario" ---
-// Este log es ahora lo PRIMERO que se ejecuta. Si no ves este log para una petición,
-// significa que la petición fue bloqueada ANTES de llegar a Node.js (probablemente por el proxy de Render).
-app.use((req, res, next) => {
-  console.log(`[CANARY LOG] Petición entrante: ${req.method} ${req.path} desde ${req.ip}`);
-  next();
-});
-
-// --- [CAMBIO 3] Middlewares de JSON y Seguridad ---
-// Se ejecutan DESPUÉS de CORS.
+// --- Middlewares de JSON y Seguridad ---
 app.use(express.json());
-
-// Se comenta HELMET temporalmente. Es el principal sospechoso de bloquear la petición OPTIONS.
-// app.use(helmet()); 
-
-// Se comenta RATE LIMITER temporalmente para simplificar la depuración.
-/*
-const globalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 200,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: 'Demasiadas peticiones desde esta IP, por favor intente de nuevo después de 15 minutos.'
-});
-app.use(globalLimiter);
-
-const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 10,
-    message: 'Demasiados intentos de autenticación desde esta IP. Por seguridad, su acceso ha sido bloqueado temporalmente.'
-});
-*/
-
-// ======================== FIN DE LOS CAMBIOS CRÍTICOS =========================
 
 // --- REGISTRO DE RUTAS DE LA API ---
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
@@ -145,8 +109,7 @@ app.get('/', (req, res) => {
   res.json({ message: 'API funcionando correctamente' });
 });
 
-// app.use('/api/auth', authLimiter, authRoutes); // Versión con rate limiter comentada
-app.use('/api/auth', authRoutes); // Versión simplificada sin rate limiter
+app.use('/api/auth', authRoutes);
 app.use('/api/tools', toolRoutes);
 app.use('/api/ranking', rankingRoutes);
 app.use('/api/wallet', walletRoutes);
@@ -157,7 +120,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
 app.use('/api/users', userRoutes);
 
-// --- LÓGICA DEL BOT DE TELEGRAM (sin cambios) ---
+// --- LÓGICA DEL BOT DE TELEGRAM ---
 const WELCOME_MESSAGE = `
 🌐🚀 NEW PROJECT: BlockSphere 🚀🌐\n\n  
 📢 Official launch: September 22 2025 
@@ -231,44 +194,64 @@ bot.command('start', async (ctx) => {
     }
 });
 
-bot.telegram.setMyCommands([{ command: 'start', description: 'Inicia la aplicación' }]);
-const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
-const secretPath = `/api/telegram-webhook/${secretToken}`;
-app.post(secretPath, (req, res) => {
-  if (req.headers['x-telegram-bot-api-secret-token'] !== secretToken) {
-    console.error('❌ Webhook rechazado: token inválido');
-    return res.status(401).send('Unauthorized');
-  }
-  bot.handleUpdate(req.body, res);
-});
+// --- LÓGICA DEL WEBHOOK (CRÍTICO PARA VERCEL) ---
 
-const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
-bot.telegram.setWebhook(webhookUrl, { secret_token: secretToken, drop_pending_updates: true })
-  .then(() => console.log(`[SERVIDOR] ✅ Webhook configurado en: ${webhookUrl}`))
-  .catch(err => console.error(`[SERVIDOR] ❌ Error al configurar el webhook: ${err.message}`));
+// **IMPORTANTE**: Debes crear una variable de entorno en Vercel llamada `TELEGRAM_WEBHOOK_SECRET`
+// con un valor secreto y estático que tú generes.
+const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET;
 
-// --- MIDDLEWARE DE ERRORES Y ARRANQUE DEL SERVIDOR ---
+if (!secretToken) {
+    console.error('!! ERROR FATAL: La variable de entorno TELEGRAM_WEBHOOK_SECRET no está definida.'.red.bold);
+    // Esto evita que el bot intente funcionar con un token inválido.
+} else {
+    // Definimos el path secreto para el webhook
+    const secretPath = `/api/telegram-webhook/${secretToken}`;
+
+    // Creamos el endpoint para que Telegram envíe las actualizaciones.
+    // Vercel dirigirá las peticiones a '/api/telegram-webhook/...' a este manejador.
+    app.post(secretPath, (req, res) => {
+      // Verificamos que el token que envía Telegram coincida con el nuestro
+      if (req.headers['x-telegram-bot-api-secret-token'] !== secretToken) {
+        console.error('❌ Webhook rechazado: token secreto inválido'.red.bold);
+        return res.status(401).send('Unauthorized');
+      }
+      bot.handleUpdate(req.body, res);
+    });
+
+    // Función asíncrona para configurar el webhook
+    const setupWebhook = async () => {
+        try {
+            // **IMPORTANTE**: Asegúrate que la variable `BACKEND_URL` en Vercel sea la URL de tu despliegue.
+            // Ejemplo: https://mi-proyecto.vercel.app
+            const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
+            
+            await bot.telegram.setWebhook(webhookUrl, {
+                secret_token: secretToken,
+                drop_pending_updates: true // Ignora actualizaciones viejas
+            });
+            console.log(`[SISTEMA] ✅ Webhook configurado en: ${webhookUrl}`.green.bold);
+
+            const botInfo = await bot.telegram.getMe();
+            console.log(`[SISTEMA] ✅ Conectado como bot: ${botInfo.username}.`.green);
+
+        } catch (err) {
+            console.error(`[SISTEMA] ❌ Error al configurar el webhook de Telegram: ${err.message}`.red.bold);
+        }
+    };
+    
+    // Llamamos a la configuración del webhook cuando la función se inicializa.
+    setupWebhook();
+}
+
+// Inicia el monitoreo de transacciones (si aplica a un entorno serverless)
+startMonitoring();
+
+// --- MIDDLEWARE DE ERRORES (deben ir al final) ---
 app.use(notFound);
 app.use(errorHandler);
 
-const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, async () => {
-    console.log(`[SERVIDOR] 🚀 Servidor corriendo en puerto ${PORT}`.yellow.bold);
-  
-    startMonitoring();
 
-    try {
-        const botInfo = await bot.telegram.getMe();
-        console.log(`[SERVIDOR] ✅ Conectado como bot: ${botInfo.username}.`);
-        const webhookUrl = `${process.env.BACKEND_URL}${secretPath}`;
-        await bot.telegram.setWebhook(webhookUrl, { secret_token: secretToken, drop_pending_updates: true });
-        console.log(`[SERVIDOR] ✅ Webhook configurado en: ${webhookUrl}`.green.bold);
-    } catch (telegramError) {
-        console.error("[SERVIDOR] ❌ ERROR AL CONFIGURAR TELEGRAM:", telegramError.message.red);
-    }
-});
-
-process.on('unhandledRejection', (err, promise) => {
-    console.error(`❌ ERROR NO MANEJADO: ${err.message}`.red.bold, err);
-    server.close(() => process.exit(1));
-});
+// --- EXPORTACIÓN PARA VERCEL (EL CAMBIO MÁS IMPORTANTE) ---
+// En lugar de app.listen, exportamos la instancia de la app.
+// Vercel se encargará de levantar el servidor y dirigirle las peticiones.
+module.exports = app;
