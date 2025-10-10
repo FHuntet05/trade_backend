@@ -18,7 +18,7 @@ const { body, validationResult } = require('express-validator');
 
 console.log('[SISTEMA] Iniciando aplicación BLOCKSPHERE...');
 dotenv.config();
-
+console.log(`[DEBUG] Leyendo TELEGRAM_WEBHOOK_SECRET: ${process.env.TELEGRAM_WEBHOOK_SECRET ? '✅ Encontrada' : '❌ NO ENCONTRADA / UNDEFINED'}`);
 function checkEnvVariables() {
     console.log('[SISTEMA] Verificando variables de entorno críticas...');
     const requiredVars = [
