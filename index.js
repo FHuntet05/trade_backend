@@ -1,19 +1,21 @@
-// backend/index.js (VERSIÓN FINAL OPTIMIZADA PARA VERCEL)
+// RUTA: trade_backend/index.js (VERSIÓN "NEXUS - VERCEL RESTORED & REBRANDED")
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
+const morgan = require('morgan');
+const crypto = require('crypto');
 const dotenv = require('dotenv');
 const colors = require('colors');
 const connectDB = require('./config/db');
 const User = require('./models/userModel');
 const Tool = require('./models/toolModel');
-// const { startMonitoring } = require('./services/transactionMonitor.js'); // Desactivado para Vercel
+const { startMonitoring } = require('./services/transactionMonitor.js');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 
-console.log('[SISTEMA] Iniciando función serverless de BLOCKSPHERE...');
+console.log('[SISTEMA] Iniciando función serverless de AI Brok Trade Pro...'.cyan);
 dotenv.config();
 
 function checkEnvVariables() {
@@ -33,7 +35,7 @@ function checkEnvVariables() {
 }
 checkEnvVariables();
 
-// --- CONEXIÓN A BASE DE DATOS ---
+// --- CONEXIÓN A BASE DE DATOS Y PROVISIÓN ---
 connectDB();
 provisionFreeTool();
 
@@ -54,15 +56,37 @@ const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-app.set('trust proxy', 1);
-app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
-app.use(express.json());
-app.use(helmet());
+// --- RESTAURACIÓN DE MIDDLEWARES ORIGINALES ---
+app.set('trust proxy', 1); // Confía en los encabezados de proxy (importante para Vercel/Render)
+
+app.use(cors({ origin: process.env.CLIENT_URL, credentials: true })); // Middleware de CORS
+app.use(express.json()); // Middleware para parsear JSON
+app.use(helmet()); // Middleware de seguridad
+app.use(morgan('dev')); // Logger de peticiones HTTP
+
+// Middleware de log personalizado
+app.use((req, res, next) => {
+    console.log(`[REQUEST LOG] Origen: ${req.headers.origin} | Método: ${req.method} | URL: ${req.url}`.magenta);
+    next();
+});
+
+// Middleware de Rate Limiting (excluyendo el webhook de Telegram)
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutos
+    max: 200, // Límite de 200 peticiones por IP por ventana
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.use((req, res, next) => {
+    // Excluimos la ruta del webhook del rate limiter para no bloquear a Telegram
+    if (req.path.startsWith('/api/telegram-webhook')) {
+        return next();
+    }
+    limiter(req, res, next);
+});
 
 // --- REGISTRO DE RUTAS DE LA API ---
-// Nota: Tu vercel.json actual enrutará todo a este archivo.
-// Vercel maneja las rutas de forma inteligente.
-app.get('/', (req, res) => res.json({ message: 'API de BlockSphere funcionando en Vercel' }));
+app.get('/', (req, res) => res.json({ message: 'API de AI Brok Trade Pro funcionando en Vercel' }));
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/tools', toolRoutes);
@@ -75,10 +99,25 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
 app.use('/api/users', userRoutes);
 
-// --- LÓGICA DEL BOT DE TELEGRAM ---
+// --- LÓGICA DEL BOT DE TELEGRAM Y MENSAJE ACTUALIZADO ---
 const WELCOME_MESSAGE = `
-🌐🚀 NEW PROJECT: BlockSphere 🚀🌐\n\n  
-// ... (tu mensaje de bienvenida completo aquí)
+🤖✨ ¡Bienvenido a AI Brok Trade Pro! ✨🤖
+
+Descubre una nueva era de trading inteligente. Nuestro sistema avanzado te permite generar ganancias de forma consistente y segura.
+
+📈 **Modelo de Ganancias:**
+Invierte y observa cómo tu capital crece con nuestros paquetes de trading automatizado.
+
+💰 **Paquetes de Inversión:**
+*   **Paquete Básico:** Invierte 3 USDT → Gana 1.5 USDT diarios
+*   **Paquete Avanzado:** Invierte 8 USDT → Gana 4 USDT diarios
+*   **Paquete Profesional:** Invierte 16 USDT → Gana 8 USDT diarios
+*   ... ¡y muchos más!
+
+🔒 **Seguridad y Transparencia:**
+Todas las operaciones están respaldadas por tecnología blockchain, garantizando la seguridad de tus fondos.
+
+¡Únete a la comunidad de AI Brok Trade Pro y empieza a construir tu futuro financiero hoy!
 `;
 
 bot.command('start', async (ctx) => {
@@ -94,19 +133,16 @@ bot.command('start', async (ctx) => {
         }
 
         const canBeReferred = referrerId && referrerId !== referredId && !referredUser.referredBy;
-
         if (canBeReferred) {
             const referrerUser = await User.findOne({ telegramId: referrerId });
             if (referrerUser) {
                 referredUser.referredBy = referrerUser._id;
-                const isAlreadyReferred = referrerUser.referrals.some(ref => ref.user.equals(referredUser._id));
-                if (!isAlreadyReferred) {
+                if (!referrerUser.referrals.some(ref => ref.user.equals(referredUser._id))) {
                     referrerUser.referrals.push({ level: 1, user: referredUser._id });
                     await referrerUser.save();
                 }
             }
         }
-
         await referredUser.save();
         
         const imageUrl = 'https://i.postimg.cc/XqqqFR0C/photo-2025-09-20-02-42-29.jpg';
@@ -121,37 +157,28 @@ bot.command('start', async (ctx) => {
                 ]
             }
         });
-
     } catch (error) {
         console.error('[Bot /start] ERROR FATAL EN EL COMANDO START:'.red.bold, error);
     }
 });
 
-// ======================= WEBHOOK HANDLER PARA VERCEL =======================
+// --- MANEJADOR DE WEBHOOK PARA VERCEL ---
 const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET;
 const secretPath = `/api/telegram-webhook/${secretToken}`;
+app.post(secretPath, (req, res) => bot.handleUpdate(req.body, res));
 
-// Este endpoint recibe las actualizaciones de Telegram
-app.post(secretPath, (req, res) => {
-    console.log('[Webhook] Petición recibida de Telegram.');
-    bot.handleUpdate(req.body, res);
-});
-// ===========================================================================
-
-
-// --- MONITOREO DE TRANSACCIONES (ADVERTENCIA) ---
-// La función `setInterval` de `startMonitoring` no es fiable en Vercel.
-// Para esto, la forma correcta es usar "Cron Jobs" en Vercel.
-// Por ahora, se desactiva para asegurar que el despliegue principal funcione.
-// startMonitoring();
-
+// --- ADVERTENCIA SOBRE MONITOREO DE TRANSACCIONES EN VERCEL ---
+// La función `startMonitoring` utiliza `setInterval`, que no es fiable para tareas en segundo plano
+// en un entorno serverless como Vercel. La forma correcta de implementar esto en Vercel
+// es utilizando "Cron Jobs". Por ahora, esta función se ejecutará solo cuando una
+// función serverless esté activa, lo cual no es ideal para un monitoreo constante.
+startMonitoring();
 
 // --- MIDDLEWARE DE ERRORES (deben ir al final) ---
 app.use(notFound);
 app.use(errorHandler);
 
-// --- EXPORTACIÓN PARA VERCEL (EL CAMBIO MÁS IMPORTANTE) ---
-// NO usamos app.listen. Exportamos la app para que Vercel la maneje.
+// --- EXPORTACIÓN PARA VERCEL ---
 module.exports = app;
 
 // --- Funciones auxiliares ---
