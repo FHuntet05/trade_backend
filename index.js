@@ -1,4 +1,4 @@
-// RUTA: trade_backend/index.js (VERSIÓN "NEXUS - VERCEL RESTORED & REBRANDED")
+// RUTA: trade_backend/index.js (VERSIÓN "NEXUS - VERCEL PRODUCTION READY")
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -57,12 +57,11 @@ const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 // --- RESTAURACIÓN DE MIDDLEWARES ORIGINALES ---
-app.set('trust proxy', 1); // Confía en los encabezados de proxy (importante para Vercel/Render)
-
-app.use(cors({ origin: process.env.CLIENT_URL, credentials: true })); // Middleware de CORS
-app.use(express.json()); // Middleware para parsear JSON
-app.use(helmet()); // Middleware de seguridad
-app.use(morgan('dev')); // Logger de peticiones HTTP
+app.set('trust proxy', 1);
+app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
+app.use(express.json());
+app.use(helmet());
+app.use(morgan('dev'));
 
 // Middleware de log personalizado
 app.use((req, res, next) => {
@@ -78,7 +77,6 @@ const limiter = rateLimit({
     legacyHeaders: false,
 });
 app.use((req, res, next) => {
-    // Excluimos la ruta del webhook del rate limiter para no bloquear a Telegram
     if (req.path.startsWith('/api/telegram-webhook')) {
         return next();
     }
@@ -87,34 +85,10 @@ app.use((req, res, next) => {
 
 // --- REGISTRO DE RUTAS DE LA API ---
 app.get('/', (req, res) => res.json({ message: 'API de AI Brok Trade Pro funcionando en Vercel' }));
-app.get('/health', async (req, res) => {
-    try {
-        // Verificar la conexión con Telegram
-        const botInfo = await bot.telegram.getMe();
-        // Verificar la conexión con MongoDB
-        const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
-        
-        res.status(200).json({ 
-            status: 'ok',
-            bot: {
-                username: botInfo.username,
-                id: botInfo.id,
-                status: 'connected'
-            },
-            database: dbStatus,
-            webhook: {
-                path: secretPath,
-                url: `${process.env.BACKEND_URL}${secretPath}`
-            }
-        });
-    } catch (error) {
-        console.error('[Health Check] Error:', error);
-        res.status(500).json({ 
-            status: 'error',
-            error: error.message
-        });
-    }
-});
+
+// [NEXUS STABILITY] - Ruta de Health Check simple y rápida, crucial para la estabilidad en Vercel.
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+
 app.use('/api/auth', authRoutes);
 app.use('/api/tools', toolRoutes);
 app.use('/api/ranking', rankingRoutes);
@@ -149,16 +123,11 @@ Todas las operaciones están respaldadas por tecnología blockchain, garantizand
 
 bot.command('start', async (ctx) => {
     try {
-        console.log('[Bot /start] Iniciando comando start para usuario:', ctx.from.id);
-        
         const referredId = ctx.from.id.toString();
         let referrerId = ctx.startPayload ? ctx.startPayload.trim() : (ctx.message.text.split(' ')[1] || null);
         
-        console.log('[Bot /start] Buscando usuario existente...');
         let referredUser = await User.findOne({ telegramId: referredId });
-        
         if (!referredUser) {
-            console.log('[Bot /start] Usuario no encontrado, creando nuevo usuario...');
             const username = ctx.from.username || `user_${referredId}`;
             const fullName = `${ctx.from.first_name || ''} ${ctx.from.last_name || ''}`.trim();
             referredUser = new User({ 
@@ -169,29 +138,23 @@ bot.command('start', async (ctx) => {
             });
         }
 
-        if (referrerId) {
-            console.log('[Bot /start] Procesando referido:', referrerId);
-            const canBeReferred = referrerId !== referredId && !referredUser.referredBy;
-            if (canBeReferred) {
-                const referrerUser = await User.findOne({ telegramId: referrerId });
-                if (referrerUser) {
-                    console.log('[Bot /start] Vinculando usuario referido con referente...');
-                    referredUser.referredBy = referrerUser._id;
-                    if (!referrerUser.referrals.some(ref => ref.user.equals(referredUser._id))) {
-                        referrerUser.referrals.push({ level: 1, user: referredUser._id });
-                        await referrerUser.save();
-                    }
+        const canBeReferred = referrerId && referrerId !== referredId && !referredUser.referredBy;
+        if (canBeReferred) {
+            const referrerUser = await User.findOne({ telegramId: referrerId });
+            if (referrerUser) {
+                referredUser.referredBy = referrerUser._id;
+                if (!referrerUser.referrals.some(ref => ref.user.equals(referredUser._id))) {
+                    referrerUser.referrals.push({ level: 1, user: referredUser._id });
+                    await referrerUser.save();
                 }
             }
         }
         
-        console.log('[Bot /start] Guardando usuario...');
         await referredUser.save();
         
         const imageUrl = 'https://i.postimg.cc/XqqqFR0C/photo-2025-09-20-02-42-29.jpg';
         const webAppUrl = process.env.CLIENT_URL;
         
-        console.log('[Bot /start] Enviando mensaje de bienvenida...');
         await ctx.replyWithPhoto(imageUrl, {
             caption: WELCOME_MESSAGE,
             parse_mode: 'Markdown',
@@ -201,11 +164,8 @@ bot.command('start', async (ctx) => {
                 ]
             }
         });
-        
-        console.log('[Bot /start] Comando start completado exitosamente');
     } catch (error) {
         console.error('[Bot /start] ERROR FATAL EN EL COMANDO START:'.red.bold, error);
-        // Intentar enviar un mensaje de error al usuario
         try {
             await ctx.reply('Lo siento, ha ocurrido un error. Por favor, intenta nuevamente más tarde.');
         } catch (replyError) {
@@ -217,23 +177,17 @@ bot.command('start', async (ctx) => {
 // --- MANEJADOR DE WEBHOOK PARA VERCEL ---
 const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET;
 const secretPath = `/api/telegram-webhook/${secretToken}`;
-app.post(secretPath, async (req, res) => {
-    try {
-        console.log('[Webhook] Recibida actualización de Telegram');
-        await bot.handleUpdate(req.body, res);
-        console.log('[Webhook] Actualización procesada exitosamente');
-    } catch (error) {
-        console.error('[Webhook] Error al procesar actualización:', error);
-        res.status(500).json({ error: 'Error al procesar la actualización del bot' });
-    }
+app.post(secretPath, (req, res) => {
+    bot.handleUpdate(req.body, res);
 });
 
-// --- ADVERTENCIA SOBRE MONITOREO DE TRANSACCIONES EN VERCEL ---
-// La función `startMonitoring` utiliza `setInterval`, que no es fiable para tareas en segundo plano
-// en un entorno serverless como Vercel. La forma correcta de implementar esto en Vercel
-// es utilizando "Cron Jobs". Por ahora, esta función se ejecutará solo cuando una
-// función serverless esté activa, lo cual no es ideal para un monitoreo constante.
-startMonitoring();
+
+// [NEXUS VERCEL FIX] - El monitoreo con `setInterval` se desactiva.
+// Esta función no es compatible con el ciclo de vida de las funciones serverless de Vercel.
+// Para ejecutar tareas programadas, se deben usar los "Cron Jobs" de Vercel.
+// console.log('[SISTEMA] El monitoreo de transacciones está desactivado en el entorno de Vercel.');
+// startMonitoring();
+
 
 // --- MIDDLEWARE DE ERRORES (deben ir al final) ---
 app.use(notFound);
