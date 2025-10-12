@@ -346,13 +346,147 @@ const deleteFactory = asyncHandler(async (req, res) => {
 });
 
 const getSettings = asyncHandler(async (req, res) => {
-  const settings = await Setting.findOne(); res.json(settings);
+  const settings = await Setting.findOne({ singleton: 'global_settings' });
+  if (!settings) {
+    return res.status(404).json({ message: 'Configuración no encontrada' });
+  }
+  res.json({
+    success: true,
+    data: settings
+  });
 });
 
 const updateSettings = asyncHandler(async (req, res) => {
-  const settings = await Setting.findOne();
-  if (!settings) { res.status(404); throw new Error('Configuración no encontrada'); }
-  Object.assign(settings, req.body); const updatedSettings = await settings.save(); res.json(updatedSettings);
+  const settings = await Setting.findOne({ singleton: 'global_settings' });
+  if (!settings) {
+    return res.status(404).json({ message: 'Configuración no encontrada' });
+  }
+
+  // Actualizar configuraciones generales
+  if (req.body.maintenanceMode !== undefined) settings.maintenanceMode = req.body.maintenanceMode;
+  if (req.body.maintenanceMessage) settings.maintenanceMessage = req.body.maintenanceMessage;
+  if (req.body.withdrawalsEnabled !== undefined) settings.withdrawalsEnabled = req.body.withdrawalsEnabled;
+  if (req.body.minimumWithdrawal) settings.minimumWithdrawal = req.body.minimumWithdrawal;
+  
+  // Actualizar niveles de ganancia por saldo si se proporcionan
+  if (req.body.profitTiers && Array.isArray(req.body.profitTiers)) {
+    // Validar que los rangos no se superpongan
+    const sortedTiers = [...req.body.profitTiers].sort((a, b) => a.minBalance - b.minBalance);
+    for (let i = 0; i < sortedTiers.length - 1; i++) {
+      if (sortedTiers[i].maxBalance >= sortedTiers[i + 1].minBalance) {
+        return res.status(400).json({
+          success: false,
+          message: 'Los rangos de saldo no pueden superponerse'
+        });
+      }
+    }
+    settings.profitTiers = sortedTiers;
+  }
+
+  // Actualizar configuraciones de criptomonedas si se proporcionan
+  if (req.body.cryptoSettings && Array.isArray(req.body.cryptoSettings)) {
+    settings.cryptoSettings = req.body.cryptoSettings;
+  }
+
+  const updatedSettings = await settings.save();
+  res.json({
+    success: true,
+    data: updatedSettings
+  });
+});
+
+// Nuevo endpoint para obtener la configuración de ganancias por saldo
+const getProfitTiers = asyncHandler(async (req, res) => {
+  const settings = await Setting.findOne({ singleton: 'global_settings' });
+  if (!settings) {
+    return res.status(404).json({ message: 'Configuración no encontrada' });
+  }
+
+  res.json({
+    success: true,
+    data: settings.profitTiers
+  });
+});
+
+// Nuevo endpoint para actualizar la configuración de ganancias por saldo
+const updateProfitTiers = asyncHandler(async (req, res) => {
+  const { profitTiers } = req.body;
+  if (!profitTiers || !Array.isArray(profitTiers)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Se requiere un array de niveles de ganancia'
+    });
+  }
+
+  const settings = await Setting.findOne({ singleton: 'global_settings' });
+  if (!settings) {
+    return res.status(404).json({ message: 'Configuración no encontrada' });
+  }
+
+  // Validar y ordenar los niveles
+  const sortedTiers = [...profitTiers].sort((a, b) => a.minBalance - b.minBalance);
+  for (let i = 0; i < sortedTiers.length - 1; i++) {
+    if (sortedTiers[i].maxBalance >= sortedTiers[i + 1].minBalance) {
+      return res.status(400).json({
+        success: false,
+        message: 'Los rangos de saldo no pueden superponerse'
+      });
+    }
+  }
+
+  settings.profitTiers = sortedTiers;
+  await settings.save();
+
+  res.json({
+    success: true,
+    data: settings.profitTiers,
+    message: 'Niveles de ganancia actualizados correctamente'
+  });
+});
+
+// Nuevo endpoint para obtener las configuraciones de criptomonedas
+const getCryptoSettings = asyncHandler(async (req, res) => {
+  const settings = await Setting.findOne({ singleton: 'global_settings' });
+  if (!settings) {
+    return res.status(404).json({ message: 'Configuración no encontrada' });
+  }
+
+  res.json({
+    success: true,
+    data: settings.cryptoSettings
+  });
+});
+
+// Nuevo endpoint para actualizar la configuración de una criptomoneda específica
+const updateCryptoSetting = asyncHandler(async (req, res) => {
+  const { symbol } = req.params;
+  const cryptoData = req.body;
+
+  const settings = await Setting.findOne({ singleton: 'global_settings' });
+  if (!settings) {
+    return res.status(404).json({ message: 'Configuración no encontrada' });
+  }
+
+  const cryptoIndex = settings.cryptoSettings.findIndex(c => c.symbol === symbol);
+  if (cryptoIndex === -1) {
+    settings.cryptoSettings.push({
+      symbol,
+      ...cryptoData
+    });
+  } else {
+    settings.cryptoSettings[cryptoIndex] = {
+      ...settings.cryptoSettings[cryptoIndex],
+      ...cryptoData
+    };
+  }
+
+  await settings.save();
+
+  res.json({
+    success: true,
+    data: settings.cryptoSettings.find(c => c.symbol === symbol),
+    message: `Configuración de ${symbol} actualizada correctamente`
+  });
 });
 
 const generateTwoFactorSecret = asyncHandler(async (req, res) => {
@@ -405,5 +539,10 @@ module.exports = {
   sweepGas,
   analyzeGasNeeds,
   dispatchGas,
-  sendBroadcastNotification
+  sendBroadcastNotification,
+  // Nuevos endpoints para ganancias por saldo y criptomonedas
+  getProfitTiers,
+  updateProfitTiers,
+  getCryptoSettings,
+  updateCryptoSetting
 };

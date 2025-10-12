@@ -83,6 +83,18 @@ router.route('/factories/:id').put(updateFactory).delete(deleteFactory);
 // --- Ajustes
 router.route('/settings').get(getSettings).put(updateSettings);
 
+// --- Ganancias por Saldo
+router.route('/profit-tiers')
+  .get(getProfitTiers)
+  .put(updateProfitTiers);
+
+// --- Configuración de Criptomonedas
+router.route('/crypto-settings')
+  .get(getCryptoSettings);
+
+router.route('/crypto-settings/:symbol')
+  .put(updateCryptoSetting);
+
 // --- Seguridad y 2FA
 router.route('/security/2fa/generate').post(generateTwoFactorSecret);
 router.route('/security/2fa/verify').post(verifyAndEnableTwoFactor);

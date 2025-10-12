@@ -9,7 +9,7 @@ const transactionSchema = new mongoose.Schema({
         enum: [
             'deposit', 'withdrawal', 'purchase', 'mining_claim', 'referral_commission', 
             'task_reward', 'admin_credit', 'admin_debit', 'swap_ntx_to_usdt',
-            'admin_action'
+            'admin_action', 'investment', 'investment_profit', 'investment_return'
         ]
     },
     amount: { type: Number, required: true },
@@ -83,6 +83,16 @@ const userSchema = new mongoose.Schema({
         default: false
     },
 
+    // --- Inversiones ---
+    activeInvestments: [{
+        transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' },
+        symbol: { type: String, required: true },
+        amount: { type: Number, required: true },
+        profitPercentage: { type: Number, required: true },
+        startDate: { type: Date, required: true },
+        endDate: { type: Date, required: true }
+    }],
+    
     // --- Estructura de Referidos ---
     referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     referralCode: { type: String, unique: true, sparse: true },
