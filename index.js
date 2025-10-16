@@ -26,12 +26,33 @@ function checkEnvVariables() {
         'TREASURY_WALLET_ADDRESS', 'SUPER_ADMIN_TELEGRAM_ID', 'MASTER_SEED_PHRASE',
         'TELEGRAM_WEBHOOK_SECRET'
     ];
-    const missingVars = requiredVars.filter(v => !process.env[v]);
-    if (missingVars.length > 0) {
-        console.error(`!! ERROR FATAL: FALTAN VARIABLES DE ENTORNO: ${missingVars.join(', ')}`.red.bold);
-        throw new Error(`Variables de entorno faltantes: ${missingVars.join(', ')}`);
+
+    const envStatus = {
+        missing: [],
+        empty: []
+    };
+
+    requiredVars.forEach(varName => {
+        if (!(varName in process.env)) {
+            envStatus.missing.push(varName);
+        } else if (!process.env[varName]) {
+            envStatus.empty.push(varName);
+        }
+    });
+
+    if (envStatus.missing.length > 0 || envStatus.empty.length > 0) {
+        let errorMessage = '';
+        if (envStatus.missing.length > 0) {
+            errorMessage += `Variables no definidas: ${envStatus.missing.join(', ')}\n`;
+        }
+        if (envStatus.empty.length > 0) {
+            errorMessage += `Variables vacías: ${envStatus.empty.join(', ')}`;
+        }
+        console.error(`!! ERROR FATAL: PROBLEMAS CON VARIABLES DE ENTORNO\n${errorMessage}`.red.bold);
+        throw new Error(errorMessage);
     }
-    console.log('[SISTEMA] ✅ Todas las variables de entorno críticas están presentes.');
+
+    console.log('[SISTEMA] ✅ Todas las variables de entorno críticas están presentes y tienen valor.');
 }
 checkEnvVariables();
 
