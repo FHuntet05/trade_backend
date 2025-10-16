@@ -1,30 +1,24 @@
+// RUTA: backend/routes/investmentRoutes.js
+
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
 const {
-  getAvailableCryptos,
-  createInvestment,
-  getActiveInvestments,
-  getInvestmentHistory,
-  getInvestmentStats
+  getAvailableMarketItems,
+  createMarketPurchase,
 } = require('../controllers/investmentController');
 
-// Todas las rutas requieren autenticación
+// Todas las rutas de este archivo requieren que el usuario esté autenticado.
 router.use(protect);
 
-// Obtener criptomonedas disponibles para inversión
-router.get('/available', getAvailableCryptos);
+// Ruta para obtener la lista de todos los items de mercado disponibles para comprar.
+// GET /api/investments/items
+router.get('/items', getAvailableMarketItems);
 
-// Crear nueva inversión
-router.post('/create', createInvestment);
+// Ruta para que un usuario compre un item de mercado.
+// POST /api/investments/purchase
+router.post('/purchase', createMarketPurchase);
 
-// Obtener inversiones activas del usuario
-router.get('/active', getActiveInvestments);
-
-// Obtener historial de inversiones
-router.get('/history', getInvestmentHistory);
-
-// Obtener estadísticas de inversión
-router.get('/stats', getInvestmentStats);
+// (Aquí se pueden añadir futuras rutas relacionadas, como obtener el historial de compras del usuario)
 
 module.exports = router;

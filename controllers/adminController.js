@@ -1,9 +1,10 @@
-// RUTA: backend/controllers/adminController.js (VERSIÓN "NEXUS - DYNAMIC SWEEP INTEGRATED")
+// RUTA: backend/controllers/adminController.js
 
 const User = require('../models/userModel');
-const Factory = require('../models/toolModel'); // Mantenemos su importación correcta de toolModel
-const Setting =require('../models/settingsModel');
+const Factory = require('../models/toolModel');
+const Setting = require('../models/settingsModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
+const InvestmentItem = require('../models/investmentItemModel'); // <-- IMPORTAMOS EL NUEVO MODELO
 const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
@@ -18,6 +19,9 @@ const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const crypto = require('crypto');
 const blockchainService = require('../services/blockchainService');
 const Transaction = require('../models/transactionModel');
+
+// ... (Todo el código existente del adminController se mantiene aquí, sin cambios)
+// ... (getDashboardStats, processWithdrawal, updateUser, etc.)
 
 const PLACEHOLDER_AVATAR_URL = 'https://i.postimg.cc/mD21B6r7/user-avatar-placeholder.png';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
@@ -123,29 +127,15 @@ const getTreasuryWalletsList = asyncHandler(async (req, res) => {
   res.json({ wallets: walletsWithDetails, pagination: { currentPage: page, totalPages: Math.ceil(totalWallets / limit), totalWallets }, summary });
 });
 
-
-// ======================= INICIO DE LA LÓGICA DE BARRIDO BIFURCADA =======================
 const sweepFunds = asyncHandler(async (req, res) => {
-  // Lógica para USDT: Destino Dinámico
   const { walletsToSweep, recipientAddress } = req.body;
-
-  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
-      return res.status(400).json({ message: "Parámetros inválidos. Se requiere 'walletsToSweep' (array)." });
-  }
-  // Validación de seguridad para la dirección de destino dinámica.
-  if (!recipientAddress || !ethers.utils.isAddress(recipientAddress)) {
-      return res.status(400).json({ message: "La dirección de destino 'recipientAddress' es requerida y debe ser válida." });
-  }
-
+  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) { return res.status(400).json({ message: "Parámetros inválidos. Se requiere 'walletsToSweep' (array)." }); }
+  if (!recipientAddress || !ethers.utils.isAddress(recipientAddress)) { return res.status(400).json({ message: "La dirección de destino 'recipientAddress' es requerida y debe ser válida." }); }
   const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
-  if (wallets.length === 0) {
-      return res.json({ message: "Ninguna de las wallets candidatas fue encontrada.", summary: {}, details: [] });
-  }
-
+  if (wallets.length === 0) { return res.json({ message: "Ninguna de las wallets candidatas fue encontrada.", summary: {}, details: [] }); }
   const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
   for (const wallet of wallets) {
       try {
-          // Se pasa la dirección de destino dinámica al servicio de transacción.
           const txHash = await transactionService.sweepUsdtOnBscFromDerivedWallet(wallet.derivationIndex, recipientAddress);
           report.summary.successfulSweeps++;
           report.details.push({ address: wallet.address, status: 'SUCCESS', txHash });
@@ -158,28 +148,15 @@ const sweepFunds = asyncHandler(async (req, res) => {
 });
 
 const sweepGas = asyncHandler(async (req, res) => {
-  // Lógica para BNB: Destino Estático
   const { walletsToSweep } = req.body;
   const TREASURY_WALLET = process.env.TREASURY_WALLET_ADDRESS;
-
-  // Validación de seguridad reforzada para la variable de entorno.
-  if (!TREASURY_WALLET || !ethers.utils.isAddress(TREASURY_WALLET)) {
-    console.error('[CRITICAL CONFIG ERROR] La variable TREASURY_WALLET_ADDRESS no está definida o es inválida para el barrido de gas.');
-    return res.status(500).json({ message: 'Error crítico de configuración del servidor (destino de barrido no definido o inválido).' });
-  }
-  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) {
-    return res.status(400).json({ message: "Parámetro inválido. Se requiere 'walletsToSweep' (array)." });
-  }
-
+  if (!TREASURY_WALLET || !ethers.utils.isAddress(TREASURY_WALLET)) { console.error('[CRITICAL CONFIG ERROR] La variable TREASURY_WALLET_ADDRESS no está definida o es inválida para el barrido de gas.'); return res.status(500).json({ message: 'Error crítico de configuración del servidor (destino de barrido no definido o inválido).' }); }
+  if (!walletsToSweep || !Array.isArray(walletsToSweep) || walletsToSweep.length === 0) { return res.status(400).json({ message: "Parámetro inválido. Se requiere 'walletsToSweep' (array)." }); }
   const wallets = await CryptoWallet.find({ address: { $in: walletsToSweep }, chain: 'BSC' }).lean();
-  if (wallets.length === 0) {
-    return res.json({ message: "Ninguna wallet candidata encontrada...", summary: {}, details: [] });
-  }
-
+  if (wallets.length === 0) { return res.json({ message: "Ninguna wallet candidata encontrada...", summary: {}, details: [] }); }
   const report = { summary: { walletsScanned: wallets.length, successfulSweeps: 0, failedSweeps: 0 }, details: [] };
   for (const wallet of wallets) {
     try {
-      // Se usa siempre la dirección estática y segura del .env
       const txHash = await transactionService.sweepBnbFromDerivedWallet(wallet.derivationIndex, TREASURY_WALLET);
       report.summary.successfulSweeps++;
       report.details.push({ address: wallet.address, status: 'SUCCESS', txHash });
@@ -190,7 +167,6 @@ const sweepGas = asyncHandler(async (req, res) => {
   }
   res.json(report);
 });
-// ======================== FIN DE LA LÓGICA DE BARRIDO BIFURCADA =========================
 
 const analyzeGasNeeds = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
@@ -347,146 +323,69 @@ const deleteFactory = asyncHandler(async (req, res) => {
 
 const getSettings = asyncHandler(async (req, res) => {
   const settings = await Setting.findOne({ singleton: 'global_settings' });
-  if (!settings) {
-    return res.status(404).json({ message: 'Configuración no encontrada' });
-  }
-  res.json({
-    success: true,
-    data: settings
-  });
+  if (!settings) { return res.status(404).json({ message: 'Configuración no encontrada' }); }
+  res.json({ success: true, data: settings });
 });
 
 const updateSettings = asyncHandler(async (req, res) => {
   const settings = await Setting.findOne({ singleton: 'global_settings' });
-  if (!settings) {
-    return res.status(404).json({ message: 'Configuración no encontrada' });
-  }
-
-  // Actualizar configuraciones generales
+  if (!settings) { return res.status(404).json({ message: 'Configuración no encontrada' }); }
   if (req.body.maintenanceMode !== undefined) settings.maintenanceMode = req.body.maintenanceMode;
   if (req.body.maintenanceMessage) settings.maintenanceMessage = req.body.maintenanceMessage;
   if (req.body.withdrawalsEnabled !== undefined) settings.withdrawalsEnabled = req.body.withdrawalsEnabled;
   if (req.body.minimumWithdrawal) settings.minimumWithdrawal = req.body.minimumWithdrawal;
-  
-  // Actualizar niveles de ganancia por saldo si se proporcionan
   if (req.body.profitTiers && Array.isArray(req.body.profitTiers)) {
-    // Validar que los rangos no se superpongan
     const sortedTiers = [...req.body.profitTiers].sort((a, b) => a.minBalance - b.minBalance);
     for (let i = 0; i < sortedTiers.length - 1; i++) {
       if (sortedTiers[i].maxBalance >= sortedTiers[i + 1].minBalance) {
-        return res.status(400).json({
-          success: false,
-          message: 'Los rangos de saldo no pueden superponerse'
-        });
+        return res.status(400).json({ success: false, message: 'Los rangos de saldo no pueden superponerse' });
       }
     }
     settings.profitTiers = sortedTiers;
   }
-
-  // Actualizar configuraciones de criptomonedas si se proporcionan
-  if (req.body.cryptoSettings && Array.isArray(req.body.cryptoSettings)) {
-    settings.cryptoSettings = req.body.cryptoSettings;
-  }
-
+  if (req.body.cryptoSettings && Array.isArray(req.body.cryptoSettings)) { settings.cryptoSettings = req.body.cryptoSettings; }
   const updatedSettings = await settings.save();
-  res.json({
-    success: true,
-    data: updatedSettings
-  });
+  res.json({ success: true, data: updatedSettings });
 });
 
-// Nuevo endpoint para obtener la configuración de ganancias por saldo
 const getProfitTiers = asyncHandler(async (req, res) => {
   const settings = await Setting.findOne({ singleton: 'global_settings' });
-  if (!settings) {
-    return res.status(404).json({ message: 'Configuración no encontrada' });
-  }
-
-  res.json({
-    success: true,
-    data: settings.profitTiers
-  });
+  if (!settings) { return res.status(404).json({ message: 'Configuración no encontrada' }); }
+  res.json({ success: true, data: settings.profitTiers });
 });
 
-// Nuevo endpoint para actualizar la configuración de ganancias por saldo
 const updateProfitTiers = asyncHandler(async (req, res) => {
   const { profitTiers } = req.body;
-  if (!profitTiers || !Array.isArray(profitTiers)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Se requiere un array de niveles de ganancia'
-    });
-  }
-
+  if (!profitTiers || !Array.isArray(profitTiers)) { return res.status(400).json({ success: false, message: 'Se requiere un array de niveles de ganancia' }); }
   const settings = await Setting.findOne({ singleton: 'global_settings' });
-  if (!settings) {
-    return res.status(404).json({ message: 'Configuración no encontrada' });
-  }
-
-  // Validar y ordenar los niveles
+  if (!settings) { return res.status(404).json({ message: 'Configuración no encontrada' }); }
   const sortedTiers = [...profitTiers].sort((a, b) => a.minBalance - b.minBalance);
   for (let i = 0; i < sortedTiers.length - 1; i++) {
     if (sortedTiers[i].maxBalance >= sortedTiers[i + 1].minBalance) {
-      return res.status(400).json({
-        success: false,
-        message: 'Los rangos de saldo no pueden superponerse'
-      });
+      return res.status(400).json({ success: false, message: 'Los rangos de saldo no pueden superponerse' });
     }
   }
-
   settings.profitTiers = sortedTiers;
   await settings.save();
-
-  res.json({
-    success: true,
-    data: settings.profitTiers,
-    message: 'Niveles de ganancia actualizados correctamente'
-  });
+  res.json({ success: true, data: settings.profitTiers, message: 'Niveles de ganancia actualizados correctamente' });
 });
 
-// Nuevo endpoint para obtener las configuraciones de criptomonedas
 const getCryptoSettings = asyncHandler(async (req, res) => {
   const settings = await Setting.findOne({ singleton: 'global_settings' });
-  if (!settings) {
-    return res.status(404).json({ message: 'Configuración no encontrada' });
-  }
-
-  res.json({
-    success: true,
-    data: settings.cryptoSettings
-  });
+  if (!settings) { return res.status(404).json({ message: 'Configuración no encontrada' }); }
+  res.json({ success: true, data: settings.cryptoSettings });
 });
 
-// Nuevo endpoint para actualizar la configuración de una criptomoneda específica
 const updateCryptoSetting = asyncHandler(async (req, res) => {
   const { symbol } = req.params;
   const cryptoData = req.body;
-
   const settings = await Setting.findOne({ singleton: 'global_settings' });
-  if (!settings) {
-    return res.status(404).json({ message: 'Configuración no encontrada' });
-  }
-
+  if (!settings) { return res.status(404).json({ message: 'Configuración no encontrada' }); }
   const cryptoIndex = settings.cryptoSettings.findIndex(c => c.symbol === symbol);
-  if (cryptoIndex === -1) {
-    settings.cryptoSettings.push({
-      symbol,
-      ...cryptoData
-    });
-  } else {
-    settings.cryptoSettings[cryptoIndex] = {
-      ...settings.cryptoSettings[cryptoIndex],
-      ...cryptoData
-    };
-  }
-
+  if (cryptoIndex === -1) { settings.cryptoSettings.push({ symbol, ...cryptoData }); }
+  else { settings.cryptoSettings[cryptoIndex] = { ...settings.cryptoSettings[cryptoIndex], ...cryptoData }; }
   await settings.save();
-
-  res.json({
-    success: true,
-    data: settings.cryptoSettings.find(c => c.symbol === symbol),
-    message: `Configuración de ${symbol} actualizada correctamente`
-  });
+  res.json({ success: true, data: settings.cryptoSettings.find(c => c.symbol === symbol), message: `Configuración de ${symbol} actualizada correctamente` });
 });
 
 const generateTwoFactorSecret = asyncHandler(async (req, res) => {
@@ -515,6 +414,46 @@ const sendBroadcastNotification = asyncHandler(async (req, res) => {
   res.json({ message: `Notificación enviada. Éxitos: ${successfulSends}, Fallos: ${failedSends}.`, details: { successful: successfulSends, failed: failedSends } });
 });
 
+// --- INICIO: NUEVAS FUNCIONES CRUD PARA ITEMS DE MERCADO ---
+
+const createMarketItem = asyncHandler(async (req, res) => {
+  const { name, symbol, description, dailyProfitPercentage, durationDays, minInvestment, maxInvestment, displayOrder } = req.body;
+  const newItem = new InvestmentItem({
+    name, symbol, description, dailyProfitPercentage, durationDays, minInvestment, maxInvestment, displayOrder
+  });
+  const createdItem = await newItem.save();
+  res.status(201).json({ success: true, data: createdItem });
+});
+
+const getMarketItemsAdmin = asyncHandler(async (req, res) => {
+  const items = await InvestmentItem.find({}).sort({ displayOrder: 'asc' });
+  res.json({ success: true, data: items });
+});
+
+const updateMarketItem = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const updatedItem = await InvestmentItem.findByIdAndUpdate(id, req.body, { new: true, runValidators: true });
+  if (!updatedItem) {
+    res.status(404);
+    throw new Error('Item de mercado no encontrado.');
+  }
+  res.json({ success: true, data: updatedItem });
+});
+
+const deleteMarketItem = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const item = await InvestmentItem.findById(id);
+  if (!item) {
+    res.status(404);
+    throw new Error('Item de mercado no encontrado.');
+  }
+  await item.remove();
+  res.json({ success: true, message: 'Item de mercado eliminado correctamente.' });
+});
+
+// --- FIN: NUEVAS FUNCIONES CRUD PARA ITEMS DE MERCADO ---
+
+
 module.exports = {
   getDashboardStats,
   getPendingWithdrawals,
@@ -540,9 +479,13 @@ module.exports = {
   analyzeGasNeeds,
   dispatchGas,
   sendBroadcastNotification,
-  // Nuevos endpoints para ganancias por saldo y criptomonedas
   getProfitTiers,
   updateProfitTiers,
   getCryptoSettings,
-  updateCryptoSetting
+  updateCryptoSetting,
+  // Exportar nuevas funciones
+  createMarketItem,
+  getMarketItemsAdmin,
+  updateMarketItem,
+  deleteMarketItem,
 };
