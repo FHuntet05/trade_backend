@@ -26,11 +26,13 @@ const {
   adjustUserBalance,
   sendBroadcastNotification,
   sweepGas,
-  resetAdminPassword,      // <-- La función correcta ahora
+  resetAdminPassword,
   getAllTransactions,
   getPendingBlockchainTxs,
-  // promoteUserToAdmin,    // <-- Obsoleta, eliminada
-  // demoteAdminToUser,     // <-- Obsoleta, eliminada
+  getProfitTiers,          // <-- Added
+  updateProfitTiers,       // <-- Added
+  getCryptoSettings,       // <-- Added for completeness
+  updateCryptoSetting,     // <-- Added for completeness
 } = require('../controllers/adminController');
 
 // --- Middleware global para admins ---
