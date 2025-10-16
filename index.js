@@ -72,6 +72,7 @@ const adminRoutes = require('./routes/adminRoutes');
 const treasuryRoutes = require('./routes/treasuryRoutes');
 const userRoutes = require('./routes/userRoutes');
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
+const marketRoutes = require('./routes/marketRoutes');
 
 // --- CONFIGURACIÓN DE EXPRESS ---
 const app = express();
@@ -120,6 +121,7 @@ app.use('/api/payment', paymentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/treasury', treasuryRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/market', marketRoutes);
 
 // --- LÓGICA DEL BOT DE TELEGRAM Y MENSAJE ACTUALIZADO ---
 const WELCOME_MESSAGE = `
