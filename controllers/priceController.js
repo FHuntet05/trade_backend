@@ -1,34 +1,32 @@
 // RUTA: backend/controllers/priceController.js
-// --- INICIO DE LA REFACTORIZACIÓN COMPLETA ---
+// --- INICIO DE LA ADAPTACIÓN AL NUEVO SERVICIO ---
 
 const asyncHandler = require('express-async-handler');
-// Se importa la función correcta desde el servicio de precios, no el modelo de la BD.
-const { getAllPricesFromCache } = require('../services/priceService');
+// Se importa la nueva función "on-demand" del servicio.
+const { getPricesOnDemand } = require('../services/priceService');
 
 /**
- * @desc    Obtiene el estado actual de los precios desde la caché en memoria.
+ * @desc    Obtiene los precios de mercado actualizados llamando a un proveedor externo.
  * @route   GET /api/market/prices
  * @access  Private
  */
 const getMarketPrices = asyncHandler(async (req, res) => {
-  // 1. Se llama a la función del servicio que accede a la caché en tiempo real.
-  const prices = getAllPricesFromCache();
+  try {
+    // 1. Se llama directamente a la nueva función del servicio.
+    const prices = await getPricesOnDemand();
 
-  // 2. Verificación: Si la caché por alguna razón está vacía, se informa al cliente.
-  if (!prices || Object.keys(prices).length === 0) {
-    console.warn('[Price Controller] Se solicitó precios, pero la caché está vacía.');
-    // Se puede devolver un 204 (No Content) o un 404. 404 es más explícito.
-    res.status(404);
-    throw new Error('Los datos de precios no están disponibles en este momento.');
+    // 2. Si todo va bien, se devuelven los precios.
+    res.status(200).json(prices);
+
+  } catch (error) {
+    // 3. Si el servicio lanza un error (ej. CoinGecko caído), se devuelve un error 503.
+    res.status(503); // 503 Service Unavailable
+    throw new Error(error.message);
   }
-
-  // 3. Se envía la respuesta directamente en el formato que el frontend espera:
-  //    { "BTC": 65000, "ETH": 3100, ... }
-  res.status(200).json(prices);
 });
 
 module.exports = {
   getMarketPrices,
 };
 
-// --- FIN DE LA REFACTORIZACIÓN COMPLETA ---
+// --- FIN DE LA ADAPTACIÓN AL NUEVO SERVICIO ---
