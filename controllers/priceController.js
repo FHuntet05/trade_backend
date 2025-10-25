@@ -1,37 +1,34 @@
 // RUTA: backend/controllers/priceController.js
+// --- INICIO DE LA REFACTORIZACIÓN COMPLETA ---
 
 const asyncHandler = require('express-async-handler');
-const Price = require('../models/priceModel');
+// Se importa la función correcta desde el servicio de precios, no el modelo de la BD.
+const { getAllPricesFromCache } = require('../services/priceService');
 
 /**
- * @desc    Obtiene todos los precios de criptomonedas cacheados desde la base de datos.
- * @route   GET /api/prices
- * @access  Private (accesible por usuarios autenticados)
+ * @desc    Obtiene el estado actual de los precios desde la caché en memoria.
+ * @route   GET /api/market/prices
+ * @access  Private
  */
-const getPrices = asyncHandler(async (req, res) => {
-  try {
-    const prices = await Price.find({}).select('ticker priceUsd -_id');
+const getMarketPrices = asyncHandler(async (req, res) => {
+  // 1. Se llama a la función del servicio que accede a la caché en tiempo real.
+  const prices = getAllPricesFromCache();
 
-    if (!prices) {
-      res.status(404);
-      throw new Error('No se encontraron precios en la base de datos.');
-    }
-
-    res.status(200).json({ 
-      success: true, 
-      message: 'Precios obtenidos correctamente.',
-      data: prices 
-    });
-
-  } catch (error) {
-    console.error('[Price Controller] Error fetching prices from DB:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error del servidor al obtener los precios.' 
-    });
+  // 2. Verificación: Si la caché por alguna razón está vacía, se informa al cliente.
+  if (!prices || Object.keys(prices).length === 0) {
+    console.warn('[Price Controller] Se solicitó precios, pero la caché está vacía.');
+    // Se puede devolver un 204 (No Content) o un 404. 404 es más explícito.
+    res.status(404);
+    throw new Error('Los datos de precios no están disponibles en este momento.');
   }
+
+  // 3. Se envía la respuesta directamente en el formato que el frontend espera:
+  //    { "BTC": 65000, "ETH": 3100, ... }
+  res.status(200).json(prices);
 });
 
 module.exports = {
-  getPrices,
+  getMarketPrices,
 };
+
+// --- FIN DE LA REFACTORIZACIÓN COMPLETA ---

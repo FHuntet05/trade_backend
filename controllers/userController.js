@@ -6,7 +6,7 @@ const Transaction = require('../models/transactionModel');
 const Setting = require('../models/settingsModel'); // Importar el modelo de Settings
 const asyncHandler = require('express-async-handler');
 const mongoose = require('mongoose'); // Importar mongoose para la sesión
-
+const PendingPurchase = require('../models/pendingPurchaseModel');
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const PLACEHOLDER_AVATAR = `${process.env.CLIENT_URL}/assets/images/user-avatar-placeholder.png`;
 
@@ -132,9 +132,47 @@ const claimDailyBonus = asyncHandler(async (req, res) => {
 });
 // --- FIN DE LA NUEVA FUNCIONALIDAD (Bono Diario) ---
 
+// --- INICIO DE LA NUEVA FUNCIONALIDAD REQUERIDA ---
+/**
+ * @desc    Obtiene los detalles de un ticket de compra pendiente específico.
+ * @route   GET /api/user/pending-purchase/:ticketId
+ * @access  Private
+ */
+const getPendingPurchaseById = asyncHandler(async (req, res) => {
+    const { ticketId } = req.params;
+    const userId = req.user.id;
+
+    // 1. Validar que el ID del ticket sea un formato válido.
+    if (!mongoose.Types.ObjectId.isValid(ticketId)) {
+        res.status(400);
+        throw new Error('El formato del ID del ticket no es válido.');
+    }
+
+    // 2. Buscar el ticket en la base de datos.
+    const ticket = await PendingPurchase.findById(ticketId).lean();
+
+    // 3. Si no se encuentra el ticket, devolver un error 404.
+    if (!ticket) {
+        res.status(404);
+        throw new Error('La orden de compra no fue encontrada. Puede que haya expirado.');
+    }
+
+    // 4. Medida de Seguridad CRÍTICA: Asegurarse de que el usuario que solicita
+    //    el ticket sea el mismo usuario que lo creó.
+    if (ticket.user.toString() !== userId) {
+        res.status(403); // 403 Forbidden: No tienes permiso para ver este recurso.
+        throw new Error('No tienes autorización para acceder a esta orden de compra.');
+    }
+
+    // 5. Si todo es correcto, devolver los datos del ticket.
+    res.status(200).json({ success: true, data: ticket });
+});
+// --- FIN DE LA NUEVA FUNCIONALIDAD REQUERIDA ---
+
 module.exports = {
     getUserPhoto,
     getTemporaryPhotoUrl,
     getUserTransactions,
-    claimDailyBonus // Se exporta la nueva función
+    claimDailyBonus, // Se exporta la nueva función
+    getPendingPurchaseById
 };

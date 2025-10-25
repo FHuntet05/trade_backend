@@ -180,7 +180,21 @@ const getPriceFromCache = (ticker) => {
     return priceCache.get(ticker.toUpperCase());
 };
 
+// --- INICIO DE LA MODIFICACIÓN NECESARIA ---
+/**
+ * Obtiene un objeto con todos los precios actualmente en la caché.
+ * Convierte el Map de la caché en un objeto plano que el frontend puede consumir.
+ * @returns {object} - Ej: { BTC: 65000, ETH: 3100, ... }
+ */
+const getAllPricesFromCache = () => {
+    // Object.fromEntries convierte una estructura [key, value] como un Map a un objeto.
+    return Object.fromEntries(priceCache);
+};
+// --- FIN DE LA MODIFICACIÓN NECESARIA ---
+
+
 module.exports = {
     initializePriceService,
     getPriceFromCache,
+    getAllPricesFromCache,
 };

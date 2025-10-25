@@ -1,20 +1,27 @@
-// backend/routes/userRoutes.js
+// RUTA: backend/routes/userRoutes.js
 
 const express = require('express');
-// --- INICIO DE LA MODIFICACIÓN ---
-const { getUserPhoto, claimDailyBonus } = require('../controllers/userController');
-const { protect } = require('../middleware/authMiddleware'); // Importar el middleware de protección
-// --- FIN DE LA MODIFICACIÓN ---
+const { protect } = require('../middleware/authMiddleware');
+const {
+  getUserPhoto,
+  getUserTransactions,
+  claimDailyBonus,
+  getPendingPurchaseById // Se importa la nueva función del controlador.
+} = require('../controllers/userController');
 
 const router = express.Router();
 
-// --- INICIO DE LA MODIFICACIÓN ---
-// Se añade la nueva ruta POST para reclamar el bono diario.
-// Está protegida para asegurar que solo usuarios autenticados puedan acceder a ella.
-router.route('/claim-bonus').post(protect, claimDailyBonus);
-// --- FIN DE LA MODIFICACIÓN ---
+// Todas las rutas aquí están protegidas por defecto.
+router.use(protect);
 
-// Ruta pública para obtener la foto de perfil de cualquier usuario por su ID de Telegram
-router.get('/:telegramId/photo', getUserPhoto);
+router.get('/photo/:telegramId', getUserPhoto);
+router.get('/transactions', getUserTransactions);
+router.post('/claim-bonus', claimDailyBonus);
+
+// --- INICIO DE LA NUEVA RUTA ---
+// @desc    Ruta para que la página de depósito pendiente obtenga los detalles de la orden.
+// @route   GET /api/user/pending-purchase/:ticketId
+router.route('/pending-purchase/:ticketId').get(getPendingPurchaseById);
+// --- FIN DE LA NUEVA RUTA ---
 
 module.exports = router;
