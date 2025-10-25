@@ -7,6 +7,30 @@ const QuantitativeItem = require('../models/quantitativeItemModel');
 const PendingPurchase = require('../models/pendingPurchaseModel');
 const Transaction = require('../models/transactionModel');
 const CryptoWallet = require('../models/cryptoWalletModel'); // Para asignar wallets de depósito
+// --- INICIO DE LA FUNCIÓN FALTANTE ---
+/**
+ * @desc    Obtiene los detalles de un plan cuantitativo específico por su ID.
+ * @route   GET /api/quantitative/plans/:id
+ * @access  Private
+ */
+const getPlanById = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+        res.status(400);
+        throw new Error('ID de plan inválido.');
+    }
+
+    const plan = await QuantitativeItem.findById(id).lean();
+
+    if (!plan) {
+        res.status(404);
+        throw new Error('Plan no encontrado.');
+    }
+
+    res.status(200).json({ success: true, data: plan });
+});
+// --- FIN DE LA FUNCIÓN FALTANTE ---
 
 /**
  * @desc    Obtiene todos los planes cuantitativos activos.
@@ -240,5 +264,6 @@ module.exports = {
     getActivePlans,
     calculateGains,
     initiatePurchase,
-    confirmManualPurchase
+    confirmManualPurchase,
+    getPlanById 
 };

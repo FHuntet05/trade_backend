@@ -7,7 +7,7 @@ const {
     calculateGains,
     initiatePurchase,
     confirmManualPurchase,
-    getPlanById // Se importa la nueva función del controlador
+    getPlanById // --- CAMBIO CLAVE: Asegurarse de que se importa correctamente ---
 } = require('../controllers/quantitativeController');
 
 const router = express.Router();
@@ -16,11 +16,9 @@ router.use(protect);
 
 router.route('/plans').get(getActivePlans);
 
-// --- INICIO DE LA NUEVA RUTA ---
 // @desc    Obtiene los detalles de un plan específico.
 // @route   GET /api/quantitative/plans/:id
-router.route('/plans/:id').get(getPlanById);
-// --- FIN DE LA NUEVA RUTA ---
+router.route('/plans/:id').get(getPlanById); // Esta es la línea que causaba el crash
 
 router.route('/calculate').post(calculateGains);
 router.route('/initiate-purchase').post(initiatePurchase);
