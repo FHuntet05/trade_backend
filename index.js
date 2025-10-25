@@ -1,4 +1,4 @@
-// RUTA: backend/index.js (VERSIÓN "NEXUS - VERCEL STABILITY FIX")
+// RUTA: backend/index.js
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -6,7 +6,6 @@ const http = require('http');
 const cors = require('cors');
 const { Telegraf, Markup } = require('telegraf');
 const morgan = require('morgan');
-const crypto = require('crypto');
 const dotenv = require('dotenv');
 const colors = require('colors');
 const connectDB = require('./config/db');
@@ -15,10 +14,6 @@ const Tool = require('./models/toolModel');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 
-//const { initializePriceService } = require('./services/priceService');
-//const { scheduleProfitDistribution } = require('./services/profitDistributionService');
-//const { startMonitoring } = require('./services/blockchainWatcherService');
-
 console.log('[SISTEMA] Iniciando AI Brok Trade Pro Backend...'.cyan);
 dotenv.config();
 
@@ -26,9 +21,7 @@ function checkEnvVariables() {
     console.log('[SISTEMA] Verificando variables de entorno críticas...');
     const requiredVars = [
         'MONGO_URI', 'JWT_SECRET', 'JWT_ADMIN_SECRET', 'TELEGRAM_BOT_TOKEN', 
-        'CLIENT_URL', 'BACKEND_URL', 'ANKR_RPC_URL', 'GAS_DISPENSER_PRIVATE_KEY',
-        'TREASURY_WALLET_ADDRESS', 'SUPER_ADMIN_TELEGRAM_ID', 'MASTER_SEED_PHRASE',
-        'TELEGRAM_WEBHOOK_SECRET' , 'CRON_SECRET'
+        'CLIENT_URL', 'BACKEND_URL', 'TELEGRAM_WEBHOOK_SECRET' , 'CRON_SECRET'
     ];
     const envStatus = { missing: [], empty: [] };
     requiredVars.forEach(varName => {
@@ -44,7 +37,7 @@ function checkEnvVariables() {
 }
 checkEnvVariables();
 
-// --- CONEXIÓN A BASE DE DATOS Y PROVISIÓN ---
+// --- CONEXIÓN A BASE DE DATOS ---
 connectDB();
 provisionFreeTool();
 
@@ -73,40 +66,33 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 // --- MIDDLEWARES ---
 app.set('trust proxy', 1);
 
-
-// --- INICIO DE LA CORRECCIÓN CRÍTICA DE CORS ---
-
-// 1. Definir explícitamente los orígenes permitidos.
-//    Lee la URL del cliente desde las variables de entorno.
+// Configuración de CORS
 const allowedOrigins = [process.env.CLIENT_URL];
-
 const corsOptions = {
   origin: function (origin, callback) {
-    // Permite peticiones sin 'origin' (como las de Postman o apps móviles)
-    // O si el 'origin' está en nuestra lista de permitidos.
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
       callback(new Error('No permitido por la política de CORS'));
     }
   },
-  credentials: true, // Permite que el frontend envíe cookies o tokens de autorización.
+  credentials: true,
   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
   allowedHeaders: 'Content-Type,Authorization',
 };
-
-// 2. Aplicar el middleware de CORS ANTES de todas las rutas de la API.
 app.use(cors(corsOptions));
-// Responde a las peticiones "preflight" (OPTIONS) que los navegadores envían
-// antes de las peticiones complejas (como POST con headers de autorización).
 app.options('*', cors(corsOptions));
 
-// --- FIN DE LA CORRECCIÓN CRÍTICA DE CORS ---
+// --- INICIO DE LA CORRECCIÓN CRÍTICA ---
+// Middleware para parsear JSON. Sin esta línea, `req.body` será `undefined` en tus controladores.
+app.use(express.json());
+// --- FIN DE LA CORRECCIÓN CRÍTICA ---
+
+app.use(helmet());
+app.use(morgan('dev'));
 
 // --- REGISTRO DE RUTAS DE LA API ---
 app.get('/', (req, res) => res.json({ message: 'API de AI Brok Trade Pro funcionando en Vercel' }));
-app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
-
 app.use('/api/auth', authRoutes);
 app.use('/api/tools', toolRoutes);
 app.use('/api/ranking', rankingRoutes);
@@ -175,36 +161,11 @@ app.post(secretPath, (req, res) => {
     bot.handleUpdate(req.body, res);
 });
 
-// --- INICIALIZACIÓN DEL SERVIDOR Y SERVICIOS ---
-const server = http.createServer(app);
-
-// --- INICIO DE LA CORRECCIÓN CRÍTICA (VERCEL) ---
-// Los procesos persistentes como 'node-cron', 'setInterval' o clientes WebSocket
-// permanentes no son compatibles con el ciclo de vida de las funciones Serverless de Vercel.
-// Al intentar iniciarlos, la función crashea (FUNCTION_INVOCATION_FAILED).
-// La solución correcta es migrar estas tareas a "Vercel Cron Jobs".
-
-// console.log('[SISTEMA] Desactivando servicios de larga duración para compatibilidad con Vercel.'.yellow);
-
-// initializePriceService(server); // DESACTIVADO: La conexión WebSocket persistente causa inestabilidad.
-// startMonitoring(); // DESACTIVADO: setInterval no funciona en Serverless. Usar Vercel Cron Jobs.
-// scheduleProfitDistribution(); // DESACTIVADO: node-cron no funciona en Serverless. Usar Vercel Cron Jobs.
-
-// CONSEJO DE ARQUITECTURA:
-// Para reactivar estas funcionalidades en Vercel, debes:
-// 1. Crear endpoints de API seguros para cada tarea. Ejemplo: GET /api/cron/distribute-profits
-// 2. En tu archivo `vercel.json`, configurar los Cron Jobs para que llamen a estos endpoints
-//    en el horario deseado. Ejemplo: "schedule": "5 0 * * *"
-// --- FIN DE LA CORRECCIÓN CRÍTICA (VERCEL) ---
-
-
-// --- MIDDLEWARE DE ERRORES (deben ir al final) ---
+// --- MIDDLEWARE DE ERRORES ---
 app.use(notFound);
 app.use(errorHandler);
 
 // --- EXPORTACIÓN PARA VERCEL ---
-// Se exporta 'app' o 'server' para que Vercel lo maneje.
-// 'app' es suficiente si no se usan WebSockets de forma nativa en la misma instancia.
 module.exports = app;
 
 // --- Funciones auxiliares ---
