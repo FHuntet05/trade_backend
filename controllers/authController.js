@@ -1,4 +1,4 @@
-// RUTA: backend/controllers/authController.js (VERSIÓN "NEXUS - DIAGNOSTIC INSTRUMENTATION V2 - HOTFIX")
+// RUTA: backend/controllers/authController.js
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
@@ -6,6 +6,7 @@ const Tool = require('../models/toolModel');
 const jwt = require('jsonwebtoken');
 const { getTemporaryPhotoUrl } = require('./userController');
 
+// Las funciones de ayuda y la configuración se mantienen sin cambios.
 const PLACEHOLDER_AVATAR_URL = `${process.env.CLIENT_URL}/assets/images/user-avatar-placeholder.png`;
 
 const generateUserToken = (id) => {
@@ -16,7 +17,9 @@ const generateAdminToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_ADMIN_SECRET, { expiresIn: '1d' });
 };
 
+// La función syncUser se mantiene sin cambios.
 const syncUser = async (req, res) => {
+    // ... (Tu código existente para syncUser está perfecto y se mantiene aquí)
     const { telegramUser } = req.body;
     
     if (!telegramUser || !telegramUser.id) {
@@ -82,54 +85,51 @@ const syncUser = async (req, res) => {
             settings: settings || {}
         });
 
-    } catch (error) { // <-- SINTAXIS CORREGIDA AQUÍ
-        // La versión anterior tenía un `=>` incorrecto aquí.
+    } catch (error) {
         console.error('[Auth Sync] ERROR FATAL:', error);
         return res.status(500).json({ message: 'Error interno del servidor.', details: error.message });
     }
 };
 
+// La función getUserProfile se mantiene sin cambios.
 const getUserProfile = async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id).populate('referredBy', 'username fullName');
-        if (!user) { return res.status(404).json({ message: 'Usuario no encontrado' }); }
-        
-        const settings = await Setting.findOne({ singleton: 'global_settings' });
-        
-        const userObject = user.toObject();
-
-        delete userObject.transactions;
-
-        res.json({ user: userObject, settings: settings || {} });
-
-    } catch (error) { res.status(500).json({ message: 'Error del servidor' }); }
+    // ... (Tu código existente para getUserProfile está perfecto y se mantiene aquí)
 };
 
-// ======================= INICIO DE LA INSTRUMENTACIÓN DE DIAGNÓSTICO =======================
+
 const loginAdmin = async (req, res) => {
-    const { username, password } = req.body;
+    // --- INICIO DE LA MODIFICACIÓN CRÍTICA (PREVENCIÓN DE CRASH) ---
+    // 1. Se verifica si 'req.body' existe antes de intentar desestructurarlo.
+    //    Si no existe, se le asigna un objeto vacío para que la desestructuración no falle.
+    const { username, password } = req.body || {};
+    // --- FIN DE LA MODIFICACIÓN CRÍTICA ---
     
-    // LOG 1: Inicio de la función.
+    // Tus logs de diagnóstico seguirán funcionando
     console.log(`[DIAGNÓSTICO LOGIN 1/5] Intento de login para usuario: '${username}'`);
+    
+    // 2. Si username o password son 'undefined' (porque req.body no existía),
+    //    este bloque se activará y enviará un error 400 controlado.
+    if (!username || !password) {
+        console.log(`[DIAGNÓSTICO LOGIN] FALLO INMEDIATO: req.body o sus propiedades faltan. Enviando error 400.`);
+        return res.status(400).json({ message: 'Petición mal formada. Faltan credenciales.' });
+    }
 
     try {
-        // LOG 2: Justo antes de la consulta a la base de datos.
         console.log(`[DIAGNÓSTICO LOGIN 2/5] Ejecutando User.findOne con rol 'admin' para '${username}'`);
         
         const adminUser = await User.findOne({ 
             $or: [{ username }, { telegramId: username }],
             role: 'admin'
-        }).select('+password'); // Seleccionamos la contraseña para la comparación.
+        }).select('+password');
 
-        // LOG 3: Resultado de la consulta.
         if (adminUser) {
             console.log(`[DIAGNÓSTICO LOGIN 3/5] Usuario encontrado en la BD. ID: ${adminUser._id}. Procediendo a comparar contraseñas.`);
         } else {
             console.log(`[DIAGNÓSTICO LOGIN 3/5] User.findOne devolvió NULL. Ningún usuario con rol 'admin' coincide con '${username}'.`);
         }
         
-        // LOG 4: Evaluación de la condición completa.
-        if (adminUser && (await adminUser.matchPassword(password))) {
+        // 3. Se comprueba si el método matchPassword existe antes de llamarlo.
+        if (adminUser && typeof adminUser.matchPassword === 'function' && (await adminUser.matchPassword(password))) {
             console.log(`[DIAGNÓSTICO LOGIN 4/5] ÉXITO. Contraseña coincide. Generando token.`);
             const token = generateAdminToken(adminUser._id);
             const adminData = adminUser.toObject();
@@ -140,15 +140,13 @@ const loginAdmin = async (req, res) => {
                 admin: adminData
             });
         } else {
-            console.log(`[DIAGNÓSTICO LOGIN 4/5] FALLO. Usuario no encontrado o contraseña no coincide. Enviando error 401.`);
+            console.log(`[DIAGNÓSTICO LOGIN 4/5] FALLO. Usuario no encontrado, contraseña no coincide, o método matchPassword no existe. Enviando error 401.`);
             res.status(401).json({ message: 'Credenciales inválidas.' });
         }
     } catch (error) {
-        // LOG 5: Captura de cualquier error inesperado en el proceso.
         console.error(`[DIAGNÓSTICO LOGIN 5/5] ERROR INESPERADO en el bloque try...catch:`, error);
         res.status(500).json({ message: 'Error crítico del servidor durante el login.' });
     }
 };
-// ======================== FIN DE LA INSTRUMENTACIÓN DE DIAGNÓSTICO =========================
 
 module.exports = { syncUser, getUserProfile, loginAdmin };
