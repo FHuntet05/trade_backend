@@ -2,7 +2,10 @@
 
 const express = require('express');
 const { distributeDailyProfits } = require('../services/profitDistributionService');
-const { startMonitoring } = require('../services/blockchainWatcherService');
+// --- INICIO DE LA CORRECCIÓN CRÍTICA ---
+// Se importa la nueva función 'runBlockchainMonitoringCycle' en lugar de 'startMonitoring'.
+const { runBlockchainMonitoringCycle } = require('../services/blockchainWatcherService');
+// --- FIN DE LA CORRECCIÓN CRÍTICA ---
 
 const router = express.Router();
 
@@ -35,9 +38,11 @@ router.get('/distribute-profits', protectCron, async (req, res) => {
 router.get('/monitor-blockchain', protectCron, async (req, res) => {
     console.log('[CRON] Iniciando trabajo de monitoreo de blockchain...');
     try {
-        // La función startMonitoring usa setInterval, la adaptaremos para una sola ejecución
-        // Por ahora, asumimos que puede ser llamada directamente para un ciclo.
-        await startMonitoring(); // Asumiendo que startMonitoring puede ejecutar un ciclo
+        // --- INICIO DE LA CORRECCIÓN CRÍTICA ---
+        // Se llama a la nueva función que ejecuta un solo ciclo y termina.
+        // Esto permite que la función serverless complete su ejecución y evita el crash.
+        await runBlockchainMonitoringCycle();
+        // --- FIN DE LA CORRECCIÓN CRÍTICA ---
         console.log('[CRON] Trabajo de monitoreo de blockchain finalizado con éxito.');
         res.status(200).json({ success: true, message: 'Monitoreo de blockchain completado.' });
     } catch (error) {
