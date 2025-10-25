@@ -73,29 +73,35 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 // --- MIDDLEWARES ---
 app.set('trust proxy', 1);
 
+
+// --- INICIO DE LA CORRECCIÓN CRÍTICA DE CORS ---
+
+// 1. Definir explícitamente los orígenes permitidos.
+//    Lee la URL del cliente desde las variables de entorno.
+const allowedOrigins = [process.env.CLIENT_URL];
+
 const corsOptions = {
-  origin: process.env.CLIENT_URL,
-  credentials: true,
+  origin: function (origin, callback) {
+    // Permite peticiones sin 'origin' (como las de Postman o apps móviles)
+    // O si el 'origin' está en nuestra lista de permitidos.
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('No permitido por la política de CORS'));
+    }
+  },
+  credentials: true, // Permite que el frontend envíe cookies o tokens de autorización.
   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-  allowedHeaders: 'Content-Type,Authorization'
+  allowedHeaders: 'Content-Type,Authorization',
 };
+
+// 2. Aplicar el middleware de CORS ANTES de todas las rutas de la API.
 app.use(cors(corsOptions));
+// Responde a las peticiones "preflight" (OPTIONS) que los navegadores envían
+// antes de las peticiones complejas (como POST con headers de autorización).
 app.options('*', cors(corsOptions));
 
-app.use(express.json());
-app.use(helmet());
-app.use(morgan('dev'));
-app.use((req, res, next) => {
-    console.log(`[REQUEST LOG] Origen: ${req.headers.origin} | Método: ${req.method} | URL: ${req.url}`.magenta);
-    next();
-});
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false,
-});
-app.use((req, res, next) => {
-    if (req.path.startsWith('/api/telegram-webhook')) return next();
-    limiter(req, res, next);
-});
+// --- FIN DE LA CORRECCIÓN CRÍTICA DE CORS ---
 
 // --- REGISTRO DE RUTAS DE LA API ---
 app.get('/', (req, res) => res.json({ message: 'API de AI Brok Trade Pro funcionando en Vercel' }));
