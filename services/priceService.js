@@ -1,10 +1,12 @@
 // RUTA: backend/services/priceService.js
-// --- INICIO DE LA REFACTORIZACIÓN COMPLETA A ON-DEMAND ---
+// --- REFACTORIZADO PARA OBTENER PRECIO Y CAMBIO PORCENTUAL ---
 
 const axios = require('axios');
 
-// URL y mapeo de IDs para la API de CoinGecko.
-const COINGECKO_API_URL = 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,binancecoin,solana,tether&vs_currencies=usd';
+// Se cambia al endpoint 'coins/markets' que es más completo.
+const COINGECKO_API_URL = 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,binancecoin,solana,tether';
+
+// Mapeo de IDs a Símbolos para la transformación.
 const SYMBOL_MAP = {
   'bitcoin': 'BTC',
   'ethereum': 'ETH',
@@ -14,38 +16,38 @@ const SYMBOL_MAP = {
 };
 
 /**
- * Obtiene los precios de las criptomonedas directamente desde la API de CoinGecko.
- * Esta función es "on-demand" y no depende de ninguna caché interna.
- * @returns {Promise<object>} Un objeto con los precios en el formato esperado por el frontend.
- * @throws {Error} Lanza un error si la API externa falla.
+ * Obtiene datos de mercado (precio, cambio 24h, etc.) desde CoinGecko.
+ * @returns {Promise<object>} Un objeto con los datos enriquecidos.
  */
-const getPricesOnDemand = async () => {
-  console.log('[Price Service] Solicitando precios actualizados a CoinGecko...');
+const getMarketDataOnDemand = async () => {
+  console.log('[Price Service] Solicitando datos de mercado completos a CoinGecko...');
   try {
     const response = await axios.get(COINGECKO_API_URL);
-    const externalData = response.data;
+    const externalData = response.data; // Esto es un array de objetos
     
-    // Transforma la respuesta al formato interno de la aplicación.
-    const formattedPrices = {};
-    for (const key in externalData) {
-      if (SYMBOL_MAP[key]) {
-        const symbol = SYMBOL_MAP[key];
-        formattedPrices[symbol] = externalData[key].usd;
+    const formattedData = {};
+    for (const coin of externalData) {
+      const symbol = SYMBOL_MAP[coin.id];
+      if (symbol) {
+        formattedData[symbol] = {
+          name: coin.name,
+          symbol: symbol,
+          price: coin.current_price,
+          change: coin.price_change_percentage_24h,
+          image: coin.image // Incluimos la URL de la imagen para el frontend
+        };
       }
     }
 
-    console.log('[Price Service] Precios obtenidos y transformados:', formattedPrices);
-    return formattedPrices;
+    console.log('[Price Service] Datos de mercado obtenidos y transformados.');
+    return formattedData;
 
   } catch (error) {
-    console.error('[Price Service] CRÍTICO: Fallo al obtener precios de CoinGecko:', error.message);
-    // Se lanza un error específico que el controlador puede capturar.
-    throw new Error('El servicio de precios externos no está disponible en este momento.');
+    console.error('[Price Service] CRÍTICO: Fallo al obtener datos de mercado:', error.message);
+    throw new Error('El servicio de precios externos no está disponible.');
   }
 };
 
 module.exports = {
-  getPricesOnDemand,
+  getMarketDataOnDemand,
 };
-
-// --- FIN DE LA REFACTORIZACIÓN COMPLETA A ON-DEMAND ---
