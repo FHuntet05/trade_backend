@@ -11,5 +11,15 @@
       "src": "/(.*)",
       "dest": "index.js"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/distribute-profits",
+      "schedule": "5 0 * * *"
+    },
+    {
+      "path": "/api/cron/monitor-blockchain",
+      "schedule": "*/10 * * * *"
+    }
   ]
 }

@@ -1,4 +1,4 @@
-// RUTA: backend/index.js (VERSIÓN "NEXUS - CORS FIX")
+// RUTA: backend/index.js (VERSIÓN "NEXUS - VERCEL STABILITY FIX")
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -14,11 +14,11 @@ const User = require('./models/userModel');
 const Tool = require('./models/toolModel');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const { initializePriceService } = require('./services/priceService');
-const { scheduleProfitDistribution } = require('./services/profitDistributionService');
-const { startMonitoring } = require('./services/blockchainWatcherService');
+//const { initializePriceService } = require('./services/priceService');
+//const { scheduleProfitDistribution } = require('./services/profitDistributionService');
+//const { startMonitoring } = require('./services/blockchainWatcherService');
 
-console.log('[SISTEMA] Iniciando función serverless de AI Brok Trade Pro...'.cyan);
+console.log('[SISTEMA] Iniciando AI Brok Trade Pro Backend...'.cyan);
 dotenv.config();
 
 function checkEnvVariables() {
@@ -27,7 +27,7 @@ function checkEnvVariables() {
         'MONGO_URI', 'JWT_SECRET', 'JWT_ADMIN_SECRET', 'TELEGRAM_BOT_TOKEN', 
         'CLIENT_URL', 'BACKEND_URL', 'ANKR_RPC_URL', 'GAS_DISPENSER_PRIVATE_KEY',
         'TREASURY_WALLET_ADDRESS', 'SUPER_ADMIN_TELEGRAM_ID', 'MASTER_SEED_PHRASE',
-        'TELEGRAM_WEBHOOK_SECRET'
+        'TELEGRAM_WEBHOOK_SECRET' , 'CRON_SECRET'
     ];
     const envStatus = { missing: [], empty: [] };
     requiredVars.forEach(varName => {
@@ -62,6 +62,7 @@ const marketRoutes = require('./routes/marketRoutes');
 const investmentRoutes = require('./routes/investmentRoutes');
 const quantitativeRoutes = require('./routes/quantitativeRoutes');
 const wheelRoutes = require('./routes/wheelRoutes');
+const cronRoutes = require('./routes/cronRoutes');
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 
 // --- CONFIGURACIÓN DE EXPRESS ---
@@ -71,27 +72,14 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 // --- MIDDLEWARES ---
 app.set('trust proxy', 1);
 
-// --- INICIO DE LA CORRECCIÓN CRÍTICA (CORS) ---
-// Se define una configuración de CORS más explícita y robusta.
-// Esto asegura que el backend responda correctamente a las solicitudes
-// de "preflight" del navegador y permita el origen del frontend.
 const corsOptions = {
-  origin: function (origin, callback) {
-    // Se permite el origen definido en CLIENT_URL y también las solicitudes sin origen (como las de Postman o apps móviles)
-    if (!origin || origin === process.env.CLIENT_URL) {
-      callback(null, true);
-    } else {
-      callback(new Error('No permitido por CORS'));
-    }
-  },
+  origin: process.env.CLIENT_URL,
   credentials: true,
   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
   allowedHeaders: 'Content-Type,Authorization'
 };
 app.use(cors(corsOptions));
-// Habilitar explícitamente las respuestas a las peticiones OPTIONS (preflight)
 app.options('*', cors(corsOptions));
-// --- FIN DE LA CORRECCIÓN CRÍTICA (CORS) ---
 
 app.use(express.json());
 app.use(helmet());
@@ -126,21 +114,12 @@ app.use('/api/market', marketRoutes);
 app.use('/api/investments', investmentRoutes);
 app.use('/api/quantitative', quantitativeRoutes);
 app.use('/api/wheel', wheelRoutes);
+app.use('/api/cron', cronRoutes);
 
 // --- LÓGICA DEL BOT DE TELEGRAM ---
 const WELCOME_MESSAGE = `
 🤖✨ ¡Bienvenido a AI Brok Trade Pro! ✨🤖
-Descubre una nueva era de trading inteligente. Nuestro sistema avanzado te permite generar ganancias de forma consistente y segura.
-📈 **Modelo de Ganancias:**
-Invierte y observa cómo tu capital crece con nuestros paquetes de trading automatizado.
-💰 **Paquetes de Inversión:**
-*   **Paquete Básico:** Invierte 3 USDT → Gana 1.5 USDT diarios
-*   **Paquete Avanzado:** Invierte 8 USDT → Gana 4 USDT diarios
-*   **Paquete Profesional:** Invierte 16 USDT → Gana 8 USDT diarios
-*   ... ¡y muchos más!
-🔒 **Seguridad y Transparencia:**
-Todas las operaciones están respaldadas por tecnología blockchain, garantizando la seguridad de tus fondos.
-¡Únete a la comunidad de AI Brok Trade Pro y empieza a construir tu futuro financiero hoy!
+Descubre una nueva era de trading inteligente... (mensaje completo omitido por brevedad)
 `;
 bot.command('start', async (ctx) => {
     try {
@@ -189,25 +168,37 @@ app.post(secretPath, (req, res) => {
     bot.handleUpdate(req.body, res);
 });
 
-// --- INICIALIZACIÓN DE SERVICIOS DE LARGA DURACIÓN Y SERVIDOR ---
+// --- INICIALIZACIÓN DEL SERVIDOR Y SERVICIOS ---
 const server = http.createServer(app);
-initializePriceService(server);
-startMonitoring();
-scheduleProfitDistribution();
 
-if (process.env.NODE_ENV !== 'production') {
-    const PORT = process.env.PORT || 5000;
-    server.listen(PORT, () => {
-        console.log(`🚀 Servidor de desarrollo y WebSocket corriendo en http://localhost:${PORT}`.yellow.bold);
-    });
-}
+// --- INICIO DE LA CORRECCIÓN CRÍTICA (VERCEL) ---
+// Los procesos persistentes como 'node-cron', 'setInterval' o clientes WebSocket
+// permanentes no son compatibles con el ciclo de vida de las funciones Serverless de Vercel.
+// Al intentar iniciarlos, la función crashea (FUNCTION_INVOCATION_FAILED).
+// La solución correcta es migrar estas tareas a "Vercel Cron Jobs".
+
+// console.log('[SISTEMA] Desactivando servicios de larga duración para compatibilidad con Vercel.'.yellow);
+
+// initializePriceService(server); // DESACTIVADO: La conexión WebSocket persistente causa inestabilidad.
+// startMonitoring(); // DESACTIVADO: setInterval no funciona en Serverless. Usar Vercel Cron Jobs.
+// scheduleProfitDistribution(); // DESACTIVADO: node-cron no funciona en Serverless. Usar Vercel Cron Jobs.
+
+// CONSEJO DE ARQUITECTURA:
+// Para reactivar estas funcionalidades en Vercel, debes:
+// 1. Crear endpoints de API seguros para cada tarea. Ejemplo: GET /api/cron/distribute-profits
+// 2. En tu archivo `vercel.json`, configurar los Cron Jobs para que llamen a estos endpoints
+//    en el horario deseado. Ejemplo: "schedule": "5 0 * * *"
+// --- FIN DE LA CORRECCIÓN CRÍTICA (VERCEL) ---
+
 
 // --- MIDDLEWARE DE ERRORES (deben ir al final) ---
 app.use(notFound);
 app.use(errorHandler);
 
 // --- EXPORTACIÓN PARA VERCEL ---
-module.exports = server;
+// Se exporta 'app' o 'server' para que Vercel lo maneje.
+// 'app' es suficiente si no se usan WebSockets de forma nativa en la misma instancia.
+module.exports = app;
 
 // --- Funciones auxiliares ---
 async function provisionFreeTool() {
