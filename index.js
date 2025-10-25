@@ -1,4 +1,4 @@
-// RUTA: backend/index.js (VERSIÓN "NEXUS - QUANTITATIVE MODULE INTEGRATED")
+// RUTA: backend/index.js (VERSIÓN "NEXUS - WHEEL MODULE INTEGRATED")
 
 // --- IMPORTS Y CONFIGURACIÓN INICIAL ---
 const express = require('express');
@@ -60,9 +60,10 @@ const treasuryRoutes = require('./routes/treasuryRoutes');
 const userRoutes = require('./routes/userRoutes');
 const marketRoutes = require('./routes/marketRoutes');
 const investmentRoutes = require('./routes/investmentRoutes');
-// --- INICIO DE LA MODIFICACIÓN (Módulo 2.3) ---
-const quantitativeRoutes = require('./routes/quantitativeRoutes'); // Se importa el nuevo archivo de rutas
-// --- FIN DE LA MODIFICACIÓN (Módulo 2.3) ---
+const quantitativeRoutes = require('./routes/quantitativeRoutes');
+// --- INICIO DE LA MODIFICACIÓN (Módulo 2.4) ---
+const wheelRoutes = require('./routes/wheelRoutes'); // Se importa el nuevo archivo de rutas
+// --- FIN DE LA MODIFICACIÓN (Módulo 2.4) ---
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 
 // --- CONFIGURACIÓN DE EXPRESS ---
@@ -103,9 +104,10 @@ app.use('/api/treasury', treasuryRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/market', marketRoutes);
 app.use('/api/investments', investmentRoutes);
-// --- INICIO DE LA MODIFICACIÓN (Módulo 2.3) ---
-app.use('/api/quantitative', quantitativeRoutes); // Se registra el nuevo grupo de rutas
-// --- FIN DE LA MODIFICACIÓN (Módulo 2.3) ---
+app.use('/api/quantitative', quantitativeRoutes);
+// --- INICIO DE LA MODIFICACIÓN (Módulo 2.4) ---
+app.use('/api/wheel', wheelRoutes); // Se registra el nuevo grupo de rutas
+// --- FIN DE LA MODIFICACIÓN (Módulo 2.4) ---
 
 // --- LÓGICA DEL BOT DE TELEGRAM ---
 const WELCOME_MESSAGE = `
