@@ -32,7 +32,8 @@
     "node-cache": "^5.1.2",
     "qrcode": "^1.5.3",
     "speakeasy": "^2.0.0",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "ws": "^8.13.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.2"
