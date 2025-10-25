@@ -1,4 +1,5 @@
-// RUTA: backend/models/userModel.js (VERSIÓN "NEXUS - DEPOSIT COMMISSIONS")
+// RUTA: backend/models/userModel.js
+
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
@@ -9,14 +10,15 @@ const transactionSchema = new mongoose.Schema({
         enum: [
             'deposit', 'withdrawal', 'purchase', 'mining_claim', 'referral_commission', 
             'task_reward', 'admin_credit', 'admin_debit', 'swap_ntx_to_usdt',
-            'admin_action', 'investment', 'investment_profit', 'investment_return'
+            'admin_action', 'investment', 'investment_profit', 'investment_return',
+            'daily_bonus', 'wheel_spin_win' // Tipo de transacción para ganancias de la ruleta
         ]
     },
     amount: { type: Number, required: true },
     currency: { 
         type: String, 
         required: true, 
-        enum: ['USDT', 'NTX', 'SYSTEM']
+        enum: ['USDT', 'NTX', 'SYSTEM', 'SPINS'] // Se añade SPINS para premios de giros
     },
     description: { type: String, required: true },
     status: { type: String, required: true, enum: ['pending', 'completed', 'rejected', 'failed'], default: 'completed' },
@@ -41,47 +43,37 @@ const userSchema = new mongoose.Schema({
     isTwoFactorEnabled: { type: Boolean, default: false },
     twoFactorSecret: { type: String, select: false },
     mustResetPassword: { type: Boolean, default: false },
+    lastBonusClaimedAt: { type: Date },
 
     // --- Datos Financieros y de Negocio ---
     balance: {
         usdt: { type: Number, default: 0.0 },
-        ntx: { type: Number, default: 0.0 }
+        ntx: { type: Number, default: 0.0 }, // ntx se usa como XP
+        spins: { type: Number, default: 0 } // Giros disponibles para la ruleta
     },
+    withdrawableBalance: { type: Number, default: 0 },
+    
+    // --- INICIO DE LA MODIFICACIÓN (Módulo 2.4) ---
+    // Contador para el Sistema de Piedad de la Ruleta
+    pitySpinCount: {
+        type: Number,
+        default: 0
+    },
+    // --- FIN DE LA MODIFICACIÓN (Módulo 2.4) ---
+
     totalRecharge: { type: Number, default: 0 },
     totalWithdrawal: { type: Number, default: 0 },
     currentVipLevel: { type: Number, default: 0 },
-
-    // [NEXUS MONETIZATION] - INICIO DE LA CORRECCIÓN
-    // Este campo es el "interruptor" para la lógica de comisiones del primer depósito.
-    hasMadeFirstDeposit: {
-        type: Boolean,
-        default: false
-    },
-    // [NEXUS MONETIZATION] - FIN DE LA CORRECCIÓN
+    hasMadeFirstDeposit: { type: Boolean, default: false },
     
     // --- Estado de Minado ---
     effectiveMiningRate: { type: Number, default: 0 },
-    miningStatus: {
-        type: String,
-        enum: ['IDLE', 'MINING', 'CLAIMABLE'],
-        default: 'IDLE' 
-    },
-    lastMiningClaim: {
-        type: Date,
-        default: Date.now
-    },
+    miningStatus: { type: String, enum: ['IDLE', 'MINING', 'CLAIMABLE'], default: 'IDLE' },
+    lastMiningClaim: { type: Date, default: Date.now },
 
     // --- Estado de Tareas y Progreso ---
-    claimedTasks: {
-        type: Map,
-        of: Boolean,
-        default: {}
-    },
-    
-    telegramVisited: {
-        type: Boolean,
-        default: false
-    },
+    claimedTasks: { type: Map, of: Boolean, default: {} },
+    telegramVisited: { type: Boolean, default: false },
 
     // --- Inversiones ---
     activeInvestments: [{

@@ -1,9 +1,11 @@
-// RUTA: backend/controllers/userController.js (VERSIÓN "NEXUS - UNIFIED TRANSACTION SOURCE")
+// RUTA: backend/controllers/userController.js
 
 const axios = require('axios');
 const User = require('../models/userModel');
-const Transaction = require('../models/transactionModel'); // <-- IMPORTANTE: Se añade el modelo Transaction.
+const Transaction = require('../models/transactionModel');
+const Setting = require('../models/settingsModel'); // Importar el modelo de Settings
 const asyncHandler = require('express-async-handler');
+const mongoose = require('mongoose'); // Importar mongoose para la sesión
 
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const PLACEHOLDER_AVATAR = `${process.env.CLIENT_URL}/assets/images/user-avatar-placeholder.png`;
@@ -43,27 +45,96 @@ const getUserPhoto = asyncHandler(async (req, res) => {
     }
 });
 
-
-// [NEXUS UNIFICATION] - INICIO DE LA NUEVA FUNCIÓN
-/**
- * @desc    Obtiene el historial de transacciones de un usuario desde la colección centralizada.
- * @route   (Deberá ser enlazada a GET /api/wallet/history en su archivo de rutas)
- * @access  Private
- */
 const getUserTransactions = asyncHandler(async (req, res) => {
     const transactions = await Transaction.find({ user: req.user.id })
-        .sort({ createdAt: -1 }) // Ordenar de más reciente a más antiguo
-        .limit(100) // Limitar a las últimas 100 transacciones para performance
-        .lean(); // Usar .lean() para una consulta más rápida de solo lectura
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .lean();
 
     res.status(200).json(transactions);
 });
-// [NEXUS UNIFICATION] - FIN DE LA NUEVA FUNCIÓN
 
-// [OBSOLETO] - La función de ejemplo getMyProfile_EXAMPLE se elimina ya que su lógica será reemplazada.
+// --- INICIO DE LA NUEVA FUNCIONALIDAD (Bono Diario) ---
+/**
+ * @desc    Permite a un usuario reclamar su bono diario.
+ * @route   POST /api/user/claim-bonus
+ * @access  Private
+ */
+const claimDailyBonus = asyncHandler(async (req, res) => {
+    const userId = req.user.id;
+    const now = new Date();
+    const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
+
+    const [user, settings] = await Promise.all([
+        User.findById(userId),
+        Setting.findOne({ singleton: 'global_settings' }).lean()
+    ]);
+
+    if (!user) {
+        res.status(404);
+        throw new Error('Usuario no encontrado.');
+    }
+
+    if (!settings || !settings.dailyBonusAmount || settings.dailyBonusAmount <= 0) {
+        res.status(400);
+        throw new Error('El bono diario no está configurado o está deshabilitado.');
+    }
+    
+    if (user.lastBonusClaimedAt) {
+        const timeSinceLastClaim = now.getTime() - user.lastBonusClaimedAt.getTime();
+        if (timeSinceLastClaim < twentyFourHoursInMs) {
+            const timeLeft = twentyFourHoursInMs - timeSinceLastClaim;
+            const hours = Math.floor(timeLeft / (1000 * 60 * 60));
+            const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+            res.status(403); // Forbidden
+            throw new Error(`Ya has reclamado tu bono. Inténtalo de nuevo en ${hours}h ${minutes}m.`);
+        }
+    }
+
+    const session = await mongoose.startSession();
+    try {
+        session.startTransaction();
+
+        const bonusAmount = settings.dailyBonusAmount;
+
+        // LÓGICA DE NEGOCIO CRÍTICA: Añadir el bono al SALDO PARA RETIRO.
+        user.withdrawableBalance = (user.withdrawableBalance || 0) + bonusAmount;
+        user.lastBonusClaimedAt = now;
+
+        const transaction = new Transaction({
+            user: userId,
+            type: 'daily_bonus',
+            amount: bonusAmount,
+            currency: 'USDT',
+            status: 'completed',
+            description: `Bono diario reclamado.`,
+        });
+
+        await transaction.save({ session });
+        await user.save({ session });
+
+        await session.commitTransaction();
+
+        res.status(200).json({
+            success: true,
+            message: `¡Has reclamado ${bonusAmount} USDT!`,
+            withdrawableBalance: user.withdrawableBalance,
+            lastBonusClaimedAt: user.lastBonusClaimedAt,
+        });
+
+    } catch (error) {
+        await session.abortTransaction();
+        res.status(400); // Bad Request, to pass the error message to the client
+        throw new Error(error.message);
+    } finally {
+        session.endSession();
+    }
+});
+// --- FIN DE LA NUEVA FUNCIONALIDAD (Bono Diario) ---
 
 module.exports = {
     getUserPhoto,
     getTemporaryPhotoUrl,
-    getUserTransactions // <-- Se exporta la nueva función.
+    getUserTransactions,
+    claimDailyBonus // Se exporta la nueva función
 };

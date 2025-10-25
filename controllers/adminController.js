@@ -4,7 +4,11 @@ const User = require('../models/userModel');
 const Factory = require('../models/toolModel');
 const Setting = require('../models/settingsModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
-const InvestmentItem = require('../models/investmentItemModel'); // <-- IMPORTAMOS EL NUEVO MODELO
+const InvestmentItem = require('../models/investmentItemModel');
+const QuantitativeItem = require('../models/quantitativeItemModel');
+// --- INICIO DE LA MODIFICACIÓN (Módulo 2.4) ---
+const WheelConfig = require('../models/wheelModel'); // Se importa el nuevo modelo
+// --- FIN DE LA MODIFICACIÓN (Módulo 2.4) ---
 const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
@@ -21,7 +25,6 @@ const blockchainService = require('../services/blockchainService');
 const Transaction = require('../models/transactionModel');
 
 // ... (Todo el código existente del adminController se mantiene aquí, sin cambios)
-// ... (getDashboardStats, processWithdrawal, updateUser, etc.)
 
 const PLACEHOLDER_AVATAR_URL = 'https://i.postimg.cc/mD21B6r7/user-avatar-placeholder.png';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
@@ -414,8 +417,6 @@ const sendBroadcastNotification = asyncHandler(async (req, res) => {
   res.json({ message: `Notificación enviada. Éxitos: ${successfulSends}, Fallos: ${failedSends}.`, details: { successful: successfulSends, failed: failedSends } });
 });
 
-// --- INICIO: NUEVAS FUNCIONES CRUD PARA ITEMS DE MERCADO ---
-
 const createMarketItem = asyncHandler(async (req, res) => {
   const { name, symbol, description, dailyProfitPercentage, durationDays, minInvestment, maxInvestment, displayOrder } = req.body;
   const newItem = new InvestmentItem({
@@ -451,7 +452,82 @@ const deleteMarketItem = asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'Item de mercado eliminado correctamente.' });
 });
 
-// --- FIN: NUEVAS FUNCIONES CRUD PARA ITEMS DE MERCADO ---
+const createQuantitativePlan = asyncHandler(async (req, res) => {
+  const { name, dailyPercentage, price, durationDays, totalReturnPercentage, minInvestment, maxInvestment, isOnSale, displayOrder } = req.body;
+  const newPlan = new QuantitativeItem({
+    name, dailyPercentage, price, durationDays, totalReturnPercentage, minInvestment, maxInvestment, isOnSale, displayOrder
+  });
+  const createdPlan = await newPlan.save();
+  res.status(201).json({ success: true, data: createdPlan });
+});
+
+const getQuantitativePlansAdmin = asyncHandler(async (req, res) => {
+  const plans = await QuantitativeItem.find({}).sort({ displayOrder: 'asc' });
+  res.json({ success: true, data: plans });
+});
+
+const updateQuantitativePlan = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const updatedPlan = await QuantitativeItem.findByIdAndUpdate(id, req.body, { new: true, runValidators: true });
+  if (!updatedPlan) {
+    res.status(404);
+    throw new Error('Plan cuantitativo no encontrado.');
+  }
+  res.json({ success: true, data: updatedPlan });
+});
+
+const deleteQuantitativePlan = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const plan = await QuantitativeItem.findById(id);
+  if (!plan) {
+    res.status(404);
+    throw new Error('Plan cuantitativo no encontrado.');
+  }
+  await plan.deleteOne();
+  res.json({ success: true, message: 'Plan cuantitativo eliminado correctamente.' });
+});
+
+
+// --- INICIO DE NUEVAS FUNCIONES PARA GESTIÓN DE LA RULETA (Módulo 2.4) ---
+
+const getWheelConfigAdmin = asyncHandler(async (req, res) => {
+    let config = await WheelConfig.findOne({ singleton: 'global_wheel_config' });
+    if (!config) {
+        // Si no existe, creamos una configuración por defecto con 8 segmentos vacíos
+        config = await WheelConfig.create({
+            segments: Array(8).fill({
+                type: 'xp', value: 1, text: 'Premio Vacío', weight: 1
+            })
+        });
+    }
+    res.status(200).json({ success: true, data: config });
+});
+
+const updateWheelConfigAdmin = asyncHandler(async (req, res) => {
+    const { segments, xpToUsdtConversionRate, pitySystemThreshold, pitySystemGuaranteedPrizeSegmentId } = req.body;
+
+    if (segments && !Array.isArray(segments)) {
+        res.status(400);
+        throw new Error('Los segmentos deben ser un array.');
+    }
+    
+    const config = await WheelConfig.findOneAndUpdate(
+        { singleton: 'global_wheel_config' },
+        { 
+            $set: {
+                segments,
+                xpToUsdtConversionRate,
+                pitySystemThreshold,
+                pitySystemGuaranteedPrizeSegmentId
+            }
+        },
+        { new: true, upsert: true, runValidators: true }
+    );
+    
+    res.status(200).json({ success: true, message: 'Configuración de la ruleta actualizada.', data: config });
+});
+
+// --- FIN DE NUEVAS FUNCIONES PARA GESTIÓN DE LA RULETA (Módulo 2.4) ---
 
 
 module.exports = {
@@ -483,9 +559,16 @@ module.exports = {
   updateProfitTiers,
   getCryptoSettings,
   updateCryptoSetting,
-  // Exportar nuevas funciones
   createMarketItem,
   getMarketItemsAdmin,
   updateMarketItem,
   deleteMarketItem,
+  createQuantitativePlan,
+  getQuantitativePlansAdmin,
+  updateQuantitativePlan,
+  deleteQuantitativePlan,
+  // --- INICIO DE EXPORTACIONES (Módulo 2.4) ---
+  getWheelConfigAdmin,
+  updateWheelConfigAdmin,
+  // --- FIN DE EXPORTACIONES (Módulo 2.4) ---
 };

@@ -1,101 +1,76 @@
 // RUTA: backend/routes/adminRoutes.js
 
 const express = require('express');
-const router = express.Router();
-
-const { protectAdmin, isSuperAdmin } = require('../middleware/authMiddleware');
-
+const { protectAdmin } = require('../middleware/authMiddleware');
 const {
-  getDashboardStats,
-  getPendingWithdrawals,
-  processWithdrawal,
-  getAllUsers,
-  getUserDetails,
-  updateUser,
-  adjustUserBalance,
-  resetAdminPassword,
-  getAllTransactions,
-  getPendingBlockchainTxs,
-  getSettings,
-  updateSettings,
-  generateTwoFactorSecret,
-  verifyAndEnableTwoFactor,
-  getTreasuryWalletsList,
-  sweepFunds,
-  sweepGas,
-  analyzeGasNeeds,
-  dispatchGas,
-  sendBroadcastNotification,
-  getProfitTiers,
-  updateProfitTiers,
-  getCryptoSettings,
-  updateCryptoSetting,
-  // Nuevas importaciones para Market Items
-  createMarketItem,
-  getMarketItemsAdmin,
-  updateMarketItem,
-  deleteMarketItem,
+  getDashboardStats, getPendingWithdrawals, processWithdrawal,
+  getAllUsers, getUserDetails, updateUser, adjustUserBalance,
+  resetAdminPassword, getAllTransactions, getPendingBlockchainTxs,
+  getAllFactories, createFactory, updateFactory, deleteFactory,
+  getSettings, updateSettings, generateTwoFactorSecret,
+  verifyAndEnableTwoFactor, getTreasuryWalletsList, sweepFunds,
+  sweepGas, analyzeGasNeeds, dispatchGas, sendBroadcastNotification,
+  getProfitTiers, updateProfitTiers, getCryptoSettings, updateCryptoSetting,
+  createMarketItem, getMarketItemsAdmin, updateMarketItem, deleteMarketItem,
+  // --- INICIO DE IMPORTACIONES (Módulo 2.3) ---
+  createQuantitativePlan, getQuantitativePlansAdmin, updateQuantitativePlan, deleteQuantitativePlan
+  // --- FIN DE IMPORTACIONES (Módulo 2.3) ---
 } = require('../controllers/adminController');
 
-// --- Middleware global para proteger todas las rutas de admin ---
+const router = express.Router();
+
+// Aplicar middleware de protección de administrador a todas las rutas
 router.use(protectAdmin);
 
-// --- Dashboard ---
-router.route('/stats').get(getDashboardStats);
+// Rutas del Dashboard
+router.get('/dashboard-stats', getDashboardStats);
 
-// --- Gestión de Usuarios ---
-router.route('/users').get(getAllUsers);
+// Rutas de Usuarios
+router.get('/users', getAllUsers);
 router.route('/users/:id').get(getUserDetails).put(updateUser);
-router.route('/users/adjust-balance/:id').post(adjustUserBalance);
-router.route('/users/:id/reset-password').post(resetAdminPassword);
+router.post('/users/:id/adjust-balance', adjustUserBalance);
+router.post('/users/:id/reset-admin-password', resetAdminPassword);
 
-// --- Transacciones globales ---
-router.route('/transactions').get(getAllTransactions);
+// Rutas de Transacciones y Retiros
+router.get('/transactions', getAllTransactions);
+router.get('/withdrawals/pending', getPendingWithdrawals);
+router.post('/withdrawals/:id/process', processWithdrawal);
+router.get('/blockchain/pending-txs', getPendingBlockchainTxs);
 
-// --- Gestión de Retiros ---
-router.route('/withdrawals').get(getPendingWithdrawals);
-router.route('/withdrawals/:id/process').put(processWithdrawal);
+// Rutas de Fábricas/Herramientas (Tools)
+router.route('/factories').get(getAllFactories).post(createFactory);
+router.route('/factories/:id').put(updateFactory).delete(deleteFactory);
 
-// --- Gestión de Items de Mercado ---
-router.route('/market-items')
-  .post(createMarketItem)
-  .get(getMarketItemsAdmin);
-
-router.route('/market-items/:id')
-  .put(updateMarketItem)
-  .delete(deleteMarketItem);
-
-// --- Tesorería ---
-router.route('/treasury/wallets').get(getTreasuryWalletsList);
-router.route('/treasury/sweep-funds').post(sweepFunds);
-router.route('/treasury/sweep-gas').post(sweepGas);
-
-// --- Dispensador de Gas ---
-router.route('/gas-dispenser/analysis').get(analyzeGasNeeds);
-router.route('/gas-dispenser/dispatch').post(dispatchGas);
-
-// --- Monitor de Blockchain ---
-router.route('/blockchain-monitor/pending').get(getPendingBlockchainTxs);
-
-// --- Ajustes Generales ---
+// Rutas de Configuración General (Settings)
 router.route('/settings').get(getSettings).put(updateSettings);
+router.get('/settings/profit-tiers', getProfitTiers);
+router.put('/settings/profit-tiers', updateProfitTiers);
+router.get('/settings/crypto', getCryptoSettings);
+router.put('/settings/crypto/:symbol', updateCryptoSetting);
 
-// --- Ajustes de Niveles de Ganancia ---
-router.route('/profit-tiers')
-  .get(getProfitTiers)
-  .put(updateProfitTiers);
+// Rutas de Seguridad
+router.post('/security/generate-2fa', generateTwoFactorSecret);
+router.post('/security/enable-2fa', verifyAndEnableTwoFactor);
 
-// --- Ajustes de Criptomonedas ---
-router.route('/crypto-settings')
-  .get(getCryptoSettings);
-router.route('/crypto-settings/:symbol')
-  .put(updateCryptoSetting);
+// Rutas de Tesorería y Blockchain
+router.get('/treasury/wallets', getTreasuryWalletsList);
+router.post('/treasury/sweep-funds', sweepFunds);
+router.post('/treasury/sweep-gas', sweepGas);
+router.get('/treasury/analyze-gas', analyzeGasNeeds);
+router.post('/treasury/dispatch-gas', dispatchGas);
 
-// --- Seguridad y 2FA ---
-router.route('/security/2fa/generate').post(generateTwoFactorSecret);
-router.route('/security/2fa/verify').post(verifyAndEnableTwoFactor);
+// Rutas de Notificaciones
+router.post('/notifications/broadcast', sendBroadcastNotification);
 
-// --- Notificaciones ---
-router.route('/notifications/broadcast').post(sendBroadcastNotification);
+// Rutas de Items de Mercado
+router.route('/market-items').get(getMarketItemsAdmin).post(createMarketItem);
+router.route('/market-items/:id').put(updateMarketItem).delete(deleteMarketItem);
+
+// --- INICIO DE NUEVAS RUTAS (Módulo 2.3) ---
+// Rutas de Gestión de Planes Cuantitativos
+router.route('/quantitative-plans').get(getQuantitativePlansAdmin).post(createQuantitativePlan);
+router.route('/quantitative-plans/:id').put(updateQuantitativePlan).delete(deleteQuantitativePlan);
+// --- FIN DE NUEVAS RUTAS (Módulo 2.3) ---
+
 
 module.exports = router;
