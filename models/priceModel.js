@@ -1,22 +1,36 @@
-// backend/models/priceModel.js
+// RUTA: backend/models/priceModel.js
+// --- VERSIÓN FINAL Y CORREGIDA ---
+
 const mongoose = require('mongoose');
 
 const priceSchema = new mongoose.Schema({
-  // Usamos el ticker como un ID único para evitar duplicados.
-  ticker: {
-    type: String,
-    required: true,
-    unique: true, // 'BNB', 'TRX', 'USDT'
-    uppercase: true,
-  },
-  // El precio en USD.
-  priceUsd: {
-    type: Number,
-    required: true,
-  },
+    // --- CAMPO AÑADIDO Y CORREGIDO ---
+    // Este es el campo que faltaba. Se usa como una clave única para encontrar
+    // siempre el mismo documento y actualizarlo (upsert).
+    identifier: {
+        type: String,
+        required: true,
+        unique: true,
+        index: true, // Mejora el rendimiento de la búsqueda
+    },
+    prices: {
+        type: Map,
+        of: Number,
+        required: true,
+    },
+    fullMarketData: {
+        type: Map,
+        of: mongoose.Schema.Types.Mixed, // Permite objetos anidados de cualquier tipo
+        required: true,
+    },
+    lastUpdated: {
+        type: Date,
+        required: true,
+    }
 }, {
-  // Guardamos timestamps para saber cuándo fue la última actualización.
-  timestamps: true,
+    timestamps: true // Opcional, pero buena práctica
 });
 
-module.exports = mongoose.model('Price', priceSchema);
+const Price = mongoose.model('Price', priceSchema);
+
+module.exports = Price;
