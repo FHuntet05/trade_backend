@@ -1,53 +1,73 @@
-// RUTA: backend/services/priceService.js
-// --- REFACTORIZADO PARA OBTENER PRECIO Y CAMBIO PORCENTUAL ---
+// RUTA: backend/services/priceService.js (Refactorizado)
 
 const axios = require('axios');
+const Price = require('../models/priceModel');
 
-// Se cambia al endpoint 'coins/markets' que es más completo.
 const COINGECKO_API_URL = 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,binancecoin,solana,tether';
 
-// Mapeo de IDs a Símbolos para la transformación.
-const SYMBOL_MAP = {
-  'bitcoin': 'BTC',
-  'ethereum': 'ETH',
-  'binancecoin': 'BNB',
-  'solana': 'SOL',
-  'tether': 'USDT'
-};
-
 /**
- * Obtiene datos de mercado (precio, cambio 24h, etc.) desde CoinGecko.
- * @returns {Promise<object>} Un objeto con los datos enriquecidos.
+ * Tarea programada (Cron Job): Obtiene datos de mercado de CoinGecko y los guarda en MongoDB.
+ * Esta es la única función que hablará con la API externa.
  */
-const getMarketDataOnDemand = async () => {
-  console.log('[Price Service] Solicitando datos de mercado completos a CoinGecko...');
+const updatePricesInDB = async () => {
+  console.log('[Cron Job] Ejecutando actualización de precios en MongoDB...');
   try {
     const response = await axios.get(COINGECKO_API_URL);
-    const externalData = response.data; // Esto es un array de objetos
     
-    const formattedData = {};
-    for (const coin of externalData) {
-      const symbol = SYMBOL_MAP[coin.id];
-      if (symbol) {
-        formattedData[symbol] = {
+    const newPrices = {};
+    const fullMarketData = {};
+
+    response.data.forEach(coin => {
+      const symbol = coin.symbol.toUpperCase();
+      if (['BTC', 'ETH', 'BNB', 'SOL', 'USDT'].includes(symbol)) {
+        newPrices[symbol] = coin.current_price;
+        fullMarketData[symbol] = {
           name: coin.name,
           symbol: symbol,
           price: coin.current_price,
           change: coin.price_change_percentage_24h,
-          image: coin.image // Incluimos la URL de la imagen para el frontend
+          image: coin.image
         };
       }
+    });
+
+    if (Object.keys(newPrices).length === 0) {
+      throw new Error("No se recibieron datos válidos de CoinGecko.");
     }
 
-    console.log('[Price Service] Datos de mercado obtenidos y transformados.');
-    return formattedData;
-
+    // `upsert: true` crea el documento si no existe, o lo actualiza si ya existe.
+    await Price.findOneAndUpdate(
+      { identifier: 'market-prices' },
+      { 
+        prices: newPrices,
+        fullMarketData: fullMarketData,
+        lastUpdated: new Date() 
+      },
+      { upsert: true, new: true }
+    );
+    console.log('[Cron Job] Base de datos de precios actualizada con éxito.');
   } catch (error) {
-    console.error('[Price Service] CRÍTICO: Fallo al obtener datos de mercado:', error.message);
-    throw new Error('El servicio de precios externos no está disponible.');
+    console.error('[Cron Job] CRÍTICO: Fallo al actualizar los precios en la BD:', error.message);
+    // No lanzamos un error aquí para no detener otros posibles procesos del cron.
   }
 };
 
+/**
+ * Obtiene los datos de mercado para el frontend. Siempre devuelve los últimos datos guardados en MongoDB.
+ * @returns {Promise<object>} El objeto de datos de mercado.
+ */
+const getPricesFromDB = async () => {
+  const priceData = await Price.findOne({ identifier: 'market-prices' });
+  
+  if (!priceData || !priceData.fullMarketData) {
+    console.warn("[Price Service] No se encontraron datos de precios en la BD. Devolviendo estructura por defecto.");
+    // Devolvemos un objeto vacío para que `Object.values` en el frontend no falle.
+    return {};
+  }
+  return priceData.fullMarketData;
+};
+
 module.exports = {
-  getMarketDataOnDemand,
+  updatePricesInDB,
+  getPricesFromDB,
 };
