@@ -1,5 +1,5 @@
 // RUTA: backend/controllers/authController.js
-// --- VERSIÓN FINAL Y COMPLETA CON CORRECCIÓN DE LOGIN ---
+// --- VERSIÓN DE DEBUGGING CON CONSOLE.LOGS PARA EL LOGIN DE ADMIN ---
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
@@ -85,21 +85,25 @@ const getUserProfile = async (req, res) => {
 const loginAdmin = async (req, res) => {
     const { username, password } = req.body || {};
     
+    console.log('\n--- [ADMIN LOGIN DEBUG] ---');
+    
     if (!username || !password) {
+        console.log('[DEBUG 1] FALLO: Petición mal formada. Faltan credenciales.');
         return res.status(400).json({ message: 'Petición mal formada. Faltan credenciales.' });
     }
 
+    console.log(`[DEBUG 1] Intento de login para usuario: '${username}'`);
+
     try {
-        // --- CORRECCIÓN CRÍTICA APLICADA ---
-        // Se añade .select('+password') para forzar a Mongoose a incluir
-        // el campo de la contraseña en el resultado de esta consulta específica.
         const adminUser = await User.findOne({ 
             $or: [{ username }, { telegramId: username }],
             role: 'admin'
         }).select('+password');
 
-        // La comprobación ahora funcionará correctamente porque `adminUser.password` no será `undefined`.
+        console.log('[DEBUG 2] Resultado de la búsqueda en la base de datos:', adminUser ? `Usuario encontrado: ${adminUser.username}` : 'Usuario NO encontrado.');
+
         if (adminUser && (await adminUser.matchPassword(password))) {
+            console.log('[DEBUG 3] ÉXITO: La contraseña coincide. Generando token.');
             const token = generateAdminToken(adminUser._id);
             const adminData = adminUser.toObject();
             delete adminData.password;
@@ -109,10 +113,11 @@ const loginAdmin = async (req, res) => {
                 admin: adminData
             });
         } else {
+            console.log('[DEBUG 3] FALLO: Credenciales inválidas. Enviando error 401.');
             res.status(401).json({ message: 'Credenciales inválidas.' });
         }
     } catch (error) {
-        console.error(`[Admin Login] ERROR INESPERADO:`, error);
+        console.error(`[ADMIN LOGIN DEBUG] ERROR CRÍTICO INESPERADO:`, error);
         res.status(500).json({ message: 'Error crítico del servidor durante el login.' });
     }
 };

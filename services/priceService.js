@@ -1,18 +1,16 @@
-// RUTA: backend/services/priceService.js (Refactorizado)
+// RUTA: backend/services/priceService.js
+// --- VERSIÓN DE DEBUGGING CON CONSOLE.LOGS ---
 
 const axios = require('axios');
 const Price = require('../models/priceModel');
 
 const COINGECKO_API_URL = 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin,ethereum,binancecoin,solana,tether';
 
-/**
- * Tarea programada (Cron Job): Obtiene datos de mercado de CoinGecko y los guarda en MongoDB.
- * Esta es la única función que hablará con la API externa.
- */
 const updatePricesInDB = async () => {
-  console.log('[Cron Job] Ejecutando actualización de precios en MongoDB...');
+  console.log('[CRON JOB DEBUG] Iniciando la tarea de actualización de precios...');
   try {
     const response = await axios.get(COINGECKO_API_URL);
+    console.log('[CRON JOB DEBUG] Datos recibidos de CoinGecko con éxito.');
     
     const newPrices = {};
     const fullMarketData = {};
@@ -32,10 +30,11 @@ const updatePricesInDB = async () => {
     });
 
     if (Object.keys(newPrices).length === 0) {
+      console.error("[CRON JOB DEBUG] FALLO: No se recibieron datos válidos de CoinGecko.");
       throw new Error("No se recibieron datos válidos de CoinGecko.");
     }
 
-    // `upsert: true` crea el documento si no existe, o lo actualiza si ya existe.
+    console.log('[CRON JOB DEBUG] Guardando los siguientes datos en MongoDB:', fullMarketData);
     await Price.findOneAndUpdate(
       { identifier: 'market-prices' },
       { 
@@ -45,25 +44,20 @@ const updatePricesInDB = async () => {
       },
       { upsert: true, new: true }
     );
-    console.log('[Cron Job] Base de datos de precios actualizada con éxito.');
+    console.log('[CRON JOB DEBUG] ÉXITO: Base de datos de precios actualizada.');
   } catch (error) {
-    console.error('[Cron Job] CRÍTICO: Fallo al actualizar los precios en la BD:', error.message);
-    // No lanzamos un error aquí para no detener otros posibles procesos del cron.
+    console.error('[CRON JOB DEBUG] CRÍTICO: Fallo al actualizar los precios en la BD:', error.message);
   }
 };
 
-/**
- * Obtiene los datos de mercado para el frontend. Siempre devuelve los últimos datos guardados en MongoDB.
- * @returns {Promise<object>} El objeto de datos de mercado.
- */
 const getPricesFromDB = async () => {
   const priceData = await Price.findOne({ identifier: 'market-prices' });
   
   if (!priceData || !priceData.fullMarketData) {
-    console.warn("[Price Service] No se encontraron datos de precios en la BD. Devolviendo estructura por defecto.");
-    // Devolvemos un objeto vacío para que `Object.values` en el frontend no falle.
+    console.warn("[PRICE SERVICE] No se encontraron datos de precios en la BD. Devolviendo objeto vacío.");
     return {};
   }
+  console.log("[PRICE SERVICE] Datos de precios encontrados en la BD y devueltos al controlador.");
   return priceData.fullMarketData;
 };
 
