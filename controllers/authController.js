@@ -75,8 +75,6 @@ const syncUser = async (req, res) => {
 };
 
 const getUserProfile = async (req, res) => {
-    // Aquí iría tu lógica para obtener el perfil de usuario, que no fue proporcionada.
-    // Por seguridad, se asume que req.user es establecido por el middleware 'protect'.
     if (req.user) {
         res.json(req.user);
     } else {
@@ -92,19 +90,19 @@ const loginAdmin = async (req, res) => {
     }
 
     try {
-        // --- CORRECCIÓN CRÍTICA: Se añade .select('+password') ---
-        // Esto le dice a Mongoose que ignore el `select: false` del modelo
-        // y que incluya el hash de la contraseña en el resultado de esta consulta específica.
+        // --- CORRECCIÓN CRÍTICA APLICADA ---
+        // Se añade .select('+password') para forzar a Mongoose a incluir
+        // el campo de la contraseña en el resultado de esta consulta específica.
         const adminUser = await User.findOne({ 
             $or: [{ username }, { telegramId: username }],
             role: 'admin'
         }).select('+password');
 
-        // La comprobación ahora funcionará porque `adminUser.password` existirá.
+        // La comprobación ahora funcionará correctamente porque `adminUser.password` no será `undefined`.
         if (adminUser && (await adminUser.matchPassword(password))) {
             const token = generateAdminToken(adminUser._id);
             const adminData = adminUser.toObject();
-            delete adminData.password; // Se elimina la contraseña antes de enviarla.
+            delete adminData.password;
 
             res.json({
                 token,
