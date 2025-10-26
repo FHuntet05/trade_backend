@@ -81,22 +81,49 @@ const getUserProfile = async (req, res) => {
         res.status(404).json({ message: "Usuario no encontrado." });
     }
 };
-
+// --- FUNCIÓN DE LOGIN DE ADMIN CON DEBUGGING EXTENSIVO ---
 const loginAdmin = async (req, res) => {
+    // LOG DE VERIFICACIÓN DE VERSIÓN: Nos aseguramos de que esta es la versión que se está ejecutando.
+    console.log('--- [ADMIN LOGIN DEBUG v2.0] --- PUNTO DE ENTRADA ALCANZADO ---');
+
+    // LOG DE DATOS DE ENTRADA: Vemos qué datos está recibiendo el backend desde el frontend.
+    console.log('[DEBUG 1] Contenido de req.body:', JSON.stringify(req.body));
     const { username, password } = req.body || {};
     
     if (!username || !password) {
+        console.log('[DEBUG 1.1] FALLO: Username o password están vacíos o undefined. Abortando.');
         return res.status(400).json({ message: 'Petición mal formada. Faltan credenciales.' });
     }
 
+    console.log(`[DEBUG 2] Intento de login para usuario: '${username}'`);
+
     try {
-        // --- CORRECCIÓN CRÍTICA APLICADA ---
         const adminUser = await User.findOne({ 
             $or: [{ username }, { telegramId: username }],
             role: 'admin'
         }).select('+password');
 
-        if (adminUser && (await adminUser.matchPassword(password))) {
+        // LOG DEL RESULTADO DE LA BÚSQUEDA: Vemos si MongoDB encontró al usuario y qué datos trajo.
+        if (adminUser) {
+            console.log('[DEBUG 3] ÉXITO EN BÚSQUEDA: Usuario encontrado en la BD. Datos (sin info sensible):', {
+                id: adminUser._id,
+                username: adminUser.username,
+                role: adminUser.role,
+                password_hash_existe: !!adminUser.password, // ¿Se incluyó el hash de la contraseña?
+            });
+        } else {
+            console.log('[DEBUG 3] FALLO EN BÚSQUEDA: El usuario no fue encontrado en la base de datos con rol de admin.');
+        }
+
+        // LOG DE LA COMPARACIÓN DE CONTRASEÑA: Vemos el resultado de la comparación bcrypt.
+        let passwordMatchResult = false;
+        if (adminUser) {
+            passwordMatchResult = await adminUser.matchPassword(password);
+            console.log(`[DEBUG 4] Resultado de la comparación de contraseña: ${passwordMatchResult}`);
+        }
+
+        if (adminUser && passwordMatchResult) {
+            console.log('[DEBUG 5] ÉXITO TOTAL: Las credenciales son válidas. Generando token.');
             const token = generateAdminToken(adminUser._id);
             const adminData = adminUser.toObject();
             delete adminData.password;
@@ -106,10 +133,11 @@ const loginAdmin = async (req, res) => {
                 admin: adminData
             });
         } else {
+            console.log('[DEBUG 5] FALLO FINAL: Credenciales inválidas. Enviando 401.');
             res.status(401).json({ message: 'Credenciales inválidas.' });
         }
     } catch (error) {
-        console.error(`[Admin Login] ERROR INESPERADO:`, error);
+        console.error(`[DEBUG ERROR CRÍTICO] La función loginAdmin ha fallado inesperadamente:`, error);
         res.status(500).json({ message: 'Error crítico del servidor durante el login.' });
     }
 };
