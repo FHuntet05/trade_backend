@@ -1,11 +1,11 @@
 // RUTA: backend/routes/cronRoutes.js
+// --- VERSIÓN CORREGIDA Y COMPLETA ---
 
 const express = require('express');
 const { distributeDailyProfits } = require('../services/profitDistributionService');
-// --- INICIO DE LA CORRECCIÓN CRÍTICA ---
-// Se importa la nueva función 'runBlockchainMonitoringCycle' en lugar de 'startMonitoring'.
 const { runBlockchainMonitoringCycle } = require('../services/blockchainWatcherService');
-// --- FIN DE LA CORRECCIÓN CRÍTICA ---
+// --- IMPORTACIÓN AÑADIDA ---
+const { updatePricesInDB } = require('../services/priceService'); // Se importa la función de actualización de precios
 
 const router = express.Router();
 
@@ -19,7 +19,7 @@ const protectCron = (req, res, next) => {
     }
 };
 
-// @desc    Endpoint para que Vercel Cron Job ejecute la distribución de ganancias.
+// @desc    Endpoint para Vercel Cron Job: Distribución de ganancias.
 // @route   GET /api/cron/distribute-profits
 router.get('/distribute-profits', protectCron, async (req, res) => {
     console.log('[CRON] Iniciando trabajo de distribución de ganancias...');
@@ -33,21 +33,32 @@ router.get('/distribute-profits', protectCron, async (req, res) => {
     }
 });
 
-// @desc    Endpoint para que Vercel Cron Job ejecute el monitoreo de la blockchain.
+// @desc    Endpoint para Vercel Cron Job: Monitoreo de la blockchain.
 // @route   GET /api/cron/monitor-blockchain
 router.get('/monitor-blockchain', protectCron, async (req, res) => {
     console.log('[CRON] Iniciando trabajo de monitoreo de blockchain...');
     try {
-        // --- INICIO DE LA CORRECCIÓN CRÍTICA ---
-        // Se llama a la nueva función que ejecuta un solo ciclo y termina.
-        // Esto permite que la función serverless complete su ejecución y evita el crash.
         await runBlockchainMonitoringCycle();
-        // --- FIN DE LA CORRECCIÓN CRÍTICA ---
         console.log('[CRON] Trabajo de monitoreo de blockchain finalizado con éxito.');
         res.status(200).json({ success: true, message: 'Monitoreo de blockchain completado.' });
     } catch (error) {
         console.error('[CRON] Error en el trabajo de monitoreo de blockchain:', error);
         res.status(500).json({ success: false, message: 'Falló el monitoreo de blockchain.' });
+    }
+});
+
+// --- RUTA AÑADIDA Y CORREGIDA ---
+// @desc    Endpoint para Vercel Cron Job: Actualiza los precios de mercado en la BD.
+// @route   GET /api/cron/update-prices
+router.get('/update-prices', protectCron, async (req, res) => {
+    console.log('[CRON] Iniciando trabajo de actualización de precios...');
+    try {
+        await updatePricesInDB();
+        console.log('[CRON] Trabajo de actualización de precios finalizado con éxito.');
+        res.status(200).json({ success: true, message: 'Actualización de precios completada.' });
+    } catch (error) {
+        console.error('[CRON] Error en el trabajo de actualización de precios:', error);
+        res.status(500).json({ success: false, message: 'Falló la actualización de precios.' });
     }
 });
 
