@@ -1,17 +1,16 @@
 // RUTA: backend/routes/authRoutes.js
-// --- VERSIÓN FINAL CON RUTA DE CONFIGURACIÓN TEMPORAL ---
+// --- VERSIÓN SEGURA SIN LA RUTA DE CONFIGURACIÓN ---
 
 const express = require('express');
 const router = express.Router();
-const { syncUser, getUserProfile, loginAdmin, setupSuperUser } = require('../controllers/authController');
+// Se elimina la importación de setupSuperUser
+const { syncUser, getUserProfile, loginAdmin } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
 
 router.post('/sync', syncUser);
 router.get('/profile', protect, getUserProfile);
 router.post('/login/admin', loginAdmin);
 
-// --- NUEVA RUTA DE CONFIGURACIÓN TEMPORAL ---
-// Esta ruta es para un solo uso. Debería ser eliminada después de configurar el admin.
-router.post('/setup-super-user', setupSuperUser);
+// --- RUTA DE CONFIGURACIÓN TEMPORAL ELIMINADA ---
 
 module.exports = router;

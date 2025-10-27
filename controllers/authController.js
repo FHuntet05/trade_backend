@@ -1,5 +1,5 @@
 // RUTA: backend/controllers/authController.js
-// --- VERSIÓN FINAL CON RUTA DE CREACIÓN DE ADMIN SEGURA ---
+// --- VERSIÓN SEGURA SIN LA RUTA DE CONFIGURACIÓN ---
 
 const User = require('../models/userModel');
 const Setting = require('../models/settingsModel');
@@ -88,45 +88,11 @@ const loginAdmin = async (req, res) => {
     }
 };
 
-// --- NUEVA FUNCIÓN DE CONFIGURACIÓN SEGURA ---
-const setupSuperUser = async (req, res) => {
-    const { username, password, secretKey } = req.body;
-
-    if (!secretKey || secretKey !== process.env.SUPER_USER_SECRET) {
-        return res.status(401).json({ message: 'Clave secreta inválida o no proporcionada.' });
-    }
-    if (!username || !password) {
-        return res.status(400).json({ message: 'Faltan username o password.' });
-    }
-
-    try {
-        // Busca si el usuario existe para actualizarlo, o lo crea si no.
-        let adminUser = await User.findOne({ username: username });
-        if (!adminUser) {
-            adminUser = new User({
-                username: username,
-                fullName: username,
-                telegramId: `admin_${Date.now()}`, // ID único para evitar conflictos
-            });
-        }
-        
-        // Asigna la contraseña (el hash se hará automáticamente con el hook .pre('save') del modelo)
-        adminUser.password = password; 
-        adminUser.role = 'admin'; // Se asegura de que sea admin
-        await adminUser.save();
-        
-        console.log(`[SETUP] Administrador '${username}' fue creado/actualizado exitosamente por la ruta segura.`);
-        res.status(201).json({ message: `Administrador '${username}' creado/actualizado con éxito.` });
-
-    } catch (error) {
-        console.error('[SETUP] Error al crear el super usuario:', error);
-        res.status(500).json({ message: 'Error del servidor al crear el super usuario.', error: error.message });
-    }
-};
+// --- FUNCIÓN setupSuperUser ELIMINADA ---
 
 module.exports = { 
     syncUser, 
     getUserProfile, 
-    loginAdmin,
-    setupSuperUser // Se exporta la nueva función
+    loginAdmin
+    // La exportación de setupSuperUser también se ha eliminado
 };
