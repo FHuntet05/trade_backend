@@ -6,9 +6,7 @@ const Setting = require('../models/settingsModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
 const InvestmentItem = require('../models/investmentItemModel');
 const QuantitativeItem = require('../models/quantitativeItemModel');
-// --- INICIO DE LA MODIFICACIÓN (Módulo 2.4) ---
-const WheelConfig = require('../models/wheelModel'); // Se importa el nuevo modelo
-// --- FIN DE LA MODIFICACIÓN (Módulo 2.4) ---
+const WheelConfig = require('../models/wheelModel');
 const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
@@ -23,8 +21,6 @@ const qrCodeToDataURLPromise = require('util').promisify(QRCode.toDataURL);
 const crypto = require('crypto');
 const blockchainService = require('../services/blockchainService');
 const Transaction = require('../models/transactionModel');
-
-// ... (Todo el código existente del adminController se mantiene aquí, sin cambios)
 
 const PLACEHOLDER_AVATAR_URL = 'https://i.postimg.cc/mD21B6r7/user-avatar-placeholder.png';
 const USDT_BSC_ADDRESS = '0x55d398326f99059fF775485246999027B3197955';
