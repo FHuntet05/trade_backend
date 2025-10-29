@@ -17,7 +17,16 @@ const {
   getWheelConfigAdmin, updateWheelConfigAdmin
   // --- FIN DE IMPORTACIONES (Módulo 2.4) ---
 } = require('../controllers/adminController');
-
+// --- INICIO DE LA CORRECCIÓN ---
+// Importamos las funciones que habíamos añadido erróneamente al otro controlador/ruta
+const { getAvailableCryptos } = require('../controllers/investmentController'); 
+const { 
+    getMarketItemsAdmin, 
+    createMarketItem, 
+    updateMarketItem, 
+    deleteMarketItem 
+} = require('../controllers/adminController'); // Asegúrate que estas están en adminController
+// --- FIN DE LA CORRECCIÓN ---
 const router = express.Router();
 
 router.use(protectAdmin);
@@ -51,7 +60,19 @@ router.route('/market-items').get(getMarketItemsAdmin).post(createMarketItem);
 router.route('/market-items/:id').put(updateMarketItem).delete(deleteMarketItem);
 router.route('/quantitative-plans').get(getQuantitativePlansAdmin).post(createQuantitativePlan);
 router.route('/quantitative-plans/:id').put(updateQuantitativePlan).delete(deleteQuantitativePlan);
+// --- INICIO DE NUEVAS RUTAS CORRECTAS ---
+// Se añade la ruta para obtener la lista de criptos, ahora protegida por protectAdmin
+router.get('/available-cryptos', getAvailableCryptos);
 
+// Se añaden las rutas CRUD para la gestión de los items de mercado
+router.route('/market-items')
+    .get(getMarketItemsAdmin)
+    .post(createMarketItem);
+
+router.route('/market-items/:id')
+    .put(updateMarketItem)
+    .delete(deleteMarketItem);
+// --- FIN DE NUEVAS RUTAS CORRECTAS ---
 // --- INICIO DE NUEVAS RUTAS (Módulo 2.4) ---
 // Rutas de Gestión de la Configuración de la Ruleta
 router.route('/wheel-config').get(getWheelConfigAdmin).put(updateWheelConfigAdmin);
