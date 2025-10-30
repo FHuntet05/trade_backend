@@ -414,12 +414,57 @@ const sendBroadcastNotification = asyncHandler(async (req, res) => {
 });
 
 const createMarketItem = asyncHandler(async (req, res) => {
-  const { name, symbol, description, dailyProfitPercentage, durationDays, minInvestment, maxInvestment, displayOrder } = req.body;
-  const newItem = new InvestmentItem({
-    name, symbol, description, dailyProfitPercentage, durationDays, minInvestment, maxInvestment, displayOrder
-  });
-  const createdItem = await newItem.save();
-  res.status(201).json({ success: true, data: createdItem });
+    // --- INICIO DE LA CORRECCIÓN DEFINITIVA ---
+    // El problema anterior era que no estábamos leyendo los datos del req.body.
+    // Ahora, extraemos explícitamente todos los campos necesarios del cuerpo de la petición.
+    const {
+        name,
+        linkedCryptoSymbol,
+        price,
+        durationDays,
+        dailyProfitAmount,
+        totalRoiPercentage,
+        imageUrl,
+        saleDiscountPercentage,
+        isActive
+    } = req.body;
+
+    // Log para depuración en el servidor
+    console.log("✅ [BACKEND] Payload recibido para crear item:", req.body);
+
+    try {
+        // Creamos una nueva instancia del modelo con los datos extraídos.
+        const newItem = new InvestmentItem({
+            name,
+            linkedCryptoSymbol,
+            price,
+            durationDays,
+            dailyProfitAmount,
+            totalRoiPercentage,
+            imageUrl,
+            saleDiscountPercentage,
+            isActive
+        });
+        
+        // El método .save() ejecuta las validaciones. Si algún campo falta, lanzará un error.
+        const createdItem = await newItem.save();
+        
+        // Si .save() tiene éxito, respondemos con 201 Created.
+        res.status(201).json({ success: true, data: createdItem });
+
+    } catch (error) {
+        // Si .save() falla, capturamos el error.
+        console.error("🔴 [BACKEND] Error de validación de Mongoose:", error.message);
+
+        if (error.name === 'ValidationError') {
+            // Devolvemos el mensaje de error específico de Mongoose.
+            res.status(400).json({ success: false, message: "Error de validación", details: Object.values(error.errors).map(e => e.message) });
+        } else {
+            // Para cualquier otro tipo de error.
+            res.status(500).json({ success: false, message: 'Error interno del servidor.' });
+        }
+    }
+    // --- FIN DE LA CORRECCIÓN DEFINITIVA ---
 });
 
 const getMarketItemsAdmin = asyncHandler(async (req, res) => {
