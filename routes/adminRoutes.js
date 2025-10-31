@@ -3,8 +3,7 @@
 const express = require('express');
 const { protectAdmin } = require('../middleware/authMiddleware');
 
-// --- INICIO DE LA CORRECCIÓN ---
-// Se consolidan TODAS las importaciones de adminController en un solo bloque.
+// Se consolidan TODAS las importaciones de adminController en un único bloque, sin duplicados.
 const {
   getDashboardStats, getPendingWithdrawals, processWithdrawal,
   getAllUsers, getUserDetails, updateUser, adjustUserBalance,
@@ -16,12 +15,11 @@ const {
   getProfitTiers, updateProfitTiers, getCryptoSettings, updateCryptoSetting,
   createMarketItem, getMarketItemsAdmin, updateMarketItem, deleteMarketItem,
   createQuantitativePlan, getQuantitativePlansAdmin, updateQuantitativePlan, deleteQuantitativePlan,
-  getWheelConfigAdmin, adjustUserBalance, updateWheelConfigAdmin
+  getWheelConfigAdmin, updateWheelConfigAdmin
 } = require('../controllers/adminController');
 
 // Se importa la función necesaria del investmentController por separado.
 const { getAvailableCryptos } = require('../controllers/investmentController');
-// --- FIN DE LA CORRECCIÓN ---
 
 const router = express.Router();
 
@@ -32,7 +30,7 @@ router.use(protectAdmin);
 router.get('/dashboard-stats', getDashboardStats);
 router.get('/users', getAllUsers);
 router.route('/users/:id').get(getUserDetails).put(updateUser);
-router.post('/users/:id/adjust-balance', adjustUserBalance);
+router.post('/users/:id/adjust-balance', adjustUserBalance); // RUTA CORRECTA Y ÚNICA
 router.post('/users/:id/reset-admin-password', resetAdminPassword);
 
 // Rutas Financieras
@@ -68,11 +66,10 @@ router.post('/notifications/broadcast', sendBroadcastNotification);
 // Rutas de Planes Cuantitativos
 router.route('/quantitative-plans').get(getQuantitativePlansAdmin).post(createQuantitativePlan);
 router.route('/quantitative-plans/:id').put(updateQuantitativePlan).delete(deleteQuantitativePlan);
-router.post('/users/:id/adjust-balance', adjustUserBalance);
-// --- NUEVAS RUTAS PARA EL CONSTRUCTOR VISUAL DE MERCADO ---
+
+// Rutas para el Constructor Visual del Mercado
 router.get('/available-cryptos', getAvailableCryptos);
 router.route('/market-items').get(getMarketItemsAdmin).post(createMarketItem);
 router.route('/market-items/:id').put(updateMarketItem).delete(deleteMarketItem);
-
 
 module.exports = router;
