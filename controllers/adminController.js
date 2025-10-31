@@ -370,9 +370,19 @@ const deleteFactory = asyncHandler(async (req, res) => {
 });
 
 const getSettings = asyncHandler(async (req, res) => {
-  const settings = await Setting.findOne({ singleton: 'global_settings' });
-  if (!settings) { return res.status(404).json({ message: 'Configuración no encontrada' }); }
+  // --- INICIO DE LA CORRECCIÓN ---
+  // Busca el documento de configuración único.
+  let settings = await Setting.findOne({ singleton: 'global_settings' });
+
+  // Si no existe, lo crea con los valores por defecto del modelo.
+  if (!settings) {
+    console.log('[Admin] No se encontró configuración global, creando una nueva por defecto.');
+    settings = await Setting.create({ singleton: 'global_settings' });
+  }
+  
+  // Ahora siempre devolverá un documento de configuración válido.
   res.json({ success: true, data: settings });
+  // --- FIN DE LA CORRECCIÓN ---
 });
 
 const updateSettings = asyncHandler(async (req, res) => {
