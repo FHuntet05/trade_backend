@@ -227,12 +227,61 @@ const updateUser = asyncHandler(async (req, res) => {
 });
 
 const adjustUserBalance = asyncHandler(async (req, res) => {
-  const { id } = req.params; const { amount, currency } = req.body;
-  const user = await User.findById(id);
-  if (!user) { res.status(404); throw new Error('Usuario no encontrado'); }
-  if (!['usdt', 'btc', 'eth'].includes(currency)) { res.status(400); throw new Error('Moneda inválida.'); }
-  user.balance[currency] = (user.balance[currency] || 0) + amount;
-  await user.save(); res.json({ message: 'Saldo ajustado correctamente.', balance: user.balance });
+  const { id: userId } = req.params;
+  const { usdt, spins, reason } = req.body;
+  const adminUsername = req.user.username;
+
+  if (!reason) {
+    res.status(400);
+    throw new Error('Se requiere una razón para el ajuste de saldo.');
+  }
+
+  const usdtAmount = Number(usdt) || 0;
+  const spinsAmount = Number(spins) || 0;
+
+  if (usdtAmount === 0 && spinsAmount === 0) {
+    res.status(400);
+    throw new Error('No se proporcionó ningún monto para ajustar.');
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    res.status(404);
+    throw new Error('Usuario no encontrado.');
+  }
+
+  // Ajustar saldos
+  if (usdtAmount !== 0) {
+    user.balance.usdt += usdtAmount;
+    const transactionType = usdtAmount > 0 ? 'admin_credit' : 'admin_debit';
+    user.transactions.push({
+        type: transactionType,
+        amount: usdtAmount,
+        currency: 'USDT',
+        description: `Ajuste por ${adminUsername}: ${reason}`,
+        status: 'completed',
+    });
+  }
+
+  if (spinsAmount !== 0) {
+    user.balance.spins = (user.balance.spins || 0) + spinsAmount;
+    const transactionType = spinsAmount > 0 ? 'admin_credit' : 'admin_debit';
+     user.transactions.push({
+        type: transactionType,
+        amount: spinsAmount,
+        currency: 'SPINS',
+        description: `Ajuste de giros por ${adminUsername}: ${reason}`,
+        status: 'completed',
+    });
+  }
+
+  await user.save();
+
+  res.status(200).json({
+    success: true,
+    message: 'Saldo ajustado correctamente.',
+    newBalances: user.balance,
+  });
 });
 
 const resetAdminPassword = asyncHandler(async (req, res) => {

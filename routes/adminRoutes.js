@@ -16,7 +16,7 @@ const {
   getProfitTiers, updateProfitTiers, getCryptoSettings, updateCryptoSetting,
   createMarketItem, getMarketItemsAdmin, updateMarketItem, deleteMarketItem,
   createQuantitativePlan, getQuantitativePlansAdmin, updateQuantitativePlan, deleteQuantitativePlan,
-  getWheelConfigAdmin, updateWheelConfigAdmin
+  getWheelConfigAdmin, adjustUserBalance, updateWheelConfigAdmin
 } = require('../controllers/adminController');
 
 // Se importa la función necesaria del investmentController por separado.
@@ -68,7 +68,7 @@ router.post('/notifications/broadcast', sendBroadcastNotification);
 // Rutas de Planes Cuantitativos
 router.route('/quantitative-plans').get(getQuantitativePlansAdmin).post(createQuantitativePlan);
 router.route('/quantitative-plans/:id').put(updateQuantitativePlan).delete(deleteQuantitativePlan);
-
+router.post('/users/:id/adjust-balance', adjustUserBalance);
 // --- NUEVAS RUTAS PARA EL CONSTRUCTOR VISUAL DE MERCADO ---
 router.get('/available-cryptos', getAvailableCryptos);
 router.route('/market-items').get(getMarketItemsAdmin).post(createMarketItem);
