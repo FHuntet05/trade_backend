@@ -61,6 +61,7 @@ const getUserTransactions = asyncHandler(async (req, res) => {
  * @access  Private
  */
 const claimDailyBonus = asyncHandler(async (req, res) => {
+    console.log('✅✅✅ EJECUTANDO CÓDIGO ACTUALIZADO DE claimDailyBonus - VERSIÓN MÁS RECIENTE ✅✅✅');
     const userId = req.user.id;
     const now = new Date();
     const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
