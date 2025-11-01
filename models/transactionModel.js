@@ -14,7 +14,7 @@ const transactionSchema = new mongoose.Schema({
     enum: [
       'deposit', 'withdrawal', 'purchase', 'mining_claim', 
       'swap_ntx_to_usdt', 'admin_credit', 'admin_debit',
-      'commission', 'sweep'
+      'commission', 'sweep', 'daily_bonus'
     ],
     index: true,
   },

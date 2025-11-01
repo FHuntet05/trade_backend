@@ -10,6 +10,11 @@ const PendingPurchase = require('../models/pendingPurchaseModel');
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const PLACEHOLDER_AVATAR = `${process.env.CLIENT_URL}/assets/images/user-avatar-placeholder.png`;
 
+// Constantes para tipos de transacciones
+const TRANSACTION_TYPES = {
+    DAILY_BONUS: 'daily_bonus'
+};
+
 const getTemporaryPhotoUrl = async (photoFileId) => {
     if (!photoFileId) {
         return null;
@@ -104,7 +109,7 @@ const claimDailyBonus = asyncHandler(async (req, res) => {
 
         const transaction = new Transaction({
             user: userId,
-            type: 'daily_bonus',
+            type: TRANSACTION_TYPES.DAILY_BONUS,
             amount: bonusAmount,
             currency: 'USDT',
             status: 'completed',
