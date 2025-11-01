@@ -2,7 +2,9 @@
 
 const User = require('../models/userModel');
 const Factory = require('../models/toolModel');
-const Setting = require('../models/settingsModel');
+const SettingModel = require('../models/settingsModel');
+const { STATIC_WALLET_PRESETS, DEPOSIT_OPTION_PRESETS } = SettingModel;
+const Setting = SettingModel;
 const CryptoWallet = require('../models/cryptoWalletModel');
 const InvestmentItem = require('../models/investmentItemModel');
 const QuantitativeItem = require('../models/quantitativeItemModel');
@@ -379,6 +381,38 @@ const getSettings = asyncHandler(async (req, res) => {
     console.log('[Admin] No se encontró configuración global, creando una nueva por defecto.');
     settings = await Setting.create({ singleton: 'global_settings' });
   }
+
+  let hasStructuralChanges = false;
+
+  if (!Array.isArray(settings.staticWallets)) {
+    settings.staticWallets = [];
+    hasStructuralChanges = true;
+  }
+
+  const staticWalletKeys = new Set(settings.staticWallets.map((wallet) => wallet.key));
+  STATIC_WALLET_PRESETS.forEach((preset) => {
+    if (!staticWalletKeys.has(preset.key)) {
+      settings.staticWallets.push({ ...preset });
+      hasStructuralChanges = true;
+    }
+  });
+
+  if (!Array.isArray(settings.depositOptions)) {
+    settings.depositOptions = [];
+    hasStructuralChanges = true;
+  }
+
+  const depositOptionKeys = new Set(settings.depositOptions.map((option) => option.key));
+  DEPOSIT_OPTION_PRESETS.forEach((preset) => {
+    if (!depositOptionKeys.has(preset.key)) {
+      settings.depositOptions.push({ ...preset });
+      hasStructuralChanges = true;
+    }
+  });
+
+  if (hasStructuralChanges) {
+    await settings.save();
+  }
   
   // Ahora siempre devolverá un documento de configuración válido.
   res.json({ success: true, data: settings });
@@ -402,6 +436,14 @@ const updateSettings = asyncHandler(async (req, res) => {
     settings.profitTiers = sortedTiers;
   }
   if (req.body.cryptoSettings && Array.isArray(req.body.cryptoSettings)) { settings.cryptoSettings = req.body.cryptoSettings; }
+  if (req.body.staticWallets && Array.isArray(req.body.staticWallets)) {
+    settings.staticWallets = req.body.staticWallets.map((wallet) => ({
+      ...wallet,
+      address: wallet.address ? wallet.address.trim() : '',
+      instructions: wallet.instructions || '',
+      isActive: Boolean(wallet.isActive),
+    }));
+  }
   if (req.body.depositOptions && Array.isArray(req.body.depositOptions)) {
     settings.depositOptions = req.body.depositOptions;
   }

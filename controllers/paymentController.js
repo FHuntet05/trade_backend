@@ -44,6 +44,12 @@ const getDepositOptions = asyncHandler(async (req, res) => {
             .filter(option => option.isActive)
             .sort((a, b) => (a.displayOrder || 0) - (b.displayOrder || 0));
 
+        const staticWalletsMap = new Map(
+            (settings.staticWallets || [])
+                .filter(wallet => wallet && wallet.key)
+                .map(wallet => [wallet.key, wallet])
+        );
+
         const resolvedOptions = [];
 
         for (const option of activeOptions) {
@@ -59,7 +65,21 @@ const getDepositOptions = asyncHandler(async (req, res) => {
                 minAmount: option.minAmount || 0,
                 maxAmount: option.maxAmount || 0,
                 displayOrder: option.displayOrder || 0,
+                icon: option.icon || option.currency || null,
+                staticWalletKey: option.staticWalletKey || null,
+                isStaticWallet: Boolean(option.staticWalletKey)
             };
+
+            if (option.staticWalletKey) {
+                const staticWallet = staticWalletsMap.get(option.staticWalletKey);
+                if (!staticWallet || !staticWallet.isActive || !staticWallet.address) {
+                    continue;
+                }
+                baseOption.address = staticWallet.address;
+                baseOption.instructions = staticWallet.instructions || baseOption.instructions;
+                baseOption.chain = staticWallet.chain || baseOption.chain;
+                baseOption.icon = staticWallet.icon || baseOption.icon;
+            }
 
                     if ((option.type || 'manual') === 'automatic') {
                         if (!option.chain) {

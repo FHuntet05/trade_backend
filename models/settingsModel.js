@@ -8,6 +8,164 @@ const profitTierSchema = new mongoose.Schema({
   profitPercentage: { type: Number, required: true, min: 0, max: 100 }
 });
 
+const STATIC_WALLET_PRESETS = [
+  {
+    key: 'btc_main',
+    currency: 'BTC',
+    chain: 'Bitcoin',
+    icon: 'BTC',
+    address: '',
+    instructions: 'Envía únicamente BTC a esta dirección. No envíes otros tokens ni redes diferentes.',
+    isActive: false
+  },
+  {
+    key: 'eth_main',
+    currency: 'ETH',
+    chain: 'Ethereum',
+    icon: 'ETH',
+    address: '',
+    instructions: 'Envía únicamente ETH en la red principal de Ethereum. No envíes tokens ERC-20 a menos que se indique.',
+    isActive: false
+  },
+  {
+    key: 'ltc_main',
+    currency: 'LTC',
+    chain: 'Litecoin',
+    icon: 'LTC',
+    address: '',
+    instructions: 'Verifica comisiones y envía solo Litecoin (LTC).',
+    isActive: false
+  },
+  {
+    key: 'trx_main',
+    currency: 'TRX',
+    chain: 'TRON',
+    icon: 'TRX',
+    address: '',
+    instructions: 'Envía únicamente TRX a esta dirección en la red TRON.',
+    isActive: false
+  },
+  {
+    key: 'sol_main',
+    currency: 'SOL',
+    chain: 'Solana',
+    icon: 'SOL',
+    address: '',
+    instructions: 'Envía únicamente SOL en la red Solana (SPL).',
+    isActive: false
+  },
+  {
+    key: 'ton_main',
+    currency: 'TON',
+    chain: 'TON',
+    icon: 'TON',
+    address: '',
+    instructions: 'Envía únicamente TON. No envíes otros tokens de la red.',
+    isActive: false
+  }
+];
+
+const DEPOSIT_OPTION_PRESETS = [
+  {
+    key: 'usdt_bep20',
+    name: 'USDT (BEP20)',
+    currency: 'USDT',
+    chain: 'BSC',
+    type: 'automatic',
+    address: '',
+    instructions: 'Envía únicamente USDT por la red BSC. Los fondos se acreditarán automáticamente tras la confirmación en blockchain.',
+    minAmount: 5,
+    maxAmount: 0,
+    isActive: true,
+    displayOrder: 0,
+    icon: 'USDT'
+  },
+  {
+    key: 'btc_manual',
+    name: 'Bitcoin (BTC)',
+    currency: 'BTC',
+    chain: 'Bitcoin',
+    type: 'manual',
+    instructions: 'Recibirás la dirección fija al generar tu ticket. Envía solo BTC y comparte el comprobante si soporte lo solicita.',
+    minAmount: 10,
+    maxAmount: 0,
+    isActive: false,
+    displayOrder: 5,
+    icon: 'BTC',
+    staticWalletKey: 'btc_main'
+  },
+  {
+    key: 'eth_manual',
+    name: 'Ethereum (ETH)',
+    currency: 'ETH',
+    chain: 'Ethereum',
+    type: 'manual',
+    instructions: 'Recibirás la dirección fija al generar tu ticket. Envía solo ETH en la red principal.',
+    minAmount: 10,
+    maxAmount: 0,
+    isActive: false,
+    displayOrder: 6,
+    icon: 'ETH',
+    staticWalletKey: 'eth_main'
+  },
+  {
+    key: 'ltc_manual',
+    name: 'Litecoin (LTC)',
+    currency: 'LTC',
+    chain: 'Litecoin',
+    type: 'manual',
+    instructions: 'Recibirás la dirección fija al generar tu ticket. Envía solo Litecoin (LTC).',
+    minAmount: 10,
+    maxAmount: 0,
+    isActive: false,
+    displayOrder: 7,
+    icon: 'LTC',
+    staticWalletKey: 'ltc_main'
+  },
+  {
+    key: 'trx_manual',
+    name: 'TRON (TRX)',
+    currency: 'TRX',
+    chain: 'TRON',
+    type: 'manual',
+    instructions: 'Recibirás la dirección fija al generar tu ticket. Envía solo TRX en la red TRON.',
+    minAmount: 10,
+    maxAmount: 0,
+    isActive: false,
+    displayOrder: 8,
+    icon: 'TRX',
+    staticWalletKey: 'trx_main'
+  },
+  {
+    key: 'sol_manual',
+    name: 'Solana (SOL)',
+    currency: 'SOL',
+    chain: 'Solana',
+    type: 'manual',
+    instructions: 'Recibirás la dirección fija al generar tu ticket. Envía solo SOL.',
+    minAmount: 10,
+    maxAmount: 0,
+    isActive: false,
+    displayOrder: 9,
+    icon: 'SOL',
+    staticWalletKey: 'sol_main'
+  },
+  {
+    key: 'ton_manual',
+    name: 'Toncoin (TON)',
+    currency: 'TON',
+    chain: 'TON',
+    type: 'manual',
+    instructions: 'Recibirás la dirección fija al generar tu ticket. Envía solo TON.',
+    minAmount: 10,
+    maxAmount: 0,
+    isActive: false,
+    displayOrder: 10,
+    icon: 'TON',
+    staticWalletKey: 'ton_main'
+  }
+];
+
 const cryptoSettingSchema = new mongoose.Schema({
   symbol: { type: String, required: true },
   name: { type: String, required: true },
@@ -22,6 +180,16 @@ const cryptoSettingSchema = new mongoose.Schema({
   }
 });
 
+const staticWalletSchema = new mongoose.Schema({
+  key: { type: String, required: true },
+  currency: { type: String, required: true },
+  chain: { type: String, required: true },
+  address: { type: String, default: '' },
+  instructions: { type: String, default: '' },
+  icon: { type: String, default: '' },
+  isActive: { type: Boolean, default: false }
+});
+
 const depositOptionSchema = new mongoose.Schema({
   key: { type: String, required: true },
   name: { type: String, required: true },
@@ -34,6 +202,8 @@ const depositOptionSchema = new mongoose.Schema({
   maxAmount: { type: Number, default: 0 },
   isActive: { type: Boolean, default: true },
   displayOrder: { type: Number, default: 0 },
+  icon: { type: String, default: '' },
+  staticWalletKey: { type: String, default: '' }
 });
 
 const settingsSchema = new mongoose.Schema({
@@ -57,23 +227,14 @@ const settingsSchema = new mongoose.Schema({
     default: []
   },
 
+  staticWallets: {
+    type: [staticWalletSchema],
+    default: () => STATIC_WALLET_PRESETS.map((wallet) => ({ ...wallet }))
+  },
+
   depositOptions: {
     type: [depositOptionSchema],
-    default: [
-      {
-        key: 'usdt_bep20',
-        name: 'USDT (BEP20)',
-        currency: 'USDT',
-        chain: 'BSC',
-        type: 'automatic',
-        address: '',
-        instructions: 'Envía únicamente USDT por la red BSC. Los fondos se acreditarán automáticamente tras la confirmación en blockchain.',
-        minAmount: 5,
-        maxAmount: 0,
-        isActive: true,
-        displayOrder: 0,
-      }
-    ]
+    default: () => DEPOSIT_OPTION_PRESETS.map((option) => ({ ...option }))
   },
   
   // Controles del Sistema
@@ -138,3 +299,5 @@ settingsSchema.methods.updateCryptoSettings = async function(symbol, settings) {
 const Setting = mongoose.model('Setting', settingsSchema);
 
 module.exports = Setting;
+module.exports.STATIC_WALLET_PRESETS = STATIC_WALLET_PRESETS;
+module.exports.DEPOSIT_OPTION_PRESETS = DEPOSIT_OPTION_PRESETS;

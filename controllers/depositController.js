@@ -70,10 +70,25 @@ const depositController = {
 
     const methodType = selectedOption.type || 'manual';
     const currency = selectedOption.currency || 'USDT';
-    const chain = selectedOption.chain || null;
+    let chain = selectedOption.chain || null;
     const minimumAllowed = selectedOption.minAmount && selectedOption.minAmount > 0
       ? selectedOption.minAmount
       : 0.01;
+
+    let resolvedAddress = selectedOption.address || null;
+    let resolvedInstructions = selectedOption.instructions || '';
+
+    if (selectedOption.staticWalletKey) {
+      const staticWallet = (settings.staticWallets || []).find(wallet => wallet.key === selectedOption.staticWalletKey);
+      if (!staticWallet || !staticWallet.isActive || !staticWallet.address) {
+        res.status(400);
+        throw new Error('El método de depósito no tiene una billetera estática configurada. Contacta a soporte.');
+      }
+
+      resolvedAddress = staticWallet.address;
+      resolvedInstructions = staticWallet.instructions || resolvedInstructions;
+      chain = staticWallet.chain || chain;
+    }
 
     if (numericAmount < minimumAllowed) {
       res.status(400);
@@ -93,8 +108,8 @@ const depositController = {
       methodName: selectedOption.name,
       methodType,
       chain,
-      depositAddress: selectedOption.address || null,
-      instructions: selectedOption.instructions || '',
+      depositAddress: resolvedAddress,
+      instructions: resolvedInstructions,
       metadata: {
         depositOptionKey: methodKey,
         depositOptionName: selectedOption.name,
@@ -103,6 +118,10 @@ const depositController = {
 
     if (chain) {
       ticketPayload.metadata.chain = chain;
+    }
+
+    if (selectedOption.staticWalletKey) {
+      ticketPayload.metadata.staticWalletKey = selectedOption.staticWalletKey;
     }
 
     if (methodType === 'automatic') {
