@@ -11,15 +11,14 @@ const transactionSchema = new mongoose.Schema({
             'deposit', 'withdrawal', 'purchase', 'mining_claim', 'referral_commission', 
             'task_reward', 'admin_credit', 'admin_debit', 'swap_ntx_to_usdt',
             'admin_action', 'investment', 'investment_profit', 'investment_return',
-            'daily_bonus', // <-- CORRECCIÓN: Se añade el tipo que faltaba.
-            'wheel_spin_win'
+            'daily_bonus', 'wheel_spin_win' // Tipo de transacción para ganancias de la ruleta
         ]
     },
     amount: { type: Number, required: true },
     currency: { 
         type: String, 
         required: true, 
-        enum: ['USDT', 'NTX', 'SYSTEM', 'SPINS']
+        enum: ['USDT', 'NTX', 'SYSTEM', 'SPINS'] // Se añade SPINS para premios de giros
     },
     description: { type: String, required: true },
     status: { type: String, required: true, enum: ['pending', 'completed', 'rejected', 'failed'], default: 'completed' },
@@ -54,10 +53,13 @@ const userSchema = new mongoose.Schema({
     },
     withdrawableBalance: { type: Number, default: 0 },
     
+    // --- INICIO DE LA MODIFICACIÓN (Módulo 2.4) ---
+    // Contador para el Sistema de Piedad de la Ruleta
     pitySpinCount: {
         type: Number,
         default: 0
     },
+    // --- FIN DE LA MODIFICACIÓN (Módulo 2.4) ---
 
     totalRecharge: { type: Number, default: 0 },
     totalWithdrawal: { type: Number, default: 0 },
@@ -103,7 +105,7 @@ const userSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// --- Métodos y Hooks ---
+// --- Métodos y Hooks (sin cambios) ---
 userSchema.pre('save', async function(next) {
     if (!this.isModified('password') || !this.password) return next();
     const salt = await bcrypt.genSalt(10);
