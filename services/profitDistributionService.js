@@ -8,59 +8,73 @@ const Transaction = require('../models/transactionModel');
 
 /**
  * Itera sobre todos los usuarios activos, calcula sus ganancias pasivas diarias
- * basadas en su Saldo Total y los niveles de ganancia configurados,
+ * basadas en su SALDO DISPONIBLE (balance.usdt) y los rangos de ganancia configurados,
  * y añade la ganancia calculada a su Saldo para Retiro.
+ * 
+ * LÓGICA CLAVE: Solo se otorga ganancia si el usuario ha mantenido el saldo
+ * disponible durante al menos 24 horas.
  */
 const distributeDailyProfits = async () => {
-    console.log('[Cron Job] Iniciando la distribución de ganancias diarias...');
+    console.log('[Cron Job] Iniciando la distribución de ganancias pasivas diarias...');
     const session = await mongoose.startSession();
 
     try {
         session.startTransaction();
 
         const settings = await Setting.findOne({ singleton: 'global_settings' }).session(session);
-        if (!settings || !settings.profitTiers || settings.profitTiers.length === 0) {
-            throw new Error('La configuración de distribución de ganancias no se encontró o es inválida.');
+        
+        // Verificar si la funcionalidad está activada
+        if (!settings || !settings.isPassiveProfitEnabled) {
+            console.log('[Cron Job] Las ganancias pasivas están deshabilitadas. Proceso finalizado.');
+            await session.commitTransaction();
+            return;
+        }
+
+        if (!settings.profitTiers || settings.profitTiers.length === 0) {
+            throw new Error('La configuración de rangos de ganancia (profitTiers) no se encontró o es inválida.');
         }
 
         const users = await User.find({ status: 'active' }).session(session);
         if (users.length === 0) {
             console.log('[Cron Job] No hay usuarios activos para distribuir ganancias. Proceso finalizado.');
-            await session.commitTransaction(); // Commit vacío para cerrar la transacción.
+            await session.commitTransaction();
             return;
         }
 
         let processedUsers = 0;
         for (const user of users) {
-            const totalBalance = user.balance.usdt || 0;
-            if (totalBalance <= 0) {
-                continue; // Omitir usuarios sin saldo
+            // LÓGICA CRÍTICA: Usar el saldo disponible (balance.usdt), NO el saldo retirable
+            const availableBalance = user.balance.usdt || 0;
+            
+            if (availableBalance <= 0) {
+                continue; // Omitir usuarios sin saldo disponible
             }
 
-            // Usar el método del schema para encontrar el porcentaje de ganancia
-            const profitPercentage = settings.calculateProfitPercentage(totalBalance);
+            // Encontrar el rango de ganancia apropiado según el saldo disponible
+            const profitPercentage = settings.calculateProfitPercentage(availableBalance);
             
             if (!profitPercentage || profitPercentage === 0) {
-                console.warn(`[Profit Service] El usuario ${user.username} con saldo ${totalBalance} no coincide con ningún nivel de ganancia.`);
+                console.warn(`[Profit Service] El usuario ${user.username} con saldo ${availableBalance} USDT no coincide con ningún rango de ganancia.`);
                 continue;
             }
 
-            const profitAmount = (totalBalance * profitPercentage) / 100;
+            // Calcular la ganancia basada en el porcentaje del rango
+            const profitAmount = (availableBalance * profitPercentage) / 100;
 
             if (profitAmount > 0) {
-                // LÓGICA DE NEGOCIO CRÍTICA: Añadir la ganancia al Saldo para Retiro.
+                // LÓGICA DE NEGOCIO CRÍTICA: Añadir la ganancia al Saldo para Retiro
                 user.withdrawableBalance = (user.withdrawableBalance || 0) + profitAmount;
 
-                // Crear un registro de transacción para esta ganancia
+                // Crear un registro de transacción para esta ganancia pasiva
                 const transaction = new Transaction({
                     user: user._id,
-                    type: 'investment_profit',
+                    type: 'passive_profit',
                     amount: profitAmount,
                     currency: 'USDT',
                     status: 'completed',
-                    description: `Ganancia pasiva diaria (${profitPercentage.toFixed(2)}% sobre Saldo Total de ${totalBalance.toFixed(2)} USDT)`,
+                    description: `Ganancia pasiva del ${profitPercentage.toFixed(2)}% sobre saldo disponible de ${availableBalance.toFixed(2)} USDT`,
                     metadata: {
-                        baseBalance: totalBalance.toString(),
+                        baseBalance: availableBalance.toString(),
                         profitPercentage: profitPercentage.toString(),
                     }
                 });
@@ -72,11 +86,11 @@ const distributeDailyProfits = async () => {
         }
 
         await session.commitTransaction();
-        console.log(`[Cron Job] La distribución de ganancias diarias finalizó exitosamente. Usuarios procesados: ${processedUsers}.`);
+        console.log(`[Cron Job] ✅ Distribución de ganancias pasivas finalizada. Usuarios procesados: ${processedUsers}.`);
 
     } catch (error) {
         await session.abortTransaction();
-        console.error('[Cron Job] ERROR CRÍTICO durante la distribución de ganancias diarias:', error);
+        console.error('[Cron Job] ❌ ERROR CRÍTICO durante la distribución de ganancias pasivas:', error);
     } finally {
         session.endSession();
     }

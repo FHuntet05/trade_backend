@@ -55,6 +55,13 @@ const settingsSchema = new mongoose.Schema({
   }, // Monto en USDT del bono diario
   // --- FIN DE LA MODIFICACIÓN (Bono Diario) ---
 
+  // --- INICIO DE LA MODIFICACIÓN (Ganancias Pasivas) ---
+  isPassiveProfitEnabled: { 
+    type: Boolean, 
+    default: false 
+  }, // Interruptor para activar/desactivar ganancias pasivas por saldo
+  // --- FIN DE LA MODIFICACIÓN (Ganancias Pasivas) ---
+
   // Parámetros Financieros
   minimumWithdrawal: { type: Number, default: 1.0 },
   withdrawalFeePercent: { type: Number, default: 0 },

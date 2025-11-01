@@ -12,6 +12,7 @@ const transactionSchema = new mongoose.Schema({
             'task_reward', 'admin_credit', 'admin_debit', 'swap_ntx_to_usdt',
             'admin_action', 'investment', 'investment_profit', 'investment_return',
             'daily_bonus', // <-- CORRECCIÓN: Se añade el tipo que faltaba.
+            'passive_profit', // Ganancia pasiva por mantener saldo disponible
             'wheel_spin_win'
         ]
     },
