@@ -2,6 +2,7 @@
 
 const { ethers } = require('ethers');
 const CryptoWallet = require('../models/cryptoWalletModel');
+const Setting = require('../models/settingsModel');
 const { getPrice } = require('../services/priceService');
 const blockchainService = require('../services/blockchainService');
 const asyncHandler = require('express-async-handler');
@@ -31,77 +32,53 @@ const getOrCreateUserBscAddress = async (userId) => {
 };
 
 const getDepositOptions = asyncHandler(async (req, res) => {
-    const userId = req.user.id;
-    const bscAddress = await getOrCreateUserBscAddress(userId);
+        const userId = req.user.id;
+        const settings = await Setting.findOne({ singleton: 'global_settings' });
 
-    // [NEXUS REFINEMENT] - INICIO DE LA MODIFICACIÓN
-    // 1. Añadimos STATIC_WALLET_BNB a la lista de wallets a leer del entorno.
-    const staticWallets = {
-        TRC20_USDT: process.env.STATIC_WALLET_TRC20_USDT || null,
-        TRX: process.env.STATIC_WALLET_TRX || null,
-        LTC: process.env.STATIC_WALLET_LTC || null,
-        BNB: process.env.STATIC_WALLET_BNB || null, // Se añade BNB aquí.
-    };
-    
-    const depositOptions = [
-        {
-            id: 'bep20-usdt',
-            name: 'BEP20-USDT',
-            logo: 'https://i.postimg.cc/Qd05p24c/usdt.png',
-            chain: 'BSC',
-            type: 'dynamic',
-            address: bscAddress,
-            memo: null,
-            warning: 'Esta es tu dirección única. Solo envía USDT en la red BEP20 (Binance Smart Chain).',
-        },
-        // 2. Eliminamos la entrada de BNB que usaba la dirección dinámica.
-        // ...(El antiguo objeto de BNB ha sido eliminado)
+        if (!settings) {
+            res.status(500);
+            throw new Error('Configuración de depósito no disponible.');
+        }
 
-        // 3. Añadimos BNB como una opción estática, igual que las demás.
-        ...(staticWallets.BNB ? [{
-            id: 'bep20-bnb',
-            name: 'BNB',
-            logo: 'https://i.postimg.cc/R01Gw1bC/bnb.png',
-            chain: 'BSC',
-            type: 'static_manual', // Su tipo ahora es estático.
-            address: staticWallets.BNB, // Usa la dirección del .env
-            memo: null,
-            warning: 'Depósito manual. Tras pagar, contacta a soporte con el TXID para acreditar tu saldo.', // Mensaje estandarizado.
-        }] : []),
-        ...(staticWallets.TRC20_USDT ? [{
-            id: 'trc20-usdt',
-            name: 'TRC20-USDT',
-            logo: 'https://i.postimg.cc/Qd05p24c/usdt.png',
-            chain: 'TRON',
-            type: 'static_manual',
-            address: staticWallets.TRC20_USDT,
-            memo: null,
-            warning: 'Depósito manual. Tras pagar, contacta a soporte con el TXID para acreditar tu saldo.',
-        }] : []),
-        ...(staticWallets.TRX ? [{
-            id: 'tron-trx',
-            name: 'TRX',
-            logo: 'https://i.postimg.cc/FsYKM561/trx.png',
-            chain: 'TRON',
-            type: 'static_manual',
-            address: staticWallets.TRX,
-            memo: null,
-            warning: 'Depósito manual. Tras pagar, contacta a soporte con el TXID para acreditar tu saldo.',
-        }] : []),
-        ...(staticWallets.LTC ? [{
-            id: 'litecoin-ltc',
-            name: 'LTC',
-            logo: 'https://i.postimg.cc/0j0V421X/ltc.png',
-            chain: 'LTC',
-            type: 'static_manual',
-            address: staticWallets.LTC,
-            memo: null,
-            warning: 'Depósito manual. Tras pagar, contacta a soporte con el TXID para acreditar tu saldo.',
-        }] : []),
-    ];
-    // [NEXUS REFINEMENT] - FIN DE LA MODIFICACIÓN
+        const activeOptions = (settings.depositOptions || [])
+            .filter(option => option.isActive)
+            .sort((a, b) => (a.displayOrder || 0) - (b.displayOrder || 0));
 
-    res.json(depositOptions);
+        const resolvedOptions = [];
+
+        for (const option of activeOptions) {
+            const baseOption = {
+                key: option.key,
+                id: option.key,
+                name: option.name,
+                currency: option.currency,
+                chain: option.chain || null,
+                type: option.type || 'manual',
+                address: option.address || null,
+                instructions: option.instructions || '',
+                minAmount: option.minAmount || 0,
+                maxAmount: option.maxAmount || 0,
+                displayOrder: option.displayOrder || 0,
+            };
+
+                    if ((option.type || 'manual') === 'automatic') {
+                        if (!option.chain) {
+                            console.warn(`[DepositOptions] Método automático '${option.key}' sin cadena configurada. Se omitirá.`);
+                            continue;
+                        }
+
+                        if (option.chain === 'BSC') {
+                    baseOption.address = await getOrCreateUserBscAddress(userId);
+                } else {
+                    // Para redes automáticas no soportadas aún, usamos la dirección configurada si existe
+                    baseOption.address = option.address || null;
+                }
+            }
+
+            resolvedOptions.push(baseOption);
+        }
+
+        res.json(resolvedOptions);
 });
 
 const generateAddress = async (req, res) => {

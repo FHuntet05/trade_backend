@@ -22,6 +22,20 @@ const cryptoSettingSchema = new mongoose.Schema({
   }
 });
 
+const depositOptionSchema = new mongoose.Schema({
+  key: { type: String, required: true },
+  name: { type: String, required: true },
+  currency: { type: String, required: true },
+  chain: { type: String, default: 'BSC' },
+  type: { type: String, enum: ['automatic', 'manual'], default: 'manual' },
+  address: { type: String, default: '' },
+  instructions: { type: String, default: '' },
+  minAmount: { type: Number, default: 0 },
+  maxAmount: { type: Number, default: 0 },
+  isActive: { type: Boolean, default: true },
+  displayOrder: { type: Number, default: 0 },
+});
+
 const settingsSchema = new mongoose.Schema({
   singleton: { type: String, default: 'global_settings', unique: true },
   
@@ -41,6 +55,25 @@ const settingsSchema = new mongoose.Schema({
   cryptoSettings: {
     type: [cryptoSettingSchema],
     default: []
+  },
+
+  depositOptions: {
+    type: [depositOptionSchema],
+    default: [
+      {
+        key: 'usdt_bep20',
+        name: 'USDT (BEP20)',
+        currency: 'USDT',
+        chain: 'BSC',
+        type: 'automatic',
+        address: '',
+        instructions: 'Envía únicamente USDT por la red BSC. Los fondos se acreditarán automáticamente tras la confirmación en blockchain.',
+        minAmount: 5,
+        maxAmount: 0,
+        isActive: true,
+        displayOrder: 0,
+      }
+    ]
   },
   
   // Controles del Sistema

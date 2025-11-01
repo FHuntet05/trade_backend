@@ -402,6 +402,9 @@ const updateSettings = asyncHandler(async (req, res) => {
     settings.profitTiers = sortedTiers;
   }
   if (req.body.cryptoSettings && Array.isArray(req.body.cryptoSettings)) { settings.cryptoSettings = req.body.cryptoSettings; }
+  if (req.body.depositOptions && Array.isArray(req.body.depositOptions)) {
+    settings.depositOptions = req.body.depositOptions;
+  }
   const updatedSettings = await settings.save();
   res.json({ success: true, data: updatedSettings });
 });

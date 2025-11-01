@@ -57,6 +57,7 @@ const investmentRoutes = require('./routes/investmentRoutes');
 const quantitativeRoutes = require('./routes/quantitativeRoutes');
 const wheelRoutes = require('./routes/wheelRoutes');
 const cronRoutes = require('./routes/cronRoutes');
+const depositRoutes = require('./routes/depositRoutes'); // NUEVO: Flujo robusto de depósitos
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 
 // --- CONFIGURACIÓN DE EXPRESS ---
@@ -108,6 +109,7 @@ app.use('/api/investments', investmentRoutes);
 app.use('/api/quantitative', quantitativeRoutes);
 app.use('/api/wheel', wheelRoutes);
 app.use('/api/cron', cronRoutes);
+app.use('/api/deposits', depositRoutes); // NUEVO: Rutas de depósito robustas
 
 // --- LÓGICA DEL BOT DE TELEGRAM ---
 const WELCOME_MESSAGE = `

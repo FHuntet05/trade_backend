@@ -4,6 +4,7 @@ const axios = require('axios');
 const User = require('../models/userModel');
 const Transaction = require('../models/transactionModel');
 const CryptoWallet = require('../models/cryptoWalletModel');
+const DepositTicket = require('../models/depositTicketModel');
 const { ethers } = require('ethers');
 const { sendTelegramMessage } = require('./notificationService');
 const { getPrice } = require('./priceService');
@@ -44,7 +45,7 @@ async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifie
     }
     const fromAddress = tx.from || (tx.owner_address);
     const toAddress = tx.to || (tx.transfer_to_address);
-    await Transaction.create({
+    const transaction = await Transaction.create({
         user: wallet.user, type: 'deposit', amount: amountInUSDT, currency: 'USDT',
         description: `Depósito de ${amount.toFixed(6)} ${currency} acreditado como ${amountInUSDT.toFixed(2)} USDT`,
         metadata: {
@@ -53,6 +54,32 @@ async function processDeposit(tx, wallet, amount, currency, txid, blockIdentifie
             blockIdentifier: blockIdentifier.toString(),
         }
     });
+
+    // Intentar asociar el depósito con un ticket pendiente
+    const ticket = await DepositTicket.findOne({
+        user: wallet.user,
+        depositAddress: wallet.address,
+        status: 'pending'
+    }).sort({ createdAt: -1 });
+
+    if (ticket) {
+        const difference = Math.abs(ticket.amount - amountInUSDT);
+        const tolerance = Math.max(0.5, ticket.amount * 0.02); // 2% o 0.5 USDT
+        if (difference <= tolerance) {
+            ticket.status = 'completed';
+            ticket.detectedTxHash = txid;
+            ticket.completedAt = new Date();
+            ticket.metadata = ticket.metadata || new Map();
+            ticket.metadata.set('creditedAmount', amountInUSDT.toString());
+            ticket.metadata.set('currencyReceived', currency);
+            await ticket.save();
+
+            transaction.metadata.set('depositTicketId', ticket._id.toString());
+            await transaction.save();
+        } else {
+            console.warn(`[ProcessDeposit] El depósito acreditado (${amountInUSDT.toFixed(2)} USDT) no coincide con el ticket pendiente (${ticket.amount.toFixed(2)} USDT). Se deja el ticket en espera.`);
+        }
+    }
     console.log(`[ProcessDeposit] ÉXITO: Usuario ${user.username} acreditado con ${amountInUSDT.toFixed(2)} USDT.`);
     if (user.telegramId) {
         const message = `✅ <b>¡Depósito confirmado!</b>\n\nSe han acreditado <b>${amountInUSDT.toFixed(2)} USDT</b> a tu saldo.`;
